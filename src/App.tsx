@@ -1,120 +1,466 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useCallback, useEffect, useState } from 'react'
+import type { ExtensionState } from './shared/protocol'
+import type { ParsedIdFields } from './shared/scrape-types'
+import { splitGuestName } from './lib/name-format'
+import './sidepanel.css'
+
+const emptyParsed: ParsedIdFields = {
+  fullName: null,
+  dateOfBirth: null,
+  idNumber: null,
+  idType: null,
+  issueDate: null,
+  expiryDate: null,
+  address: null,
+}
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [state, setState] = useState<ExtensionState | null>(null)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [parsed, setParsed] = useState<ParsedIdFields>(emptyParsed)
+  const [phone, setPhone] = useState('')
+  const [emailGuest, setEmailGuest] = useState('')
+  const [manualEntry, setManualEntry] = useState(false)
+  const [managerOverride, setManagerOverride] = useState(false)
+  const [managerEmail, setManagerEmail] = useState('')
+  const [managerPassword, setManagerPassword] = useState('')
+  const [showManagerModal, setShowManagerModal] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [scanImages, setScanImages] = useState<{
+    front: string
+    back: string
+  } | null>(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'GET_STATE',
+      })) as { ok?: boolean; state?: ExtensionState }
+      if (res?.state) setState(res.state)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+    const t = window.setInterval(() => void refresh(), 2000)
+    return () => clearInterval(t)
+  }, [refresh])
+
+  async function onDevLogin(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setNotice(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'AUTH_DEV_LOGIN',
+        email,
+        password,
+      })) as { ok: boolean; error?: string }
+      if (!res.ok) setNotice(res.error ?? 'Login failed')
+      else void refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onLogout() {
+    setBusy(true)
+    await chrome.runtime.sendMessage({ type: 'AUTH_LOGOUT' })
+    setManagerOverride(false)
+    setBusy(false)
+    void refresh()
+  }
+
+  async function toggleSimulation() {
+    if (!state) return
+    await chrome.runtime.sendMessage({
+      type: 'SET_SIMULATION',
+      enabled: !state.simulation,
+    })
+    void refresh()
+  }
+
+  async function onScanId() {
+    setBusy(true)
+    setNotice(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'SCAN_ID_START',
+      })) as {
+        ok: boolean
+        error?: string
+        parsed?: ParsedIdFields
+        images?: { front_image_base64: string; back_image_base64: string }
+      }
+      if (!res.ok) {
+        setNotice(res.error ?? 'Scan failed')
+        setScanImages(null)
+        return
+      }
+      if (res.parsed) setParsed(res.parsed)
+      if (res.images) {
+        setScanImages({
+          front: res.images.front_image_base64,
+          back: res.images.back_image_base64,
+        })
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onSave() {
+    setBusy(true)
+    setNotice(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'SAVE_ID_SCAN',
+        parsed,
+        phone: phone.trim() || null,
+        email: emailGuest.trim() || null,
+        manualEntry,
+        managerOverride,
+        imageFrontBase64: scanImages?.front ?? null,
+        imageBackBase64: scanImages?.back ?? null,
+      })) as { ok: boolean; error?: string }
+      if (!res.ok) {
+        const err = res.error ?? 'Save failed'
+        setNotice(err)
+        if (err.includes('DNR')) setShowManagerModal(true)
+        return
+      }
+      setNotice('Saved to Supabase.')
+      setManagerOverride(false)
+      setShowManagerModal(false)
+      void refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onVerifyManager(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'VERIFY_MANAGER',
+        email: managerEmail,
+        password: managerPassword,
+      })) as { ok: boolean; error?: string }
+      if (!res.ok) {
+        setNotice(res.error ?? 'Verification failed')
+        return
+      }
+      setManagerOverride(true)
+      setShowManagerModal(false)
+      setNotice('Manager verified — you can save with override.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onInjectPms() {
+    const { firstName, lastName } = splitGuestName(parsed.fullName)
+    setBusy(true)
+    setNotice(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'INJECT_PMS',
+        fields: {
+          firstName,
+          lastName,
+          phone: phone.trim(),
+          email: emailGuest.trim(),
+          address: parsed.address ?? '',
+        },
+      })) as { ok: boolean; error?: string; inject?: { ok: boolean; error?: string; applied?: string[] } }
+      if (!res.ok) {
+        setNotice(res.error ?? 'Inject failed')
+        return
+      }
+      const inj = res.inject
+      if (inj && 'ok' in inj && inj.ok) {
+        setNotice(`Injected fields: ${(inj.applied ?? []).join(', ')}`)
+      } else if (inj && 'ok' in inj && !inj.ok) {
+        setNotice(inj.error ?? 'PMS inject reported failure')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!state) {
+    return (
+      <div className="fdn-root">
+        <p className="fdn-muted">Loading…</p>
+      </div>
+    )
+  }
+
+  if (state.versionBlocked) {
+    return (
+      <div className="fdn-root">
+        <div className="fdn-banner fdn-banner--danger">{state.versionMessage}</div>
+      </div>
+    )
+  }
+
+  const res = state.reservation
+  const hw = state.hardware
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <div className="fdn-root">
+      {state.simulation && (
+        <div className="fdn-banner fdn-banner--warn">
+          SIMULATION MODE — scanner / hardware responses may be mocked.
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
+      )}
+
+      <header className="fdn-header">
+        <h1 className="fdn-title">FrontDesk Nexus</h1>
+        <p className="fdn-sub">Side panel · Module 1 (ID)</p>
+      </header>
+
+      <section className="fdn-card">
+        <h2 className="fdn-h2">Session</h2>
+        {state.auth.signedIn ? (
+          <>
+            <p className="fdn-line">
+              <strong>{state.auth.email}</strong>
+              <span className="fdn-badge">{state.auth.role ?? 'role?'}</span>
+            </p>
+            <button type="button" className="fdn-btn fdn-btn--ghost" onClick={() => void onLogout()}>
+              Log out
+            </button>
+          </>
+        ) : (
+          <form className="fdn-form" onSubmit={(e) => void onDevLogin(e)}>
+            <p className="fdn-help">
+              Production uses the portal session bridge. Use this for development only.
+            </p>
+            <label className="fdn-label">
+              Email
+              <input
+                className="fdn-input"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
+              />
+            </label>
+            <label className="fdn-label">
+              Password
+              <input
+                className="fdn-input"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </label>
+            <button type="submit" className="fdn-btn fdn-btn--primary" disabled={busy}>
+              Sign in
+            </button>
+          </form>
+        )}
+      </section>
+
+      <section className="fdn-card">
+        <h2 className="fdn-h2">Hardware</h2>
+        <ul className="fdn-hw">
+          <li>
+            ID scanner{' '}
+            <span className={hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
+            {hw.id_scanner}
+          </li>
+          <li>
+            Spectral Payout{' '}
+            <span className={hw.spectral_payout === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
+            {hw.spectral_payout}
+          </li>
+          <li>
+            RFID encoder{' '}
+            <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
+            {hw.rfid_encoder}
+          </li>
+        </ul>
+        <button type="button" className="fdn-btn fdn-btn--ghost" onClick={() => void toggleSimulation()}>
+          {state.simulation ? 'Disable simulation' : 'Enable simulation'}
         </button>
       </section>
 
-      <div className="ticks"></div>
+      <section className="fdn-card">
+        <h2 className="fdn-h2">Reservation (from PMS)</h2>
+        {!res?.confirmationNumber ? (
+          <p className="fdn-muted">Open a guest / reservation page on SynXis or eZee to scrape context.</p>
+        ) : (
+          <dl className="fdn-dl">
+            <dt>Confirmation</dt>
+            <dd>{res.confirmationNumber}</dd>
+            <dt>PMS</dt>
+            <dd>{res.pms}</dd>
+            <dt>Guest</dt>
+            <dd>{res.guestName ?? '—'}</dd>
+            <dt>Room</dt>
+            <dd>{res.roomNumber ?? '—'}</dd>
+            <dt>Restricted</dt>
+            <dd>{res.restricted ? 'Yes — proceed with caution' : 'No'}</dd>
+          </dl>
+        )}
+      </section>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
+      <section className="fdn-card">
+        <h2 className="fdn-h2">Module status</h2>
+        <div className="fdn-modules">
+          <span className="fdn-mod">ID · in progress</span>
+          <span className="fdn-mod fdn-mod--off">Payment</span>
+          <span className="fdn-mod fdn-mod--off">Signature</span>
+          <span className="fdn-mod fdn-mod--off">Key</span>
         </div>
       </section>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <section className="fdn-card">
+        <h2 className="fdn-h2">ID scan</h2>
+        <label className="fdn-check">
+          <input
+            type="checkbox"
+            checked={manualEntry}
+            onChange={(e) => setManualEntry(e.target.checked)}
+          />
+          Manual entry mode (no scanner / OCR)
+        </label>
+        {managerOverride && <p className="fdn-note">Manager override active for DNR gate.</p>}
+        {!manualEntry && (
+          <button type="button" className="fdn-btn fdn-btn--primary" disabled={busy} onClick={() => void onScanId()}>
+            Scan ID
+          </button>
+        )}
+
+        <div className="fdn-grid">
+          <label className="fdn-label">
+            Full name
+            <input
+              className="fdn-input"
+              value={parsed.fullName ?? ''}
+              onChange={(e) => setParsed({ ...parsed, fullName: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            DOB
+            <input
+              className="fdn-input"
+              value={parsed.dateOfBirth ?? ''}
+              onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            ID number
+            <input
+              className="fdn-input"
+              value={parsed.idNumber ?? ''}
+              onChange={(e) => setParsed({ ...parsed, idNumber: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            ID type
+            <input
+              className="fdn-input"
+              value={parsed.idType ?? ''}
+              onChange={(e) => setParsed({ ...parsed, idType: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            Expiry
+            <input
+              className="fdn-input"
+              value={parsed.expiryDate ?? ''}
+              onChange={(e) => setParsed({ ...parsed, expiryDate: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label fdn-label--full">
+            Address
+            <input
+              className="fdn-input"
+              value={parsed.address ?? ''}
+              onChange={(e) => setParsed({ ...parsed, address: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            Phone (guest)
+            <input className="fdn-input" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          </label>
+          <label className="fdn-label">
+            Email (guest)
+            <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
+          </label>
+        </div>
+
+        <div className="fdn-actions">
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--primary"
+            disabled={busy || !state.auth.signedIn}
+            onClick={() => void onSave()}
+          >
+            Save to Supabase
+          </button>
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--secondary"
+            disabled={busy || !state.auth.signedIn}
+            onClick={() => void onInjectPms()}
+          >
+            Save &amp; write to PMS (inject)
+          </button>
+        </div>
+      </section>
+
+      {notice && <div className="fdn-banner fdn-banner--info">{notice}</div>}
+      {state.lastError && <div className="fdn-banner fdn-banner--danger">{state.lastError}</div>}
+
+      {showManagerModal && (
+        <div className="fdn-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="fdn-modal">
+            <h3 className="fdn-h3">Manager approval</h3>
+            <p className="fdn-help">DNR match — verify a manager or admin to allow save.</p>
+            <form className="fdn-form" onSubmit={(e) => void onVerifyManager(e)}>
+              <label className="fdn-label">
+                Manager email
+                <input
+                  className="fdn-input"
+                  value={managerEmail}
+                  onChange={(e) => setManagerEmail(e.target.value)}
+                />
+              </label>
+              <label className="fdn-label">
+                Password
+                <input
+                  className="fdn-input"
+                  type="password"
+                  value={managerPassword}
+                  onChange={(e) => setManagerPassword(e.target.value)}
+                />
+              </label>
+              <div className="fdn-actions">
+                <button type="submit" className="fdn-btn fdn-btn--primary" disabled={busy}>
+                  Verify
+                </button>
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--ghost"
+                  onClick={() => setShowManagerModal(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 

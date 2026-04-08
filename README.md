@@ -1,73 +1,42 @@
-# React + TypeScript + Vite
+# FrontDesk Nexus — Chrome extension
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Manifest V3 extension: **side panel** UI, **SynXis / eZee** content scripts, **Supabase** (Module 1 ID flow), optional **Native Messaging** for the ID scanner, and **simulation mode** for development without hardware.
 
-Currently, two official plugins are available:
+## Prerequisites
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Node 20+
+- A Supabase project with your schema (e.g. `reservations`, `id_scans`, `dnr_entries`, `audit_log`, `terminals`, `profiles`) and a private Storage bucket **`id-images`** with policies that allow authenticated uploads.
 
-## React Compiler
+## Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+2. `npm install`
+3. `npm run build`
+4. Chrome → **Extensions** → **Load unpacked** → select the **`dist`** folder.
 
-## Expanding the ESLint configuration
+## Development
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- `npm run dev` — Vite + CRXJS dev server (see [CRXJS docs](https://crxjs.dev/vite-plugin)).
+- Use **Development login** in the side panel with a Supabase user, or call `BRIDGE_SET_SESSION` from the web portal once the session bridge is wired.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Side panel & toolbar
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+The service worker calls `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` so the **toolbar icon opens the side panel** (Chrome).
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Docs
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+- [Message protocol](./docs/MESSAGING.md) — content script, side panel, service worker, native host.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## PMS selectors
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+SynXis and eZee DOM scraping / injection use **placeholder selectors**. Calibrate `src/content/synxis.ts` and `src/content/ezee.ts` against your live PMS pages.
+
+## Native host
+
+Host name: `com.frontdesk_nexus.native_host` (see `src/shared/protocol.ts`). Install the Windows host separately; if it is missing, use **simulation mode** or **manual entry** in the side panel.
+
+## Tech
+
+- React + TypeScript + Vite
+- [@crxjs/vite-plugin](https://github.com/crxjs/chrome-extension-tools)
+- [@supabase/supabase-js](https://supabase.com/docs/reference/javascript/introduction)
