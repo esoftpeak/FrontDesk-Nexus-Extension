@@ -1,0 +1,30 @@
+{
+    "manifest_version": 3,
+    "name": "FrontDesk Nexus",
+    "version": "1.0.0",
+    "action": {
+      "default_title": "FrontDesk"
+    },
+    "background": {
+      "service_worker": "src/background/service-worker.ts",
+      "type": "module"
+    },
+    "side_panel": {
+      "default_path": "index.html"
+    },
+    "permissions": ["storage", "activeTab", "scripting"],
+    "host_permissions": [
+      "https://controlcenter-p2.synxis.com/*",
+      "https://live.ipms247.com/*"
+    ],
+    "content_scripts": [
+      {
+        "matches": ["https://controlcenter-p2.synxis.com/*"],
+        "js": ["src/content/synxis.ts"]
+      },
+      {
+        "matches": ["https://live.ipms247.com/*"],
+        "js": ["src/content/ezee.ts"]
+      }
+    ]
+  }
