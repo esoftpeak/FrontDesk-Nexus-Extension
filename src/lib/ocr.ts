@@ -1,4 +1,4 @@
-import type { ParsedIdFields } from '../shared/scrape-types'
+import type { ParsedIdFields } from '../shared/pms-types'
 
 /** Mock OCR when Edge Function is unavailable (simulation / dev). */
 export function mockOcrResult(): ParsedIdFields {

@@ -1,9 +1,9 @@
-import type { ParsedIdFields, ScrapedReservation } from './scrape-types'
+import type { ParsedIdFields, ReservationSnapshot, SynxisGuestDisplay } from './pms-types'
 
 /** chrome.runtime / Port message contracts (see docs/MESSAGING.md) */
 export type ExtensionMessage =
-  | { type: 'PMS_SCRAPE'; payload: ScrapedReservation }
   | { type: 'GET_STATE' }
+  | { type: 'LOAD_SYNXIS_RESERVATION' }
   | { type: 'AUTH_DEV_LOGIN'; email: string; password: string }
   | { type: 'AUTH_LOGOUT' }
   | {
@@ -45,7 +45,9 @@ export type ExtensionState = {
   simulation: boolean
   versionBlocked: boolean
   versionMessage: string | null
-  reservation: ScrapedReservation | null
+  reservation: ReservationSnapshot | null
+  /** Parsed guest fields for side panel (SynXis reservation-summary). */
+  synxisGuestDisplay: SynxisGuestDisplay | null
   hardware: HardwareStatus
   terminalId: string | null
   dnrHit: boolean

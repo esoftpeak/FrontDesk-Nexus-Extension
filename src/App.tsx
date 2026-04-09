@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ExtensionState } from './shared/protocol'
-import type { ParsedIdFields } from './shared/scrape-types'
+import type { ParsedIdFields } from './shared/pms-types'
 import { splitGuestName } from './lib/name-format'
 import './sidepanel.css'
 
@@ -193,6 +193,25 @@ function App() {
     }
   }
 
+  async function onGetGuestData() {
+    setBusy(true)
+    setNotice(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'LOAD_SYNXIS_RESERVATION',
+      })) as { ok: boolean; error?: string; state?: ExtensionState; message?: string }
+      if (!res.ok) {
+        setNotice(res.error ?? 'Could not load reservation.')
+        return
+      }
+      if (res.state) setState(res.state)
+      setNotice(res.message ?? 'Guest data loaded.')
+      void refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!state) {
     return (
       <div className="fdn-root">
@@ -210,6 +229,7 @@ function App() {
   }
 
   const res = state.reservation
+  const guest = state.synxisGuestDisplay
   const hw = state.hardware
 
   return (
@@ -293,21 +313,61 @@ function App() {
       </section>
 
       <section className="fdn-card">
-        <h2 className="fdn-h2">Reservation (from PMS)</h2>
-        {!res?.confirmationNumber ? (
-          <p className="fdn-muted">Open a guest / reservation page on SynXis or eZee to scrape context.</p>
+        <h2 className="fdn-h2">Guest Data (SynXis API)</h2>
+        <p className="fdn-help">
+          Uses a fixed sample reservation-summary request. Stay signed into SynXis in this browser so
+          sph.synxis.com can send cookies with the request.
+        </p>
+        <div className="fdn-actions">
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--secondary"
+            disabled={busy}
+            onClick={() => void onGetGuestData()}
+          >
+            Get Guest Data
+          </button>
+        </div>
+        {!guest && !res?.confirmationNumber ? (
+          <p className="fdn-muted">Click Get Guest Data to load SynXis guest and attach ID scans to a confirmation.</p>
         ) : (
           <dl className="fdn-dl">
-            <dt>Confirmation</dt>
-            <dd>{res.confirmationNumber}</dd>
-            <dt>PMS</dt>
-            <dd>{res.pms}</dd>
-            <dt>Guest</dt>
-            <dd>{res.guestName ?? '—'}</dd>
-            <dt>Room</dt>
-            <dd>{res.roomNumber ?? '—'}</dd>
-            <dt>Restricted</dt>
-            <dd>{res.restricted ? 'Yes — proceed with caution' : 'No'}</dd>
+            {guest ? (
+              <>
+                <dt>1. Last, first</dt>
+                <dd>{guest.nameLine}</dd>
+                <dt>2. Loyalty membershipId</dt>
+                <dd>{guest.membershipId ?? '—'}</dd>
+                <dt>3. Addresses</dt>
+                <dd>
+                  {guest.addresses.length === 0
+                    ? '—'
+                    : guest.addresses.map((a, i) => (
+                        <div key={i}>
+                          {a.country}, {a.city}, {a.postalCode}, type {a.type}
+                        </div>
+                      ))}
+                </dd>
+                <dt>4. Email</dt>
+                <dd>{guest.email ?? '—'}</dd>
+                <dt>5. Phone</dt>
+                <dd>{guest.phone ?? '—'}</dd>
+                <dt>6. pmsConfirmationCode</dt>
+                <dd>{guest.pmsConfirmationCode ?? '—'}</dd>
+                <dt>7. Stay (check-in + nights)</dt>
+                <dd>{guest.staySummary ?? '—'}</dd>
+              </>
+            ) : null}
+            {res ? (
+              <>
+                <dt>PMS</dt>
+                <dd>{res.pms}</dd>
+                <dt>Room</dt>
+                <dd>{res.roomNumber ?? '—'}</dd>
+                <dt>Restricted</dt>
+                <dd>{res.restricted ? 'Yes — proceed with caution' : 'No'}</dd>
+              </>
+            ) : null}
           </dl>
         )}
       </section>

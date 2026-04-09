@@ -14,9 +14,18 @@ export default defineManifest({
     service_worker: 'src/background/service-worker.ts',
     type: 'module',
   },
-  permissions: ['storage', 'activeTab', 'scripting', 'sidePanel', 'nativeMessaging'],
+  permissions: [
+    'storage',
+    'activeTab',
+    'scripting',
+    'sidePanel',
+    'nativeMessaging',
+    'notifications',
+    'cookies',
+  ],
   host_permissions: [
     'https://controlcenter-p2.synxis.com/*',
+    'https://sph.synxis.com/*',
     'https://live.ipms247.com/*',
   ],
   content_scripts: [

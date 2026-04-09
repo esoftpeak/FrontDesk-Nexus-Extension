@@ -2,30 +2,31 @@
 
 Messages use `chrome.runtime.sendMessage` unless noted. Payloads are JSON-serializable.
 
-## Content script → Service worker
-
-| `type`        | Body                         | Response |
-|---------------|------------------------------|----------|
-| `PMS_SCRAPE`  | `{ type, payload: ScrapedReservation }` (sent automatically on interval when the DOM changes) | `{ ok, state? }` |
-
 ## Side panel → Service worker
 
-| `type`               | Body | Response |
-|----------------------|------|----------|
-| `GET_STATE`          | —    | `{ ok, state: ExtensionState }` |
-| `AUTH_DEV_LOGIN`     | `{ email, password }` | `{ ok, state? \| error }` |
-| `AUTH_LOGOUT`        | —    | `{ ok, state }` |
-| `BRIDGE_SET_SESSION` | `{ accessToken, refreshToken, expiresAt? }` | `{ ok, state? \| error }` |
-| `SET_SIMULATION`     | `{ enabled: boolean }` | `{ ok, state }` |
-| `SCAN_ID_START`      | —    | `{ ok, images?, parsed? \| error }` |
-| `SAVE_ID_SCAN`       | `{ parsed, phone, email, manualEntry, managerOverride, imageFrontBase64, imageBackBase64 }` | `{ ok, state? \| error }` |
-| `VERIFY_MANAGER`     | `{ email, password }` | `{ ok \| error }` |
-| `INJECT_PMS`         | `{ fields: Record<string,string> }` | `{ ok, inject?, error }` |
+| `type`                    | Body | Response |
+|---------------------------|------|----------|
+| `GET_STATE`               | —    | `{ ok, state: ExtensionState }` |
+| `LOAD_SYNXIS_RESERVATION` | — (POST body is a fixed sample in the service worker) | `{ ok, state?, message? \| error }` |
+| `AUTH_DEV_LOGIN`          | `{ email, password }` | `{ ok, state? \| error }` |
+| `AUTH_LOGOUT`             | —    | `{ ok, state }` |
+| `BRIDGE_SET_SESSION`      | `{ accessToken, refreshToken, expiresAt? }` | `{ ok, state? \| error }` |
+| `SET_SIMULATION`          | `{ enabled: boolean }` | `{ ok, state }` |
+| `SCAN_ID_START`           | —    | `{ ok, images?, parsed? \| error }` |
+| `SAVE_ID_SCAN`            | `{ parsed, phone, email, manualEntry, managerOverride, imageFrontBase64, imageBackBase64 }` | `{ ok, state? \| error }` |
+| `VERIFY_MANAGER`          | `{ email, password }` | `{ ok \| error }` |
+| `INJECT_PMS`              | `{ fields: Record<string,string> }` | `{ ok, inject?, error }` |
 
-### `ScrapedReservation` (summary)
+### `ReservationSnapshot` (extension state `reservation`)
 
 - `pms`: `"synxis"` \| `"ezee"`
-- `confirmationNumber`, `guestName`, `roomNumber`, dates, `email`, `phone`, amounts, `restricted`, `scrapedAt`, `pageUrl`
+- `confirmationNumber`, `guestName`, `roomNumber`, dates, `email`, `phone`, amounts, `restricted`, `loadedAt`, `pageUrl`
+
+Populated for SynXis via `LOAD_SYNXIS_RESERVATION` (API). eZee reservation loading is not implemented yet.
+
+### `SynxisGuestDisplay` (extension state `synxisGuestDisplay`)
+
+Structured fields parsed from the SynXis reservation-summary JSON for the side panel: name line, loyalty `membershipId`, `addresses[]`, `email`, `phone`, `pmsConfirmationCode`, `staySummary`. `null` until a successful load.
 
 ### Native Messaging (`com.frontdesk_nexus.native_host`)
 
@@ -63,7 +64,6 @@ Messages use `chrome.runtime.sendMessage` unless noted. Payloads are JSON-serial
 | `type`       | Purpose |
 |--------------|---------|
 | `FDN_INJECT` | `{ type, fields }` — fill PMS form fields; response `{ ok, applied?, error? }` |
-| `FDN_REQUEST_SCRAPE` | Force re-scrape |
 
 ## Session bridge (Web Portal)
 

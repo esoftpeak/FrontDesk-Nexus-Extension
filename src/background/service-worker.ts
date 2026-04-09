@@ -1,20 +1,133 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { ExtensionMessage, ExtensionResponse, ExtensionState } from '../shared/protocol'
-import type { ParsedIdFields, ScrapedReservation } from '../shared/scrape-types'
+import type { ParsedIdFields, ReservationSnapshot, SynxisGuestDisplay } from '../shared/pms-types'
 import { encryptJson } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { pingNativeHost, scanIdFromNativeOrSimulate } from '../lib/native-scan'
 import { runOcrWithEdgeFunction } from '../lib/ocr'
 import { checkMinExtensionVersion } from '../lib/version-check'
+import { logSynxisGuestSpecConsole, parseSynxisReservationSummaryResponse } from '../lib/synxis-guest-summary'
 
 let supabase: SupabaseClient | null = null
 
-let reservation: ScrapedReservation | null = null
+let reservation: ReservationSnapshot | null = null
+let synxisGuestDisplay: SynxisGuestDisplay | null = null
 let lastPmsTabId: number | null = null
 let cachedRole: string | null = null
 let versionBlocked = false
 let versionMessage: string | null = null
 let lastError: string | null = null
+
+/** Dev/sample body for reservation-summary POST (replace when wiring real lookups). */
+const SYNXIS_RESERVATION_SUMMARY_SAMPLE_BODY = {
+  payload: {
+    account: '88939EE050200',
+    confirmationNumber: '88939EE050200',
+    guestId: 100,
+    property: '88939',
+  },
+} as const
+
+const SYNXIS_RESERVATION_SUMMARY_URL =
+  'https://sph.synxis.com/pms-web-ui/service/v2/guest-mgt/guest-stay-record/reservation-summary'
+
+async function findSynxisTab(): Promise<chrome.tabs.Tab | undefined> {
+  const tabs = await chrome.tabs.query({ url: 'https://controlcenter-p2.synxis.com/*' })
+  return tabs.find((t) => t.active) ?? tabs[0]
+}
+
+async function resolvePmsTabId(): Promise<number | null> {
+  if (lastPmsTabId != null) {
+    try {
+      const t = await chrome.tabs.get(lastPmsTabId)
+      const u = t.url ?? ''
+      if (
+        /^https:\/\/controlcenter-p2\.synxis\.com\//i.test(u) ||
+        /^https:\/\/live\.ipms247\.com\//i.test(u)
+      ) {
+        return lastPmsTabId
+      }
+    } catch {
+      lastPmsTabId = null
+    }
+  }
+  const focused = await chrome.tabs.query({
+    url: ['https://controlcenter-p2.synxis.com/*', 'https://live.ipms247.com/*'],
+    lastFocusedWindow: true,
+  })
+  const pick = focused.find((t) => t.active) ?? focused[0]
+  if (pick?.id != null) {
+    lastPmsTabId = pick.id
+    return pick.id
+  }
+  const anyHost = await chrome.tabs.query({
+    url: ['https://controlcenter-p2.synxis.com/*', 'https://live.ipms247.com/*'],
+  })
+  const fallback = anyHost.find((t) => t.active) ?? anyHost[0]
+  if (fallback?.id != null) {
+    lastPmsTabId = fallback.id
+    return fallback.id
+  }
+  return null
+}
+
+async function notifyUser(title: string, message: string): Promise<void> {
+  try {
+    await chrome.notifications.create({
+      type: 'basic',
+      iconUrl: 'favicon.svg',
+      title,
+      message,
+    })
+  } catch (e) {
+    console.warn('FrontDesk: notification failed', e)
+  }
+}
+
+async function fetchSynxisReservationSummaryByApi(
+  tabUrl: string,
+): Promise<
+  | { ok: true; payload: ReservationSnapshot; guestDisplay: SynxisGuestDisplay }
+  | { ok: false; error: string }
+> {
+  const confirmationFallback = SYNXIS_RESERVATION_SUMMARY_SAMPLE_BODY.payload.confirmationNumber
+
+  const requestHeaders: Record<string, string> = {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+  }
+  const bodyString = JSON.stringify(SYNXIS_RESERVATION_SUMMARY_SAMPLE_BODY)
+
+  const res = await fetch(SYNXIS_RESERVATION_SUMMARY_URL, {
+    method: 'POST',
+    credentials: 'include',
+    headers: requestHeaders,
+    body: bodyString,
+  })
+
+  const contentType = res.headers.get('content-type') ?? ''
+  const raw = await res.text()
+
+  if (!res.ok) return { ok: false, error: `SynXis API error ${res.status}` }
+
+  if (contentType.includes('text/html') || raw.includes('Please enter your user name and password')) {
+    return {
+      ok: false,
+      error: 'SynXis API returned login HTML (session/cookie not accepted for sph.synxis.com).',
+    }
+  }
+
+  let json: unknown
+  try {
+    json = JSON.parse(raw)
+  } catch {
+    return { ok: false, error: 'SynXis API response is not valid JSON.' }
+  }
+
+  const parsed = parseSynxisReservationSummaryResponse(json, tabUrl, confirmationFallback)
+  logSynxisGuestSpecConsole(parsed.display)
+  return { ok: true, payload: parsed.snapshot, guestDisplay: parsed.display }
+}
 
 function getClient(): SupabaseClient {
   if (!supabase) supabase = createExtensionSupabase()
@@ -61,21 +174,21 @@ async function refreshRole(client: SupabaseClient): Promise<void> {
   cachedRole = (prof?.role as string) ?? null
 }
 
-async function upsertReservationFromScrape(
+async function upsertReservationSnapshot(
   client: SupabaseClient,
-  scrape: ScrapedReservation,
+  snap: ReservationSnapshot,
 ): Promise<void> {
-  if (!scrape.confirmationNumber) return
+  if (!snap.confirmationNumber) return
 
   const row = {
-    confirmation_number: scrape.confirmationNumber,
-    pms_source: scrape.pms,
-    guest_name: scrape.guestName,
-    room_number: scrape.roomNumber,
-    check_in_date: scrape.checkInDate,
-    check_out_date: scrape.checkOutDate,
-    last_scraped_at: scrape.scrapedAt,
-    scrape_payload: scrape as unknown as Record<string, unknown>,
+    confirmation_number: snap.confirmationNumber,
+    pms_source: snap.pms,
+    guest_name: snap.guestName,
+    room_number: snap.roomNumber,
+    check_in_date: snap.checkInDate,
+    check_out_date: snap.checkOutDate,
+    last_scraped_at: snap.loadedAt,
+    scrape_payload: snap as unknown as Record<string, unknown>,
   }
 
   const { error } = await client.from('reservations').upsert(row, {
@@ -124,6 +237,7 @@ async function getState(): Promise<ExtensionState> {
     versionBlocked,
     versionMessage,
     reservation,
+    synxisGuestDisplay,
     hardware,
     terminalId: typeof terminalId === 'string' ? terminalId : null,
     dnrHit,
@@ -193,9 +307,9 @@ async function saveIdScan(args: {
   if (!sess.session) return { ok: false, error: 'Not signed in' }
   if (versionBlocked) return { ok: false, error: versionMessage ?? 'Extension version blocked' }
 
-  const scrape = reservation
-  if (!scrape?.confirmationNumber) {
-    return { ok: false, error: 'No reservation context (confirmation number missing from PMS page).' }
+  const snap = reservation
+  if (!snap?.confirmationNumber) {
+    return { ok: false, error: 'No reservation context. Load a SynXis reservation first (confirmation number).' }
   }
 
   const rawId = (args.parsed.idNumber ?? '').trim()
@@ -224,14 +338,14 @@ async function saveIdScan(args: {
     .from('reservations')
     .upsert(
       {
-        confirmation_number: scrape.confirmationNumber,
-        pms_source: scrape.pms,
-        guest_name: scrape.guestName ?? args.parsed.fullName,
-        room_number: scrape.roomNumber,
-        check_in_date: scrape.checkInDate,
-        check_out_date: scrape.checkOutDate,
-        last_scraped_at: scrape.scrapedAt,
-        scrape_payload: scrape as unknown as Record<string, unknown>,
+        confirmation_number: snap.confirmationNumber,
+        pms_source: snap.pms,
+        guest_name: snap.guestName ?? args.parsed.fullName,
+        room_number: snap.roomNumber,
+        check_in_date: snap.checkInDate,
+        check_out_date: snap.checkOutDate,
+        last_scraped_at: snap.loadedAt,
+        scrape_payload: snap as unknown as Record<string, unknown>,
       },
       { onConflict: 'confirmation_number,pms_source' },
     )
@@ -244,7 +358,7 @@ async function saveIdScan(args: {
   }
 
   const scanId = crypto.randomUUID()
-  const conf = scrape.confirmationNumber
+  const conf = snap.confirmationNumber
   const basePath = `${conf}/${scanId}`
 
   let imageFrontPath: string | null = null
@@ -344,20 +458,37 @@ function base64ToBlob(b64: string, type: string): Blob {
 
 async function handleMessage(
   msg: ExtensionMessage,
-  sender: chrome.runtime.MessageSender,
+  _sender: chrome.runtime.MessageSender,
 ): Promise<ExtensionResponse | Record<string, unknown>> {
   const client = getClient()
 
-  if (msg.type === 'PMS_SCRAPE') {
-    reservation = msg.payload
-    if (sender.tab?.id) lastPmsTabId = sender.tab.id
-    const { data: sess } = await client.auth.getSession()
-    if (sess.session) void upsertReservationFromScrape(client, msg.payload)
+  if (msg.type === 'GET_STATE') {
     return { ok: true, state: await getState() }
   }
 
-  if (msg.type === 'GET_STATE') {
-    return { ok: true, state: await getState() }
+  if (msg.type === 'LOAD_SYNXIS_RESERVATION') {
+    const tab = await findSynxisTab()
+    if (tab?.id) lastPmsTabId = tab.id
+    const tabUrl = tab?.url ?? 'https://controlcenter-p2.synxis.com/'
+    const apiRes = await fetchSynxisReservationSummaryByApi(tabUrl)
+    if (apiRes.ok === false) {
+      const err = apiRes.error
+      lastError = err
+      synxisGuestDisplay = null
+      void notifyUser('FrontDesk Nexus — Reservation failed', err)
+      return { ok: false, error: err }
+    }
+
+    reservation = apiRes.payload
+    synxisGuestDisplay = apiRes.guestDisplay
+    const { data: sess } = await client.auth.getSession()
+    if (sess.session) void upsertReservationSnapshot(client, apiRes.payload)
+
+    const conf = apiRes.payload.confirmationNumber ?? 'N/A'
+    const msgText = `Loaded reservation ${conf} (SynXis API)`
+    void notifyUser('FrontDesk Nexus — Reservation loaded', msgText)
+    lastError = null
+    return { ok: true, state: await getState(), message: msgText }
   }
 
   if (msg.type === 'AUTH_DEV_LOGIN') {
@@ -387,6 +518,8 @@ async function handleMessage(
   if (msg.type === 'AUTH_LOGOUT') {
     await client.auth.signOut()
     cachedRole = null
+    reservation = null
+    synxisGuestDisplay = null
     return { ok: true, state: await getState() }
   }
 
@@ -432,11 +565,12 @@ async function handleMessage(
   }
 
   if (msg.type === 'INJECT_PMS') {
-    if (lastPmsTabId == null) {
-      return { ok: false, error: 'No active PMS tab captured yet. Open a guest page.' }
+    const tabId = await resolvePmsTabId()
+    if (tabId == null) {
+      return { ok: false, error: 'No SynXis or eZee tab found. Open a guest page first.' }
     }
     try {
-      const tabRes = await chrome.tabs.sendMessage(lastPmsTabId, {
+      const tabRes = await chrome.tabs.sendMessage(tabId, {
         type: 'FDN_INJECT',
         fields: msg.fields,
       })
