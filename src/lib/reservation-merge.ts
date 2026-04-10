@@ -5,13 +5,13 @@ export function normalizeRoom(value: string | null | undefined): string | null {
   return t.length > 0 ? t : null
 }
 
-/** Parses DB `room_number` text: single room or chain `"113 -> 304 -> 823"`. */
+/** Parses DB `room_number` text: single room or chain `"113 → 304 → 823"`. */
 export function parseRoomChainToHistory(value: string | null | undefined): string[] {
   const raw = (value ?? '').trim()
   if (!raw) return []
-  if (raw.includes('->')) {
+  if (raw.includes('→')) {
     return raw
-      .split('->')
+      .split('→')
       .map((x) => x.trim())
       .filter((x) => x.length > 0)
   }
@@ -21,7 +21,7 @@ export function parseRoomChainToHistory(value: string | null | undefined): strin
 /** Same segments as stored in `room_number`, joined for the text column. */
 export function formatRoomChainForColumn(history: string[]): string | null {
   if (history.length === 0) return null
-  return history.join(' -> ')
+  return history.join(' → ')
 }
 
 /**
