@@ -1,11 +1,24 @@
-import type { ParsedIdFields, ReservationSnapshot, SynxisGuestDisplay } from './pms-types'
+import type {
+  EzeeGuestDisplay,
+  ParsedIdFields,
+  ReservationSnapshot,
+  SynxisGuestDisplay,
+} from './pms-types'
 
 /** chrome.runtime / Port message contracts (see docs/MESSAGING.md) */
 export type ExtensionMessage =
   | { type: 'GET_STATE' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
+  /** Manual scrape: eZee tab with Arrivals drawer open (same payload as auto). */
+  | { type: 'LOAD_EZEE_RESERVATION' }
   /** Content script on sph.synxis.com: Guest Stay Record detected, confirmation extracted from DOM. */
   | { type: 'SYNXIS_AUTO_GUEST_DETECTED'; confirmation: string; roomHint?: string | null }
+  /** Content script on live.ipms247.com: Ant Design guest drawer scraped. */
+  | {
+      type: 'EZEE_AUTO_GUEST_DETECTED'
+      snapshot: ReservationSnapshot
+      guestDisplay: EzeeGuestDisplay
+    }
   | { type: 'AUTH_DEV_LOGIN'; email: string; password: string }
   | { type: 'AUTH_LOGOUT' }
   | {
@@ -50,6 +63,8 @@ export type ExtensionState = {
   reservation: ReservationSnapshot | null
   /** Parsed guest fields for side panel (SynXis reservation-summary). */
   synxisGuestDisplay: SynxisGuestDisplay | null
+  /** eZee Arrivals drawer scrape. */
+  ezeeGuestDisplay: EzeeGuestDisplay | null
   hardware: HardwareStatus
   terminalId: string | null
   dnrHit: boolean

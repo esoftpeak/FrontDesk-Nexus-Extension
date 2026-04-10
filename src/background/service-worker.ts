@@ -5,7 +5,12 @@ import type {
   ExtensionState,
   PanelToastBroadcast,
 } from '../shared/protocol'
-import type { ParsedIdFields, ReservationSnapshot, SynxisGuestDisplay } from '../shared/pms-types'
+import type {
+  EzeeGuestDisplay,
+  ParsedIdFields,
+  ReservationSnapshot,
+  SynxisGuestDisplay,
+} from '../shared/pms-types'
 import { encryptJson } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { pingNativeHost, scanIdFromNativeOrSimulate } from '../lib/native-scan'
@@ -19,11 +24,13 @@ import {
   mergeRoomNumberHistory,
 } from '../lib/reservation-merge'
 import { synxisExtractInFrame } from '../lib/synxis-extract-in-frame'
+import { isValidEzeeReservationNumber } from '../lib/ezee-drawer-extract'
 
 let supabase: SupabaseClient | null = null
 
 let reservation: ReservationSnapshot | null = null
 let synxisGuestDisplay: SynxisGuestDisplay | null = null
+let ezeeGuestDisplay: EzeeGuestDisplay | null = null
 let lastPmsTabId: number | null = null
 let cachedRole: string | null = null
 let versionBlocked = false
@@ -39,8 +46,19 @@ const synxisAutoDedupeByTab = new Map<
 const synxisAutoInFlight = new Set<string>()
 const SYNXIS_AUTO_DEDUPE_MS = 30_000
 
+const ezeeAutoDedupeByTab = new Map<
+  number,
+  { confirmation: string; roomHint: string; at: number }
+>()
+const ezeeAutoInFlight = new Set<string>()
+const EZEE_AUTO_DEDUPE_MS = 30_000
+
 function synxisAutoFlightKey(tabId: number, confirmation: string, roomHint: string): string {
   return `${tabId}|${confirmation}|${roomHint}`
+}
+
+function ezeeAutoFlightKey(tabId: number, confirmation: string, roomHint: string): string {
+  return `ezee|${tabId}|${confirmation}|${roomHint}`
 }
 
 const SYNXIS_DEFAULT_GUEST_ID = 100
@@ -127,15 +145,34 @@ async function findSynxisTab(): Promise<chrome.tabs.Tab | undefined> {
   return any.find((t) => t.active) ?? any[0]
 }
 
+const EZEE_TAB_URL_PATTERNS = ['https://live.ipms247.com/*', 'https://*.ipms247.com/*'] as const
+
+function isEzeePmsUrl(u: string): boolean {
+  try {
+    const h = new URL(u).hostname
+    return h === 'live.ipms247.com' || h.endsWith('.ipms247.com')
+  } catch {
+    return false
+  }
+}
+
+async function findEzeeTab(): Promise<chrome.tabs.Tab | undefined> {
+  const focused = await chrome.tabs.query({
+    active: true,
+    lastFocusedWindow: true,
+    url: [...EZEE_TAB_URL_PATTERNS],
+  })
+  if (focused[0]) return focused[0]
+  const any = await chrome.tabs.query({ url: [...EZEE_TAB_URL_PATTERNS] })
+  return any.find((t) => t.active) ?? any[0]
+}
+
 async function resolvePmsTabId(): Promise<number | null> {
   if (lastPmsTabId != null) {
     try {
       const t = await chrome.tabs.get(lastPmsTabId)
       const u = t.url ?? ''
-      if (
-        /^https:\/\/controlcenter-p2\.synxis\.com\//i.test(u) ||
-        /^https:\/\/live\.ipms247\.com\//i.test(u)
-      ) {
+      if (/^https:\/\/controlcenter-p2\.synxis\.com\//i.test(u) || isEzeePmsUrl(u)) {
         return lastPmsTabId
       }
     } catch {
@@ -143,7 +180,7 @@ async function resolvePmsTabId(): Promise<number | null> {
     }
   }
   const focused = await chrome.tabs.query({
-    url: ['https://controlcenter-p2.synxis.com/*', 'https://live.ipms247.com/*'],
+    url: ['https://controlcenter-p2.synxis.com/*', ...EZEE_TAB_URL_PATTERNS],
     lastFocusedWindow: true,
   })
   const pick = focused.find((t) => t.active) ?? focused[0]
@@ -152,7 +189,7 @@ async function resolvePmsTabId(): Promise<number | null> {
     return pick.id
   }
   const anyHost = await chrome.tabs.query({
-    url: ['https://controlcenter-p2.synxis.com/*', 'https://live.ipms247.com/*'],
+    url: ['https://controlcenter-p2.synxis.com/*', ...EZEE_TAB_URL_PATTERNS],
   })
   const fallback = anyHost.find((t) => t.active) ?? anyHost[0]
   if (fallback?.id != null) {
@@ -261,6 +298,7 @@ async function completeSynxisReservationFromConfirmation(
 
   reservation = apiRes.payload
   synxisGuestDisplay = apiRes.guestDisplay
+  ezeeGuestDisplay = null
   const { data: sess } = await client.auth.getSession()
   let dbSaved = false
   if (sess.session) {
@@ -295,6 +333,64 @@ async function completeSynxisReservationFromConfirmation(
   }
 
   const msgText = `Loaded reservation ${conf} (SynXis API)`
+  if (options.chromeNotify) void notifyUser('FrontDesk Nexus — Reservation loaded', msgText)
+  lastError = null
+  return { ok: true, state: await getState(), message: msgText }
+}
+
+async function completeEzeeReservationFromSnapshot(
+  tabId: number,
+  tabUrl: string,
+  snapshot: ReservationSnapshot,
+  guestDisplay: EzeeGuestDisplay,
+  options: { chromeNotify: boolean; panelToast: boolean },
+): Promise<ExtensionResponse | Record<string, unknown>> {
+  const client = getClient()
+  lastPmsTabId = tabId
+
+  reservation = { ...snapshot, pageUrl: tabUrl }
+  synxisGuestDisplay = null
+  ezeeGuestDisplay = guestDisplay
+
+  const { data: sess } = await client.auth.getSession()
+  let dbSaved = false
+  if (sess.session) {
+    const ur = await upsertReservationSnapshot(client, reservation)
+    dbSaved = ur.ok
+  }
+
+  const conf = snapshot.confirmationNumber ?? ''
+
+  if (options.panelToast) {
+    if (sess.session) {
+      if (dbSaved) {
+        broadcastPanelToast({
+          confirmationNumber: conf,
+          variant: 'success',
+          detail: 'Guest loaded from eZee and saved to database',
+        })
+      } else {
+        broadcastPanelToast({
+          confirmationNumber: conf,
+          variant: 'warn',
+          detail: 'Guest loaded from eZee but not saved to database',
+        })
+      }
+    } else {
+      broadcastPanelToast({
+        confirmationNumber: conf,
+        variant: 'warn',
+        detail: 'Sign in to save this guest to the database',
+      })
+    }
+  }
+
+  const msgText = `Loaded reservation ${conf} (eZee)`
+  console.info('[FDN SW] eZee reservation loaded', {
+    confirmation: conf,
+    dbSaved,
+    guestName: guestDisplay.nameLine,
+  })
   if (options.chromeNotify) void notifyUser('FrontDesk Nexus — Reservation loaded', msgText)
   lastError = null
   return { ok: true, state: await getState(), message: msgText }
@@ -398,6 +494,8 @@ async function upsertReservationSnapshot(
     confirmation_number: snap.confirmationNumber,
     pms_source: snap.pms,
     guest_name: guestName ?? null,
+    phone: snap.phone ?? null,
+    email: snap.email ?? null,
     room_number: roomColumn,
     check_in_date: snap.checkInDate,
     check_out_date: snap.checkOutDate,
@@ -459,6 +557,7 @@ async function getState(): Promise<ExtensionState> {
     versionMessage,
     reservation,
     synxisGuestDisplay,
+    ezeeGuestDisplay,
     hardware,
     terminalId: typeof terminalId === 'string' ? terminalId : null,
     dnrHit,
@@ -530,7 +629,11 @@ async function saveIdScan(args: {
 
   const snap = reservation
   if (!snap?.confirmationNumber) {
-    return { ok: false, error: 'No reservation context. Load a SynXis reservation first (confirmation number).' }
+    return {
+      ok: false,
+      error:
+        'No reservation context. Load SynXis (Get Guest Data) or open an eZee guest in the Arrivals drawer.',
+    }
   }
 
   const rawId = (args.parsed.idNumber ?? '').trim()
@@ -676,6 +779,41 @@ async function handleMessage(
     return { ok: true, state: await getState() }
   }
 
+  if (msg.type === 'LOAD_EZEE_RESERVATION') {
+    const tab = await findEzeeTab()
+    if (!tab?.id) {
+      const reason =
+        'Open eZee Absolute (live.ipms247.com), open a guest in the Arrivals drawer, then click Get Guest Data.'
+      lastError = reason
+      return { ok: false, error: reason }
+    }
+    lastPmsTabId = tab.id
+    let tabRes: unknown
+    try {
+      tabRes = await chrome.tabs.sendMessage(tab.id, { type: 'EZEE_EXTRACT_NOW' })
+    } catch {
+      lastError = 'Could not run eZee scrape in this tab. Reload the page and try again.'
+      return {
+        ok: false,
+        error: lastError,
+      }
+    }
+    const tr = tabRes as {
+      ok?: boolean
+      snapshot?: ReservationSnapshot
+      guestDisplay?: EzeeGuestDisplay
+      error?: string
+    }
+    if (!tr.ok || !tr.snapshot || !tr.guestDisplay) {
+      lastError = tr.error ?? 'Could not read the guest drawer.'
+      return { ok: false, error: lastError }
+    }
+    return completeEzeeReservationFromSnapshot(tab.id, tab.url ?? 'https://live.ipms247.com/', tr.snapshot, tr.guestDisplay, {
+      chromeNotify: true,
+      panelToast: false,
+    })
+  }
+
   if (msg.type === 'LOAD_SYNXIS_RESERVATION') {
     const tab = await findSynxisTab()
     if (!tab?.id) {
@@ -702,6 +840,52 @@ async function handleMessage(
       chromeNotify: true,
       panelToast: false,
     })
+  }
+
+  if (msg.type === 'EZEE_AUTO_GUEST_DETECTED') {
+    const tabId = _sender.tab?.id
+    if (tabId == null) {
+      return { ok: false, error: 'eZee auto-load: no sender tab' }
+    }
+    const c = (msg.snapshot.confirmationNumber ?? '').trim()
+    if (!isValidEzeeReservationNumber(c)) {
+      console.warn('[FDN] eZee auto-load: invalid reservation #, ignored', msg.snapshot.confirmationNumber)
+      return { ok: true, state: await getState() }
+    }
+
+    const roomHint = (msg.snapshot.roomNumber ?? '').trim()
+    const now = Date.now()
+    const prev = ezeeAutoDedupeByTab.get(tabId)
+    if (
+      prev &&
+      prev.confirmation === c &&
+      prev.roomHint === roomHint &&
+      now - prev.at < EZEE_AUTO_DEDUPE_MS
+    ) {
+      return { ok: true, state: await getState() }
+    }
+
+    const fk = ezeeAutoFlightKey(tabId, c, roomHint)
+    if (ezeeAutoInFlight.has(fk)) {
+      return { ok: true, state: await getState() }
+    }
+    ezeeAutoInFlight.add(fk)
+    try {
+      const tabUrl = _sender.tab?.url ?? 'https://live.ipms247.com/'
+      const result = await completeEzeeReservationFromSnapshot(
+        tabId,
+        tabUrl,
+        msg.snapshot,
+        msg.guestDisplay,
+        { chromeNotify: true, panelToast: true },
+      )
+      if (result && typeof result === 'object' && 'ok' in result && result.ok === true) {
+        ezeeAutoDedupeByTab.set(tabId, { confirmation: c, roomHint, at: Date.now() })
+      }
+      return result
+    } finally {
+      ezeeAutoInFlight.delete(fk)
+    }
   }
 
   if (msg.type === 'SYNXIS_AUTO_GUEST_DETECTED') {
@@ -776,6 +960,7 @@ async function handleMessage(
     cachedRole = null
     reservation = null
     synxisGuestDisplay = null
+    ezeeGuestDisplay = null
     return { ok: true, state: await getState() }
   }
 

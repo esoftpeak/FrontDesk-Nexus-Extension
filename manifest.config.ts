@@ -27,6 +27,7 @@ export default defineManifest({
     'https://controlcenter-p2.synxis.com/*',
     'https://sph.synxis.com/*',
     'https://live.ipms247.com/*',
+    'https://*.ipms247.com/*',
   ],
   content_scripts: [
     {
@@ -40,7 +41,7 @@ export default defineManifest({
       js: ['src/content/synxis.ts'],
     },
     {
-      matches: ['https://live.ipms247.com/*'],
+      matches: ['https://live.ipms247.com/*', 'https://*.ipms247.com/*'],
       js: ['src/content/ezee.ts'],
     },
   ],

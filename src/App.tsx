@@ -239,6 +239,25 @@ function App() {
     }
   }
 
+  async function onGetEzeeGuestData() {
+    setBusy(true)
+    setNotice(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'LOAD_EZEE_RESERVATION',
+      })) as { ok: boolean; error?: string; state?: ExtensionState; message?: string }
+      if (!res.ok) {
+        setNotice(res.error ?? 'Could not load eZee reservation.')
+        return
+      }
+      if (res.state) setState(res.state)
+      setNotice(res.message ?? 'eZee guest data loaded.')
+      void refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const toastBanner =
     panelToast != null ? (
       <div
@@ -274,6 +293,7 @@ function App() {
 
   const res = state.reservation
   const guest = state.synxisGuestDisplay
+  const ezee = state.ezeeGuestDisplay
   const hw = state.hardware
 
   return (
@@ -373,7 +393,9 @@ function App() {
             Get Guest Data
           </button>
         </div>
-        {!guest && !res?.confirmationNumber ? (
+        {res?.pms === 'ezee' ? (
+          <p className="fdn-muted">Active reservation is from eZee — use the eZee section below for details.</p>
+        ) : !guest && !res?.confirmationNumber ? (
           <p className="fdn-muted">Click Get Guest Data to load SynXis guest and attach ID scans to a confirmation.</p>
         ) : (
           <dl className="fdn-dl">
@@ -403,7 +425,7 @@ function App() {
                 <dd>{guest.staySummary ?? '—'}</dd>
               </>
             ) : null}
-            {res ? (
+            {res && res.pms === 'synxis' ? (
               <>
                 <dt>PMS</dt>
                 <dd>{res.pms}</dd>
@@ -411,6 +433,73 @@ function App() {
                 <dd>{res.roomNumber ?? '—'}</dd>
                 <dt>Restricted</dt>
                 <dd>{res.restricted ? 'Yes — proceed with caution' : 'No'}</dd>
+              </>
+            ) : null}
+          </dl>
+        )}
+      </section>
+
+      <section className="fdn-card">
+        <h2 className="fdn-h2">Guest Data (eZee)</h2>
+        <p className="fdn-help">
+          Reads the Ant Design guest drawer on live.ipms247.com (not an iframe). The extension auto-loads
+          within a few seconds when you open a guest; use the button if the drawer is already open.
+        </p>
+        <div className="fdn-actions">
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--secondary"
+            disabled={busy}
+            onClick={() => void onGetEzeeGuestData()}
+          >
+            Get Guest Data
+          </button>
+        </div>
+        {res?.pms === 'synxis' ? (
+          <p className="fdn-muted">Active reservation is from SynXis — use the SynXis section above.</p>
+        ) : !ezee && !res?.confirmationNumber ? (
+          <p className="fdn-muted">
+            Open Arrivals and select a guest so the right-side drawer opens, or click Get Guest Data with the
+            drawer visible.
+          </p>
+        ) : (
+          <dl className="fdn-dl">
+            {ezee ? (
+              <>
+                <dt>Guest</dt>
+                <dd>{ezee.nameLine ?? '—'}</dd>
+                <dt>Address</dt>
+                <dd>{ezee.addressLine ?? '—'}</dd>
+                <dt>Reservation #</dt>
+                <dd>{ezee.reservationNumber}</dd>
+                <dt>Status</dt>
+                <dd>{ezee.status ?? '—'}</dd>
+                <dt>Room</dt>
+                <dd>{ezee.roomNumber ?? '—'}</dd>
+                <dt>Stay</dt>
+                <dd>{ezee.staySummary ?? '—'}</dd>
+                <dt>Email</dt>
+                <dd>{ezee.email ?? '—'}</dd>
+                <dt>Phone</dt>
+                <dd>{ezee.phone ?? '—'}</dd>
+                <dt>Total / Balance</dt>
+                <dd>
+                  {ezee.total ?? '—'} / {ezee.balance ?? '—'}
+                </dd>
+              </>
+            ) : null}
+            {res && res.pms === 'ezee' ? (
+              <>
+                <dt>PMS</dt>
+                <dd>{res.pms}</dd>
+                <dt>Room (snapshot)</dt>
+                <dd>{res.roomNumber ?? '—'}</dd>
+                <dt>Check-in / out</dt>
+                <dd>
+                  {res.checkInDate ?? '—'} → {res.checkOutDate ?? '—'}
+                </dd>
+                <dt>Due (balance)</dt>
+                <dd>{res.dueAmount ?? '—'}</dd>
               </>
             ) : null}
           </dl>

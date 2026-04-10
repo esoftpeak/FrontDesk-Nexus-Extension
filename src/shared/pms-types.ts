@@ -50,3 +50,18 @@ export type SynxisGuestDisplay = {
   /** e.g. "Sun, Apr 05 - Sun, Apr 12 (7 nights)" */
   staySummary: string | null
 }
+
+/** eZee Arrivals drawer (DOM scrape) — side panel display. */
+export type EzeeGuestDisplay = {
+  nameLine: string | null
+  /** Country / region line under the name (e.g. United States of America). */
+  addressLine: string | null
+  reservationNumber: string
+  status: string | null
+  roomNumber: string | null
+  email: string | null
+  phone: string | null
+  staySummary: string | null
+  total: string | null
+  balance: string | null
+}
