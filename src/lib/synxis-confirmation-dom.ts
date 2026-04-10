@@ -86,3 +86,20 @@ export function extractConfirmationFromDocument(doc: Document): string | null {
 export function isSynxisConfirmationToken(s: string): boolean {
   return CONFIRMATION_TOKEN.test(s.trim().toUpperCase())
 }
+
+/**
+ * Best-effort room from Guest Stay Record DOM (used for auto-reload when room changes, same confirmation).
+ */
+export function extractRoomHintFromDocument(doc: Document): string | null {
+  const text = doc.body?.innerText ?? ''
+  const patterns = [
+    /\bRoom\s*(?:#|Number|No\.?)?\s*:?\s*(\d{1,4})\b/i,
+    /\bAssigned\s+Room\s*:?\s*(\d{1,4})\b/i,
+    /\bRm\.?\s*#?\s*(\d{1,4})\b/i,
+  ]
+  for (const re of patterns) {
+    const m = text.match(re)
+    if (m?.[1]) return m[1].trim()
+  }
+  return null
+}

@@ -5,7 +5,7 @@ export type ExtensionMessage =
   | { type: 'GET_STATE' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
   /** Content script on sph.synxis.com: Guest Stay Record detected, confirmation extracted from DOM. */
-  | { type: 'SYNXIS_AUTO_GUEST_DETECTED'; confirmation: string }
+  | { type: 'SYNXIS_AUTO_GUEST_DETECTED'; confirmation: string; roomHint?: string | null }
   | { type: 'AUTH_DEV_LOGIN'; email: string; password: string }
   | { type: 'AUTH_LOGOUT' }
   | {

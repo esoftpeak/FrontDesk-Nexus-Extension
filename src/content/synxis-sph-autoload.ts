@@ -5,17 +5,19 @@
  */
 import {
   extractConfirmationFromDocument,
+  extractRoomHintFromDocument,
   isLikelyGuestStayRecordView,
 } from '../lib/synxis-confirmation-dom'
 
 const DEBOUNCE_MS = 100
 /** Skip re-sending the same confirmation while the user stays on the same record. */
 const LOCAL_DEDUPE_MS = 45_000
-/** Direct DOM checks (ms) so slow SPA paint still triggers within ~3–7s without waiting on debounce-only. */
-const BACKUP_RUN_AT_MS = [400, 2000, 5500] as const
+/** Direct DOM checks (ms) so slow SPA paint still triggers within ~5–10s without relying on debounce alone. */
+const BACKUP_RUN_AT_MS = [600, 4000, 7500, 10000] as const
 
 let debounceTimer = 0
-let lastSentConfirmation: string | null = null
+/** Dedupe key: confirmation + DOM room hint so room moves re-fetch the same guest. */
+let lastDedupeKey: string | null = null
 let lastSentAt = 0
 
 function scheduleCheck(): void {
@@ -31,17 +33,22 @@ async function runDetection(): Promise<void> {
   const conf = extractConfirmationFromDocument(document)
   if (!conf) return
 
+  const roomHint = extractRoomHintFromDocument(document) ?? ''
+  const dedupeKey = `${conf}|${roomHint}`
   const now = Date.now()
-  if (conf === lastSentConfirmation && now - lastSentAt < LOCAL_DEDUPE_MS) return
+  if (dedupeKey === lastDedupeKey && now - lastSentAt < LOCAL_DEDUPE_MS) return
 
   const { fdn_synxis_auto_load: auto } = await chrome.storage.local.get('fdn_synxis_auto_load')
   if (auto === false) return
 
-  lastSentConfirmation = conf
-  lastSentAt = now
-
   try {
-    await chrome.runtime.sendMessage({ type: 'SYNXIS_AUTO_GUEST_DETECTED', confirmation: conf })
+    await chrome.runtime.sendMessage({
+      type: 'SYNXIS_AUTO_GUEST_DETECTED',
+      confirmation: conf,
+      roomHint: roomHint.length > 0 ? roomHint : undefined,
+    })
+    lastDedupeKey = dedupeKey
+    lastSentAt = now
   } catch (e) {
     console.warn('[FDN] SynXis auto-load: sendMessage failed', e)
   }

@@ -13,6 +13,11 @@ import { runOcrWithEdgeFunction } from '../lib/ocr'
 import { checkMinExtensionVersion } from '../lib/version-check'
 import { logSynxisGuestSpecConsole, parseSynxisReservationSummaryResponse } from '../lib/synxis-guest-summary'
 import { isSynxisConfirmationToken } from '../lib/synxis-confirmation-dom'
+import {
+  buildMergedScrapePayload,
+  formatRoomChainForColumn,
+  mergeRoomNumberHistory,
+} from '../lib/reservation-merge'
 import { synxisExtractInFrame } from '../lib/synxis-extract-in-frame'
 
 let supabase: SupabaseClient | null = null
@@ -25,10 +30,18 @@ let versionBlocked = false
 let versionMessage: string | null = null
 let lastError: string | null = null
 
-/** Per browser tab: last successful auto-load (avoid MutationObserver / SPA churn spam). */
-const synxisAutoDedupeByTab = new Map<number, { confirmation: string; at: number }>()
-const synxisAutoInFlight = new Set<number>()
+/** Per browser tab: last successful auto-load (confirmation + DOM room hint so room moves re-trigger). */
+const synxisAutoDedupeByTab = new Map<
+  number,
+  { confirmation: string; roomHint: string; at: number }
+>()
+/** In-flight auto-loads: `${tabId}|${confirmation}|${roomHint}` — tab-only would drop a new room hint while first fetch runs. */
+const synxisAutoInFlight = new Set<string>()
 const SYNXIS_AUTO_DEDUPE_MS = 30_000
+
+function synxisAutoFlightKey(tabId: number, confirmation: string, roomHint: string): string {
+  return `${tabId}|${confirmation}|${roomHint}`
+}
 
 const SYNXIS_DEFAULT_GUEST_ID = 100
 
@@ -251,7 +264,8 @@ async function completeSynxisReservationFromConfirmation(
   const { data: sess } = await client.auth.getSession()
   let dbSaved = false
   if (sess.session) {
-    dbSaved = await upsertReservationSnapshot(client, apiRes.payload)
+    const ur = await upsertReservationSnapshot(client, apiRes.payload)
+    dbSaved = ur.ok
   }
 
   const conf = apiRes.payload.confirmationNumber ?? confirmation
@@ -331,31 +345,77 @@ async function refreshRole(client: SupabaseClient): Promise<void> {
   cachedRole = (prof?.role as string) ?? null
 }
 
+type UpsertReservationResult = { ok: true; id: string } | { ok: false }
+
+/**
+ * Upserts reservation: merges prior scrape_payload (email, phone, etc. follow latest API snapshot),
+ * and appends room changes to scrape_payload.fdn.roomNumberHistory (e.g. 111 → 345 → 823).
+ */
 async function upsertReservationSnapshot(
   client: SupabaseClient,
   snap: ReservationSnapshot,
-): Promise<boolean> {
-  if (!snap.confirmationNumber) return false
+  guestNameOverride?: string | null,
+): Promise<UpsertReservationResult> {
+  if (!snap.confirmationNumber) return { ok: false }
+
+  const guestName =
+    guestNameOverride !== undefined ? guestNameOverride : snap.guestName
+
+  const { data: existing, error: selErr } = await client
+    .from('reservations')
+    .select('room_number, scrape_payload')
+    .eq('confirmation_number', snap.confirmationNumber)
+    .eq('pms_source', snap.pms)
+    .maybeSingle()
+
+  if (selErr) console.warn('FrontDesk: reservation select', selErr.message)
+
+  const prevCol =
+    existing?.room_number != null && String(existing.room_number).trim().length > 0
+      ? String(existing.room_number).trim()
+      : null
+  const prevPayload =
+    existing?.scrape_payload && typeof existing.scrape_payload === 'object'
+      ? (existing.scrape_payload as Record<string, unknown>)
+      : undefined
+
+  const roomHistory = mergeRoomNumberHistory({
+    previousRoomColumn: prevCol,
+    previousPayload: prevPayload,
+    newRoomFromPms: snap.roomNumber,
+  })
+
+  const mergedPayload = buildMergedScrapePayload(
+    snap,
+    prevPayload,
+    roomHistory,
+    snap.loadedAt,
+  )
+
+  const roomColumn = formatRoomChainForColumn(roomHistory)
 
   const row = {
     confirmation_number: snap.confirmationNumber,
     pms_source: snap.pms,
-    guest_name: snap.guestName,
-    room_number: snap.roomNumber,
+    guest_name: guestName ?? null,
+    room_number: roomColumn,
     check_in_date: snap.checkInDate,
     check_out_date: snap.checkOutDate,
     last_scraped_at: snap.loadedAt,
-    scrape_payload: snap as unknown as Record<string, unknown>,
+    scrape_payload: mergedPayload,
   }
 
-  const { error } = await client.from('reservations').upsert(row, {
-    onConflict: 'confirmation_number,pms_source',
-  })
-  if (error) {
-    console.warn('FrontDesk: reservation upsert', error.message)
-    return false
+  const { data, error } = await client
+    .from('reservations')
+    .upsert(row, { onConflict: 'confirmation_number,pms_source' })
+    .select('id')
+    .single()
+
+  if (error || !data?.id) {
+    console.warn('FrontDesk: reservation upsert', error?.message)
+    return { ok: false }
   }
-  return true
+  return { ok: true, id: data.id as string }
 }
 
 async function buildHardwareStatus(simulation: boolean): Promise<ExtensionState['hardware']> {
@@ -495,28 +555,17 @@ async function saveIdScan(args: {
   const terminalId = await ensureTerminal(client)
   const user = sess.session.user
 
-  const { data: resRow, error: resErr } = await client
-    .from('reservations')
-    .upsert(
-      {
-        confirmation_number: snap.confirmationNumber,
-        pms_source: snap.pms,
-        guest_name: snap.guestName ?? args.parsed.fullName,
-        room_number: snap.roomNumber,
-        check_in_date: snap.checkInDate,
-        check_out_date: snap.checkOutDate,
-        last_scraped_at: snap.loadedAt,
-        scrape_payload: snap as unknown as Record<string, unknown>,
-      },
-      { onConflict: 'confirmation_number,pms_source' },
-    )
-    .select('id')
-    .single()
-
-  if (resErr || !resRow?.id) {
-    lastError = resErr?.message ?? 'Reservation upsert failed'
+  const snapForSave: ReservationSnapshot = {
+    ...snap,
+    guestName: snap.guestName ?? args.parsed.fullName,
+    loadedAt: new Date().toISOString(),
+  }
+  const ur = await upsertReservationSnapshot(client, snapForSave)
+  if (!ur.ok) {
+    lastError = 'Reservation upsert failed'
     return { ok: false, error: lastError }
   }
+  const resRow = { id: ur.id }
 
   const scanId = crypto.randomUUID()
   const conf = snap.confirmationNumber
@@ -666,28 +715,35 @@ async function handleMessage(
       return { ok: true, state: await getState() }
     }
 
+    const roomHint = (msg.roomHint ?? '').trim()
     const now = Date.now()
     const prev = synxisAutoDedupeByTab.get(tabId)
-    if (prev && prev.confirmation === c && now - prev.at < SYNXIS_AUTO_DEDUPE_MS) {
-      return { ok: true, state: await getState() }
-    }
-    if (synxisAutoInFlight.has(tabId)) {
+    if (
+      prev &&
+      prev.confirmation === c &&
+      prev.roomHint === roomHint &&
+      now - prev.at < SYNXIS_AUTO_DEDUPE_MS
+    ) {
       return { ok: true, state: await getState() }
     }
 
     const tabUrl = _sender.tab?.url ?? 'https://controlcenter-p2.synxis.com/'
-    synxisAutoInFlight.add(tabId)
+    const fk = synxisAutoFlightKey(tabId, c, roomHint)
+    if (synxisAutoInFlight.has(fk)) {
+      return { ok: true, state: await getState() }
+    }
+    synxisAutoInFlight.add(fk)
     try {
       const result = await completeSynxisReservationFromConfirmation(tabId, tabUrl, c, {
         chromeNotify: false,
         panelToast: true,
       })
       if (result.ok === true) {
-        synxisAutoDedupeByTab.set(tabId, { confirmation: c, at: Date.now() })
+        synxisAutoDedupeByTab.set(tabId, { confirmation: c, roomHint, at: Date.now() })
       }
       return result
     } finally {
-      synxisAutoInFlight.delete(tabId)
+      synxisAutoInFlight.delete(fk)
     }
   }
 
