@@ -7,6 +7,7 @@ import { pingNativeHost, scanIdFromNativeOrSimulate } from '../lib/native-scan'
 import { runOcrWithEdgeFunction } from '../lib/ocr'
 import { checkMinExtensionVersion } from '../lib/version-check'
 import { logSynxisGuestSpecConsole, parseSynxisReservationSummaryResponse } from '../lib/synxis-guest-summary'
+import { synxisExtractInFrame } from '../lib/synxis-extract-in-frame'
 
 let supabase: SupabaseClient | null = null
 
@@ -18,22 +19,88 @@ let versionBlocked = false
 let versionMessage: string | null = null
 let lastError: string | null = null
 
-/** Dev/sample body for reservation-summary POST (replace when wiring real lookups). */
-const SYNXIS_RESERVATION_SUMMARY_SAMPLE_BODY = {
-  payload: {
-    account: '88939EE050200',
-    confirmationNumber: '88939EE050200',
-    guestId: 100,
-    property: '88939',
-  },
-} as const
+const SYNXIS_DEFAULT_GUEST_ID = 100
 
 const SYNXIS_RESERVATION_SUMMARY_URL =
   'https://sph.synxis.com/pms-web-ui/service/v2/guest-mgt/guest-stay-record/reservation-summary'
 
+function buildSynxisReservationSummaryBody(confirmationNumber: string): {
+  payload: {
+    account: string
+    confirmationNumber: string
+    guestId: number
+    property: string
+  }
+} {
+  const c = confirmationNumber.trim().toUpperCase()
+  const property = c.length >= 5 ? c.slice(0, 5) : c
+  return {
+    payload: {
+      account: c,
+      confirmationNumber: c,
+      guestId: SYNXIS_DEFAULT_GUEST_ID,
+      property,
+    },
+  }
+}
+
+/**
+ * Reads confirmation from every frame (parent + cross-origin sph iframe).
+ * Prefers sph.synxis.com — the guest stay UI often lives there while the parent shell can show stale text.
+ */
+async function getConfirmationFromSynxisTab(tabId: number): Promise<string> {
+  let injectionResults: chrome.scripting.InjectionResult[]
+  try {
+    injectionResults = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: synxisExtractInFrame,
+    })
+  } catch {
+    throw new Error(
+      'Could not run extraction in SynXis tab. Reload the Control Center tab and try again.',
+    )
+  }
+
+  type FrameResult = { value: string | null; href: string }
+  const hits: { value: string; href: string }[] = []
+  for (const ir of injectionResults) {
+    const r = ir.result as FrameResult | undefined
+    if (!r?.value || typeof r.value !== 'string') continue
+    hits.push({ value: r.value.trim().toUpperCase(), href: r.href || '' })
+  }
+
+  console.info('[FDN] confirmationNumber (per frame)', hits)
+
+  if (hits.length === 0) {
+    throw new Error('Could not read confirmation from page or iframe.')
+  }
+
+  const sph = hits.filter((h) => h.href.includes('sph.synxis.com'))
+  const uniqSp = [...new Set(sph.map((h) => h.value))]
+  if (uniqSp.length === 1) {
+    console.info('[FDN] confirmationNumber (using sph.synxis.com iframe)', uniqSp[0])
+    return uniqSp[0]
+  }
+  if (sph.length > 0) {
+    const last = sph[sph.length - 1].value
+    console.warn('[FDN] multiple iframe hits; using last sph frame', sph)
+    return last
+  }
+
+  const chosen = hits[hits.length - 1].value
+  console.info('[FDN] confirmationNumber (parent only, no sph iframe hit)', chosen)
+  return chosen
+}
+
 async function findSynxisTab(): Promise<chrome.tabs.Tab | undefined> {
-  const tabs = await chrome.tabs.query({ url: 'https://controlcenter-p2.synxis.com/*' })
-  return tabs.find((t) => t.active) ?? tabs[0]
+  const focused = await chrome.tabs.query({
+    active: true,
+    lastFocusedWindow: true,
+    url: 'https://controlcenter-p2.synxis.com/*',
+  })
+  if (focused[0]) return focused[0]
+  const any = await chrome.tabs.query({ url: 'https://controlcenter-p2.synxis.com/*' })
+  return any.find((t) => t.active) ?? any[0]
 }
 
 async function resolvePmsTabId(): Promise<number | null> {
@@ -75,9 +142,10 @@ async function notifyUser(title: string, message: string): Promise<void> {
   try {
     await chrome.notifications.create({
       type: 'basic',
-      iconUrl: 'favicon.svg',
       title,
       message,
+      // Raster PNG — Chrome notifications often reject SVG ("Unable to download all specified images").
+      iconUrl: chrome.runtime.getURL('icon.png'),
     })
   } catch (e) {
     console.warn('FrontDesk: notification failed', e)
@@ -86,17 +154,21 @@ async function notifyUser(title: string, message: string): Promise<void> {
 
 async function fetchSynxisReservationSummaryByApi(
   tabUrl: string,
+  confirmationNumber: string,
 ): Promise<
   | { ok: true; payload: ReservationSnapshot; guestDisplay: SynxisGuestDisplay }
   | { ok: false; error: string }
 > {
-  const confirmationFallback = SYNXIS_RESERVATION_SUMMARY_SAMPLE_BODY.payload.confirmationNumber
+  const body = buildSynxisReservationSummaryBody(confirmationNumber)
+  const confirmationFallback = body.payload.confirmationNumber
+
+  console.info('[FDN] confirmationNumber (final, sent to SynXis API)', confirmationFallback)
 
   const requestHeaders: Record<string, string> = {
     Accept: 'application/json, text/plain, */*',
     'Content-Type': 'application/json',
   }
-  const bodyString = JSON.stringify(SYNXIS_RESERVATION_SUMMARY_SAMPLE_BODY)
+  const bodyString = JSON.stringify(body)
 
   const res = await fetch(SYNXIS_RESERVATION_SUMMARY_URL, {
     method: 'POST',
@@ -468,9 +540,27 @@ async function handleMessage(
 
   if (msg.type === 'LOAD_SYNXIS_RESERVATION') {
     const tab = await findSynxisTab()
-    if (tab?.id) lastPmsTabId = tab.id
-    const tabUrl = tab?.url ?? 'https://controlcenter-p2.synxis.com/'
-    const apiRes = await fetchSynxisReservationSummaryByApi(tabUrl)
+    if (!tab?.id) {
+      const reason =
+        'Open SynXis Control Center (controlcenter-p2.synxis.com) in a tab, then click Get Guest Data.'
+      lastError = reason
+      return { ok: false, error: reason }
+    }
+    lastPmsTabId = tab.id
+    const tabUrl = tab.url ?? 'https://controlcenter-p2.synxis.com/'
+
+    let confirmation: string
+    try {
+      confirmation = await getConfirmationFromSynxisTab(tab.id)
+    } catch (e) {
+      const err = e instanceof Error ? e.message : 'Confirmation extraction failed'
+      lastError = err
+      synxisGuestDisplay = null
+      void notifyUser('FrontDesk Nexus — Confirmation not found', err)
+      return { ok: false, error: err }
+    }
+
+    const apiRes = await fetchSynxisReservationSummaryByApi(tabUrl, confirmation)
     if (apiRes.ok === false) {
       const err = apiRes.error
       lastError = err
