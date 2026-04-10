@@ -30,6 +30,12 @@ export default defineManifest({
   ],
   content_scripts: [
     {
+      matches: ['https://sph.synxis.com/*'],
+      js: ['src/content/synxis-sph-autoload.ts'],
+      // Guest Stay Record runs inside an iframe; default all_frames=false only injects the tab top frame.
+      all_frames: true,
+    },
+    {
       matches: ['https://controlcenter-p2.synxis.com/*'],
       js: ['src/content/synxis.ts'],
     },

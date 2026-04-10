@@ -267,3 +267,47 @@
   width: 100%;
   max-width: 320px;
 }
+
+/* Auto-sync (SynXis): top sticky banner, ~3s lifetime controlled in App.tsx */
+.fdn-panel-toast {
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  margin: -12px -12px 12px -12px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, #1c2430 0%, #161b22 100%);
+  border-bottom: 1px solid #30363d;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.fdn-panel-toast--success {
+  border-left: 3px solid #3fb950;
+}
+
+.fdn-panel-toast--warn {
+  border-left: 3px solid #d29922;
+}
+
+.fdn-panel-toast__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b949e;
+  margin-bottom: 2px;
+}
+
+.fdn-panel-toast__conf {
+  font-size: 14px;
+  font-weight: 650;
+  font-family: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', monospace;
+  letter-spacing: 0.03em;
+  color: #e6edf3;
+  word-break: break-all;
+}
+
+.fdn-panel-toast__detail {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8b949e;
+  line-height: 1.35;
+}

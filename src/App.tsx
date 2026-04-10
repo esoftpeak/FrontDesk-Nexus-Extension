@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { ExtensionState } from './shared/protocol'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ExtensionState, PanelToastBroadcast } from './shared/protocol'
 import type { ParsedIdFields } from './shared/pms-types'
 import { splitGuestName } from './lib/name-format'
 import './sidepanel.css'
@@ -28,6 +28,12 @@ function App() {
   const [showManagerModal, setShowManagerModal] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [panelToast, setPanelToast] = useState<{
+    confirmationNumber: string
+    detail?: string
+    variant: NonNullable<PanelToastBroadcast['variant']>
+  } | null>(null)
+  const panelToastTimerRef = useRef(0)
   const [scanImages, setScanImages] = useState<{
     front: string
     back: string
@@ -48,6 +54,27 @@ function App() {
     void refresh()
     const t = window.setInterval(() => void refresh(), 2000)
     return () => clearInterval(t)
+  }, [refresh])
+
+  useEffect(() => {
+    const onPanelToast = (msg: unknown) => {
+      if (!msg || typeof msg !== 'object') return
+      const m = msg as PanelToastBroadcast
+      if (m.type !== 'FDN_PANEL_TOAST' || !m.confirmationNumber) return
+      window.clearTimeout(panelToastTimerRef.current)
+      setPanelToast({
+        confirmationNumber: m.confirmationNumber,
+        detail: m.detail,
+        variant: m.variant === 'warn' ? 'warn' : 'success',
+      })
+      void refresh()
+      panelToastTimerRef.current = window.setTimeout(() => setPanelToast(null), 3000)
+    }
+    chrome.runtime.onMessage.addListener(onPanelToast)
+    return () => {
+      chrome.runtime.onMessage.removeListener(onPanelToast)
+      window.clearTimeout(panelToastTimerRef.current)
+    }
   }, [refresh])
 
   async function onDevLogin(e: React.FormEvent) {
@@ -212,9 +239,25 @@ function App() {
     }
   }
 
+  const toastBanner =
+    panelToast != null ? (
+      <div
+        className={`fdn-panel-toast fdn-panel-toast--${panelToast.variant}`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="fdn-panel-toast__label">Confirmation</div>
+        <div className="fdn-panel-toast__conf">{panelToast.confirmationNumber}</div>
+        {panelToast.detail ? (
+          <div className="fdn-panel-toast__detail">{panelToast.detail}</div>
+        ) : null}
+      </div>
+    ) : null
+
   if (!state) {
     return (
       <div className="fdn-root">
+        {toastBanner}
         <p className="fdn-muted">Loading…</p>
       </div>
     )
@@ -223,6 +266,7 @@ function App() {
   if (state.versionBlocked) {
     return (
       <div className="fdn-root">
+        {toastBanner}
         <div className="fdn-banner fdn-banner--danger">{state.versionMessage}</div>
       </div>
     )
@@ -234,6 +278,7 @@ function App() {
 
   return (
     <div className="fdn-root">
+      {toastBanner}
       {state.simulation && (
         <div className="fdn-banner fdn-banner--warn">
           SIMULATION MODE — scanner / hardware responses may be mocked.

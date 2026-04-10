@@ -1,5 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { ExtensionMessage, ExtensionResponse, ExtensionState } from '../shared/protocol'
+import type {
+  ExtensionMessage,
+  ExtensionResponse,
+  ExtensionState,
+  PanelToastBroadcast,
+} from '../shared/protocol'
 import type { ParsedIdFields, ReservationSnapshot, SynxisGuestDisplay } from '../shared/pms-types'
 import { encryptJson } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
@@ -7,6 +12,7 @@ import { pingNativeHost, scanIdFromNativeOrSimulate } from '../lib/native-scan'
 import { runOcrWithEdgeFunction } from '../lib/ocr'
 import { checkMinExtensionVersion } from '../lib/version-check'
 import { logSynxisGuestSpecConsole, parseSynxisReservationSummaryResponse } from '../lib/synxis-guest-summary'
+import { isSynxisConfirmationToken } from '../lib/synxis-confirmation-dom'
 import { synxisExtractInFrame } from '../lib/synxis-extract-in-frame'
 
 let supabase: SupabaseClient | null = null
@@ -18,6 +24,11 @@ let cachedRole: string | null = null
 let versionBlocked = false
 let versionMessage: string | null = null
 let lastError: string | null = null
+
+/** Per browser tab: last successful auto-load (avoid MutationObserver / SPA churn spam). */
+const synxisAutoDedupeByTab = new Map<number, { confirmation: string; at: number }>()
+const synxisAutoInFlight = new Set<number>()
+const SYNXIS_AUTO_DEDUPE_MS = 30_000
 
 const SYNXIS_DEFAULT_GUEST_ID = 100
 
@@ -138,6 +149,22 @@ async function resolvePmsTabId(): Promise<number | null> {
   return null
 }
 
+function broadcastPanelToast(args: {
+  confirmationNumber: string
+  detail?: string
+  variant?: PanelToastBroadcast['variant']
+}): void {
+  const msg: PanelToastBroadcast = {
+    type: 'FDN_PANEL_TOAST',
+    confirmationNumber: args.confirmationNumber,
+    detail: args.detail,
+    variant: args.variant ?? 'success',
+  }
+  void chrome.runtime.sendMessage(msg).catch(() => {
+    /* Side panel may be closed */
+  })
+}
+
 async function notifyUser(title: string, message: string): Promise<void> {
   try {
     await chrome.notifications.create({
@@ -201,6 +228,64 @@ async function fetchSynxisReservationSummaryByApi(
   return { ok: true, payload: parsed.snapshot, guestDisplay: parsed.display }
 }
 
+async function completeSynxisReservationFromConfirmation(
+  tabId: number,
+  tabUrl: string,
+  confirmation: string,
+  options: { chromeNotify: boolean; panelToast: boolean },
+): Promise<ExtensionResponse | Record<string, unknown>> {
+  const client = getClient()
+  lastPmsTabId = tabId
+
+  const apiRes = await fetchSynxisReservationSummaryByApi(tabUrl, confirmation)
+  if (apiRes.ok === false) {
+    const err = apiRes.error
+    lastError = err
+    synxisGuestDisplay = null
+    if (options.chromeNotify) void notifyUser('FrontDesk Nexus — Reservation failed', err)
+    return { ok: false, error: err }
+  }
+
+  reservation = apiRes.payload
+  synxisGuestDisplay = apiRes.guestDisplay
+  const { data: sess } = await client.auth.getSession()
+  let dbSaved = false
+  if (sess.session) {
+    dbSaved = await upsertReservationSnapshot(client, apiRes.payload)
+  }
+
+  const conf = apiRes.payload.confirmationNumber ?? confirmation
+
+  if (options.panelToast) {
+    if (sess.session) {
+      if (dbSaved) {
+        broadcastPanelToast({
+          confirmationNumber: conf,
+          variant: 'success',
+          detail: 'Guest loaded and saved to database',
+        })
+      } else {
+        broadcastPanelToast({
+          confirmationNumber: conf,
+          variant: 'warn',
+          detail: 'Guest loaded from SynXis but not saved to database',
+        })
+      }
+    } else {
+      broadcastPanelToast({
+        confirmationNumber: conf,
+        variant: 'warn',
+        detail: 'Sign in to save this guest to the database',
+      })
+    }
+  }
+
+  const msgText = `Loaded reservation ${conf} (SynXis API)`
+  if (options.chromeNotify) void notifyUser('FrontDesk Nexus — Reservation loaded', msgText)
+  lastError = null
+  return { ok: true, state: await getState(), message: msgText }
+}
+
 function getClient(): SupabaseClient {
   if (!supabase) supabase = createExtensionSupabase()
   return supabase
@@ -249,8 +334,8 @@ async function refreshRole(client: SupabaseClient): Promise<void> {
 async function upsertReservationSnapshot(
   client: SupabaseClient,
   snap: ReservationSnapshot,
-): Promise<void> {
-  if (!snap.confirmationNumber) return
+): Promise<boolean> {
+  if (!snap.confirmationNumber) return false
 
   const row = {
     confirmation_number: snap.confirmationNumber,
@@ -266,7 +351,11 @@ async function upsertReservationSnapshot(
   const { error } = await client.from('reservations').upsert(row, {
     onConflict: 'confirmation_number,pms_source',
   })
-  if (error) console.warn('FrontDesk: reservation upsert', error.message)
+  if (error) {
+    console.warn('FrontDesk: reservation upsert', error.message)
+    return false
+  }
+  return true
 }
 
 async function buildHardwareStatus(simulation: boolean): Promise<ExtensionState['hardware']> {
@@ -560,25 +649,46 @@ async function handleMessage(
       return { ok: false, error: err }
     }
 
-    const apiRes = await fetchSynxisReservationSummaryByApi(tabUrl, confirmation)
-    if (apiRes.ok === false) {
-      const err = apiRes.error
-      lastError = err
-      synxisGuestDisplay = null
-      void notifyUser('FrontDesk Nexus — Reservation failed', err)
-      return { ok: false, error: err }
+    return completeSynxisReservationFromConfirmation(tab.id, tabUrl, confirmation, {
+      chromeNotify: true,
+      panelToast: false,
+    })
+  }
+
+  if (msg.type === 'SYNXIS_AUTO_GUEST_DETECTED') {
+    const tabId = _sender.tab?.id
+    if (tabId == null) {
+      return { ok: false, error: 'Auto-load: no sender tab' }
+    }
+    const c = msg.confirmation.trim().toUpperCase()
+    if (!isSynxisConfirmationToken(c)) {
+      console.warn('[FDN] SynXis auto-load: invalid confirmation, ignored', msg.confirmation)
+      return { ok: true, state: await getState() }
     }
 
-    reservation = apiRes.payload
-    synxisGuestDisplay = apiRes.guestDisplay
-    const { data: sess } = await client.auth.getSession()
-    if (sess.session) void upsertReservationSnapshot(client, apiRes.payload)
+    const now = Date.now()
+    const prev = synxisAutoDedupeByTab.get(tabId)
+    if (prev && prev.confirmation === c && now - prev.at < SYNXIS_AUTO_DEDUPE_MS) {
+      return { ok: true, state: await getState() }
+    }
+    if (synxisAutoInFlight.has(tabId)) {
+      return { ok: true, state: await getState() }
+    }
 
-    const conf = apiRes.payload.confirmationNumber ?? 'N/A'
-    const msgText = `Loaded reservation ${conf} (SynXis API)`
-    void notifyUser('FrontDesk Nexus — Reservation loaded', msgText)
-    lastError = null
-    return { ok: true, state: await getState(), message: msgText }
+    const tabUrl = _sender.tab?.url ?? 'https://controlcenter-p2.synxis.com/'
+    synxisAutoInFlight.add(tabId)
+    try {
+      const result = await completeSynxisReservationFromConfirmation(tabId, tabUrl, c, {
+        chromeNotify: false,
+        panelToast: true,
+      })
+      if (result.ok === true) {
+        synxisAutoDedupeByTab.set(tabId, { confirmation: c, at: Date.now() })
+      }
+      return result
+    } finally {
+      synxisAutoInFlight.delete(tabId)
+    }
   }
 
   if (msg.type === 'AUTH_DEV_LOGIN') {

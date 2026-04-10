@@ -4,6 +4,8 @@ import type { ParsedIdFields, ReservationSnapshot, SynxisGuestDisplay } from './
 export type ExtensionMessage =
   | { type: 'GET_STATE' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
+  /** Content script on sph.synxis.com: Guest Stay Record detected, confirmation extracted from DOM. */
+  | { type: 'SYNXIS_AUTO_GUEST_DETECTED'; confirmation: string }
   | { type: 'AUTH_DEV_LOGIN'; email: string; password: string }
   | { type: 'AUTH_LOGOUT' }
   | {
@@ -55,3 +57,11 @@ export type ExtensionState = {
 }
 
 export const NATIVE_HOST_NAME = 'com.frontdesk_nexus.native_host'
+
+/** Service worker → side panel: transient success / warning banner. */
+export type PanelToastBroadcast = {
+  type: 'FDN_PANEL_TOAST'
+  confirmationNumber: string
+  detail?: string
+  variant?: 'success' | 'warn'
+}
