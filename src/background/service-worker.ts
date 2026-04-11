@@ -25,6 +25,11 @@ import {
 } from '../lib/reservation-merge'
 import { synxisExtractInFrame } from '../lib/synxis-extract-in-frame'
 import { isValidEzeeReservationNumber } from '../lib/ezee-drawer-extract'
+import {
+  formatDollarLog,
+  parseMoneyToNumber,
+  prepareMoneyColumnForDb,
+} from '../lib/parse-money'
 
 let supabase: SupabaseClient | null = null
 
@@ -490,6 +495,36 @@ async function upsertReservationSnapshot(
 
   const roomColumn = formatRoomChainForColumn(roomHistory)
 
+  const totalParsed = parseMoneyToNumber(snap.reservationTotal)
+  const paidParsed = parseMoneyToNumber(snap.amountPaid)
+  const balanceParsed = parseMoneyToNumber(snap.dueAmount)
+  const totalDb = prepareMoneyColumnForDb(snap.reservationTotal)
+  const paidDb = prepareMoneyColumnForDb(snap.amountPaid)
+  const balanceDb = prepareMoneyColumnForDb(snap.dueAmount)
+
+  console.info('[FDN SW] reservations money → DB (raw → parsed → whole $)', {
+    total: {
+      raw: snap.reservationTotal,
+      parsed: totalParsed,
+      roundedWholeDollars: totalDb,
+      saveDisplay: formatDollarLog(totalDb),
+    },
+    paid: {
+      raw: snap.amountPaid,
+      parsed: paidParsed,
+      roundedWholeDollars: paidDb,
+      saveDisplay: formatDollarLog(paidDb),
+    },
+    balance: {
+      raw: snap.dueAmount,
+      parsed: balanceParsed,
+      roundedWholeDollars: balanceDb,
+      saveDisplay: formatDollarLog(balanceDb),
+    },
+    confirmation: snap.confirmationNumber,
+    pms: snap.pms,
+  })
+
   const row = {
     confirmation_number: snap.confirmationNumber,
     pms_source: snap.pms,
@@ -501,6 +536,9 @@ async function upsertReservationSnapshot(
     check_out_date: snap.checkOutDate,
     last_scraped_at: snap.loadedAt,
     scrape_payload: mergedPayload,
+    total: totalDb,
+    paid: paidDb,
+    balance: balanceDb,
   }
 
   const { data, error } = await client

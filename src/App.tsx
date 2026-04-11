@@ -482,10 +482,12 @@ function App() {
                 <dd>{ezee.email ?? '—'}</dd>
                 <dt>Phone</dt>
                 <dd>{ezee.phone ?? '—'}</dd>
-                <dt>Total / Balance</dt>
-                <dd>
-                  {ezee.total ?? '—'} / {ezee.balance ?? '—'}
-                </dd>
+                <dt>Total</dt>
+                <dd>{ezee.total ?? '—'}</dd>
+                <dt>Paid</dt>
+                <dd>{ezee.paid ?? '—'}</dd>
+                <dt>Balance</dt>
+                <dd>{ezee.balance ?? '—'}</dd>
               </>
             ) : null}
             {res && res.pms === 'ezee' ? (
@@ -498,8 +500,10 @@ function App() {
                 <dd>
                   {res.checkInDate ?? '—'} → {res.checkOutDate ?? '—'}
                 </dd>
-                <dt>Due (balance)</dt>
-                <dd>{res.dueAmount ?? '—'}</dd>
+                <dt>Total / paid / balance (snapshot)</dt>
+                <dd>
+                  {res.reservationTotal ?? '—'} / {res.amountPaid ?? '—'} / {res.dueAmount ?? '—'}
+                </dd>
               </>
             ) : null}
           </dl>

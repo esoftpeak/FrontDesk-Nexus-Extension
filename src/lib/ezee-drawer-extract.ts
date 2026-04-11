@@ -513,6 +513,7 @@ export function ezeeScrapeToSnapshot(
     phone: fields.phone,
     rateAmount: fields.avgDailyRate,
     reservationTotal: fields.total,
+    amountPaid: fields.paid,
     dueAmount: fields.balance,
     restricted: false,
     loadedAt,
@@ -535,6 +536,7 @@ export function ezeeScrapeToGuestDisplay(fields: EzeeScrapeFields): EzeeGuestDis
     phone: fields.phone,
     staySummary,
     total: fields.total,
+    paid: fields.paid,
     balance: fields.balance,
   }
 }

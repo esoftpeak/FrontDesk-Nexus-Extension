@@ -13,8 +13,11 @@ export type ReservationSnapshot = {
   email: string | null
   phone: string | null
   rateAmount: string | null
+  /** Grand total (eZee drawer "Total"; SynXis total when known). */
   reservationTotal: string | null
-  /** eZee: due / balance for future Cash module */
+  /** Amount paid toward stay (eZee drawer "Paid"). */
+  amountPaid: string | null
+  /** Remaining balance / due (eZee drawer "Balance"). */
   dueAmount: string | null
   restricted: boolean
   loadedAt: string
@@ -63,5 +66,6 @@ export type EzeeGuestDisplay = {
   phone: string | null
   staySummary: string | null
   total: string | null
+  paid: string | null
   balance: string | null
 }
