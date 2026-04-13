@@ -1,6 +1,6 @@
 # FrontDesk Nexus — Chrome extension
 
-Manifest V3 extension: **side panel** UI, **SynXis / eZee** content scripts, **Supabase** (Module 1 ID flow), optional **Native Messaging** for the ID scanner, and **simulation mode** for development without hardware.
+Manifest V3 extension: **side panel** UI, **SynXis / eZee** content scripts, **Supabase** (Module 1 ID flow), and **Native Messaging** to the ID scanner Python host (`com.frontdesk.nexus`).
 
 ## Prerequisites
 
@@ -33,7 +33,11 @@ SynXis and eZee DOM scraping / injection use **placeholder selectors**. Calibrat
 
 ## Native host
 
-Host name: `com.frontdesk_nexus.native_host` (see `src/shared/protocol.ts`). Install the Windows host separately; if it is missing, use **simulation mode** or **manual entry** in the side panel.
+Host name: **`com.frontdesk.nexus`** (see `src/shared/protocol.ts` and `src/config/nativeMessaging.ts`). Install the Windows native messaging host separately; the host JSON must list your extension in `allowed_origins` (e.g. `chrome-extension://dhhlencfcfageiedbagdomapcfgbnhmf/` — replace with your ID from `chrome://extensions`).
+
+**Production ID flow:** side panel → service worker → **native messaging only** → your Python host (scanner + OCR + any mock logic **inside Python**) → result back → UI. **DNR** and **DB save** run on **Save**, not on Scan. **PMS inject** is a later step via the content script (`INJECT_PMS`), not via the native host.
+
+If the host is not installed, **Scan ID** will fail until Registry + host JSON + Python are set up; you can still use **manual entry** for ID fields. See [MESSAGING.md](./docs/MESSAGING.md#id-scan--save-lifecycle).
 
 ## Tech
 

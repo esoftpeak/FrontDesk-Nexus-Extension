@@ -12,11 +12,23 @@ Messages use `chrome.runtime.sendMessage` unless noted. Payloads are JSON-serial
 | `AUTH_DEV_LOGIN`          | `{ email, password }` | `{ ok, state? \| error }` |
 | `AUTH_LOGOUT`             | —    | `{ ok, state }` |
 | `BRIDGE_SET_SESSION`      | `{ accessToken, refreshToken, expiresAt? }` | `{ ok, state? \| error }` |
-| `SET_SIMULATION`          | `{ enabled: boolean }` | `{ ok, state }` |
-| `SCAN_ID_START`           | —    | `{ ok, images?, parsed? \| error }` |
-| `SAVE_ID_SCAN`            | `{ parsed, phone, email, manualEntry, managerOverride, imageFrontBase64, imageBackBase64 }` | `{ ok, state? \| error }` |
+| `SCAN_ID_START`           | —    | `{ ok, images, parsed, ocrProvider: 'native_host', imageBase64Length? \| error }` — always `connectNative('com.frontdesk.nexus')` → Python; see [ID scan & save lifecycle](#id-scan--save-lifecycle) |
+| `SAVE_ID_SCAN`            | `{ parsed, phone, email, manualEntry, managerOverride, imageFrontBase64, imageBackBase64, ocrProvider? }` | `{ ok, state? \| error }` — DNR gate, storage, `id_scans`, `audit_log` (no PMS inject here) |
 | `VERIFY_MANAGER`          | `{ email, password }` | `{ ok \| error }` |
 | `INJECT_PMS`              | `{ fields: Record<string,string> }` | `{ ok, inject?, error }` |
+
+## ID scan & save lifecycle
+
+End-to-end order (production). The extension **does not** run OCR on the native path; it only forwards JSON to/from the host.
+
+1. **User clicks “Scan ID”** (side panel React UI).
+2. **`SCAN_ID_START`** → service worker.
+3. **Native Messaging** → **`com.frontdesk.nexus`** Python process: `connectNative` → `postMessage({ type: 'SCAN_ID' })`.
+4. **Python host**: hardware / internal mock capture, OCR, business rules — whatever your `main.py --native-messaging` implements — then **one JSON reply** (`SCAN_RESULT` or `ERROR`).
+5. **Service worker** forwards host `parsed` + `image_base64` to the UI (still **no** Supabase write, **no** DNR check on this step).
+6. **Side panel** updates fields + preview.
+7. **User clicks “Save to Supabase”** → **`SAVE_ID_SCAN`**: reservation context, **DNR** query, optional Storage uploads, **`id_scans`** row, **`audit_log`**.
+8. **PMS** is separate: **`INJECT_PMS`** (or your “Save & write to PMS” flow) sends data to a **content script** on the guest PMS tab — not part of native messaging.
 
 ### `ReservationSnapshot` (extension state `reservation`)
 
@@ -40,36 +52,42 @@ Structured fields from the eZee Arrivals drawer scrape. `null` until an eZee loa
 
 Structured fields parsed from the SynXis reservation-summary JSON for the side panel: name line, loyalty `membershipId`, `addresses[]`, `email`, `phone`, `pmsConfirmationCode`, `staySummary`. `null` until a successful load.
 
-### Native Messaging (`com.frontdesk_nexus.native_host`)
+### Native Messaging (`com.frontdesk.nexus`)
 
-**Outbound**
+Registry + host manifest `name` must match `NATIVE_HOST_NAME` in `src/shared/protocol.ts`. Host manifest `allowed_origins` must include your extension origin, e.g. `chrome-extension://<extension-id>/`.
 
-```json
-{ "cmd": "scan_id", "correlation_id": "<uuid>" }
-```
+**Chrome → Python (scan)**
 
 ```json
-{ "cmd": "heartbeat" }
+{ "type": "SCAN_ID" }
 ```
 
-**Inbound (success)**
+**Python → Chrome (success)** — ID strings use the **same camelCase keys** as the side panel (`fullName`, `dateOfBirth`, `idNumber`, `idType`, `issueDate`, `expiryDate`, `address`). Put them in `ocr_data` and/or on the object root (root wins if both set). Chrome still delivers a deserialized object; the extension only **trims** strings and fills nulls — **no OCR or rename** in the extension.
 
 ```json
 {
-  "ok": true,
-  "correlation_id": "<uuid>",
-  "result": {
-    "front_image_base64": "<base64>",
-    "back_image_base64": "<base64>"
+  "type": "SCAN_RESULT",
+  "success": true,
+  "image_base64": "<base64>",
+  "ocr_data": {
+    "fullName": "",
+    "dateOfBirth": "",
+    "idNumber": "",
+    "idType": "",
+    "issueDate": "",
+    "expiryDate": "",
+    "address": ""
   }
 }
 ```
 
-**Inbound (failure)**
+**Python → Chrome (error)**
 
 ```json
-{ "ok": false, "correlation_id": "<uuid>", "error": "message" }
+{ "type": "ERROR", "message": "…" }
 ```
+
+Launch: `python.exe path/to/main.py --native-messaging`
 
 ## Service worker → Content script
 

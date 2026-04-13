@@ -13,8 +13,12 @@ import type {
 } from '../shared/pms-types'
 import { encryptJson } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
-import { pingNativeHost, scanIdFromNativeOrSimulate } from '../lib/native-scan'
-import { runOcrWithEdgeFunction } from '../lib/ocr'
+import { guessImageMimeFromBase64 } from '../lib/imageMime'
+import { pingNativeHost } from '../lib/native-scan'
+import {
+  logPipelineServiceWorkerStart,
+} from '../nativeMessaging/pipelineLog'
+import { runIdScan } from '../nativeMessaging/scanId'
 import { checkMinExtensionVersion } from '../lib/version-check'
 import { logSynxisGuestSpecConsole, parseSynxisReservationSummaryResponse } from '../lib/synxis-guest-summary'
 import { isSynxisConfirmationToken } from '../lib/synxis-confirmation-dom'
@@ -406,16 +410,6 @@ function getClient(): SupabaseClient {
   return supabase
 }
 
-async function loadSimulation(): Promise<boolean> {
-  const r = await chrome.storage.local.get('fdn_simulation')
-  if (r.fdn_simulation === undefined) return true
-  return Boolean(r.fdn_simulation)
-}
-
-async function setSimulation(enabled: boolean) {
-  await chrome.storage.local.set({ fdn_simulation: enabled })
-}
-
 async function ensureTerminal(client: SupabaseClient): Promise<string | null> {
   const { fdn_terminal_id: existing } = await chrome.storage.local.get('fdn_terminal_id')
   if (typeof existing === 'string' && existing.length > 0) return existing
@@ -554,15 +548,12 @@ async function upsertReservationSnapshot(
   return { ok: true, id: data.id as string }
 }
 
-async function buildHardwareStatus(simulation: boolean): Promise<ExtensionState['hardware']> {
+async function buildHardwareStatus(): Promise<ExtensionState['hardware']> {
   let idScanner: 'connected' | 'disconnected' = 'disconnected'
-  if (simulation) idScanner = 'connected'
-  else {
-    try {
-      idScanner = (await pingNativeHost()) ? 'connected' : 'disconnected'
-    } catch {
-      idScanner = 'disconnected'
-    }
+  try {
+    idScanner = (await pingNativeHost()) ? 'connected' : 'disconnected'
+  } catch {
+    idScanner = 'disconnected'
   }
   return {
     id_scanner: idScanner,
@@ -573,10 +564,9 @@ async function buildHardwareStatus(simulation: boolean): Promise<ExtensionState[
 
 async function getState(): Promise<ExtensionState> {
   const client = getClient()
-  const simulation = await loadSimulation()
   const { data: sessionData } = await client.auth.getSession()
   const user = sessionData.session?.user ?? null
-  const hardware = await buildHardwareStatus(simulation)
+  const hardware = await buildHardwareStatus()
   const { fdn_terminal_id: terminalId } = await chrome.storage.local.get('fdn_terminal_id')
 
   if (user && !cachedRole) await refreshRole(client)
@@ -590,7 +580,6 @@ async function getState(): Promise<ExtensionState> {
       role: cachedRole,
       userId: user?.id ?? null,
     },
-    simulation,
     versionBlocked,
     versionMessage,
     reservation,
@@ -658,6 +647,8 @@ async function saveIdScan(args: {
   managerOverride: boolean
   imageFrontBase64: string | null
   imageBackBase64: string | null
+  /** Set from last `SCAN_ID_START` when not manual entry (e.g. `native_host`). */
+  ocrProvider?: string | null
 }): Promise<ExtensionResponse> {
   lastError = null
   const client = getClient()
@@ -717,20 +708,24 @@ async function saveIdScan(args: {
 
   try {
     if (args.imageFrontBase64) {
-      const path = `${basePath}/front.png`
-      const blob = base64ToBlob(args.imageFrontBase64, 'image/png')
+      const mime = guessImageMimeFromBase64(args.imageFrontBase64)
+      const ext = mime === 'image/jpeg' ? 'jpg' : 'png'
+      const path = `${basePath}/front.${ext}`
+      const blob = base64ToBlob(args.imageFrontBase64, mime)
       const { error: upErr } = await client.storage.from('id-images').upload(path, blob, {
-        contentType: 'image/png',
+        contentType: mime,
         upsert: true,
       })
       if (!upErr) imageFrontPath = path
       else console.warn('Front image upload', upErr.message)
     }
     if (args.imageBackBase64) {
-      const path = `${basePath}/back.png`
-      const blob = base64ToBlob(args.imageBackBase64, 'image/png')
+      const mime = guessImageMimeFromBase64(args.imageBackBase64)
+      const ext = mime === 'image/jpeg' ? 'jpg' : 'png'
+      const path = `${basePath}/back.${ext}`
+      const blob = base64ToBlob(args.imageBackBase64, mime)
       const { error: upErr } = await client.storage.from('id-images').upload(path, blob, {
-        contentType: 'image/png',
+        contentType: mime,
         upsert: true,
       })
       if (!upErr) imageBackPath = path
@@ -765,7 +760,11 @@ async function saveIdScan(args: {
       scanned_by: user.id,
       terminal_id: terminalId,
       manual_entry: args.manualEntry,
-      ocr_provider: args.manualEntry ? null : (import.meta.env.VITE_OCR_FUNCTION_URL ? 'edge_function' : 'mock'),
+      ocr_provider: args.manualEntry
+        ? null
+        : args.ocrProvider && String(args.ocrProvider).trim()
+          ? String(args.ocrProvider).trim()
+          : 'native_host',
       pii_encrypted: pii_encrypted as unknown as Record<string, unknown>,
       image_front_path: imageFrontPath,
       image_back_path: imageBackPath,
@@ -789,7 +788,7 @@ async function saveIdScan(args: {
     confirmation_number: conf,
     description: args.manualEntry
       ? 'ID record saved (MANUAL_ENTRY)'
-      : 'ID record saved (OCR or simulation)',
+      : 'ID record saved (native host or manual)',
     new_value: {
       id_scan_id: insertRow?.id,
       manager_override: args.managerOverride,
@@ -1002,30 +1001,38 @@ async function handleMessage(
     return { ok: true, state: await getState() }
   }
 
-  if (msg.type === 'SET_SIMULATION') {
-    await setSimulation(msg.enabled)
-    return { ok: true, state: await getState() }
-  }
-
   if (msg.type === 'VERIFY_MANAGER') {
     return verifyManager(msg.email, msg.password)
   }
 
+  // Scan: native messaging only → Python host (`runIdScan`). No DNR/DB here.
   if (msg.type === 'SCAN_ID_START') {
-    const simulation = await loadSimulation()
+    const ID_SCAN_LOG = '[FDN ID scan]'
+    logPipelineServiceWorkerStart()
     try {
-      const images = await scanIdFromNativeOrSimulate(simulation)
-      const { data: sess } = await client.auth.getSession()
-      const token = sess.session?.access_token
-      if (!token) return { ok: false, error: 'Not signed in' }
-      const parsed = await runOcrWithEdgeFunction(
-        token,
-        images.front_image_base64,
-        images.back_image_base64,
-      )
-      return { ok: true, images, parsed }
+      const native = await runIdScan()
+      if (!native.ok) {
+        console.warn(`${ID_SCAN_LOG} native: runIdScan failed`, 'error' in native ? native.error : native)
+        throw new Error('error' in native ? native.error : 'Native scan failed')
+      }
+      const parsed = native.result.parsed
+      const b64 = native.result.image_base64
+      const images = { front_image_base64: b64, back_image_base64: b64 }
+      console.log(`${ID_SCAN_LOG} native: returning to side panel`, {
+        ocrProvider: 'native_host',
+        imageBase64Length: b64.length,
+        parsed,
+      })
+      return {
+        ok: true,
+        images,
+        parsed,
+        ocrProvider: 'native_host',
+        imageBase64Length: b64.length,
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Scan failed'
+      console.warn(`${ID_SCAN_LOG} SCAN_ID_START: catch`, message, e)
       lastError = message
       return { ok: false, error: message }
     }
@@ -1040,6 +1047,7 @@ async function handleMessage(
       managerOverride: msg.managerOverride,
       imageFrontBase64: msg.imageFrontBase64,
       imageBackBase64: msg.imageBackBase64,
+      ocrProvider: msg.ocrProvider,
     })
   }
 
@@ -1085,10 +1093,7 @@ function ensureSidePanelOpensOnActionClick() {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 }
 
-chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === 'install') {
-    void chrome.storage.local.set({ fdn_simulation: true })
-  }
+chrome.runtime.onInstalled.addListener(() => {
   ensureSidePanelOpensOnActionClick()
 })
 
