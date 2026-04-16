@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ExtensionState, PanelToastBroadcast, ScanIdStartResponse } from './shared/protocol'
+import type { ExtensionState, NativeIdScanBroadcast, PanelToastBroadcast } from './shared/protocol'
 import type { ParsedIdFields } from './shared/pms-types'
-import { logPipelineFromUiClick, logPipelineUiResponse } from './nativeMessaging/pipelineLog'
 import { base64ToDataUrl } from './lib/imageDataUrl'
 import { splitGuestName } from './lib/name-format'
 import './sidepanel.css'
@@ -43,7 +42,6 @@ function App() {
   const [scanPreviewUrl, setScanPreviewUrl] = useState<string | null>(null)
   const [scanImageB64Length, setScanImageB64Length] = useState<number | null>(null)
   const [lastOcrProvider, setLastOcrProvider] = useState<string | null>(null)
-  const [scanBusy, setScanBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -62,26 +60,58 @@ function App() {
     return () => clearInterval(t)
   }, [refresh])
 
-  useEffect(() => {
-    const onPanelToast = (msg: unknown) => {
-      if (!msg || typeof msg !== 'object') return
-      const m = msg as PanelToastBroadcast
-      if (m.type !== 'FDN_PANEL_TOAST' || !m.confirmationNumber) return
-      window.clearTimeout(panelToastTimerRef.current)
-      setPanelToast({
-        confirmationNumber: m.confirmationNumber,
-        detail: m.detail,
-        variant: m.variant === 'warn' ? 'warn' : 'success',
-      })
-      void refresh()
-      panelToastTimerRef.current = window.setTimeout(() => setPanelToast(null), 3000)
+  const applyNativeIdScan = useCallback((m: NativeIdScanBroadcast) => {
+    setParsed(m.parsed)
+    setLastOcrProvider(m.ocrProvider)
+    setScanImages({
+      front: m.images.front_image_base64,
+      back: m.images.back_image_base64,
+    })
+    setScanImageB64Length(m.imageBase64Length)
+    try {
+      setScanPreviewUrl(base64ToDataUrl(m.images.front_image_base64))
+    } catch {
+      setScanPreviewUrl(null)
     }
-    chrome.runtime.onMessage.addListener(onPanelToast)
-    return () => {
-      chrome.runtime.onMessage.removeListener(onPanelToast)
-      window.clearTimeout(panelToastTimerRef.current)
+    if (m.autoSave.ok) {
+      setNotice('Thales scan received — saved to Supabase.')
+    } else {
+      setNotice(`Thales scan received — not saved: ${m.autoSave.error}`)
     }
+    void refresh()
   }, [refresh])
+
+  useEffect(() => {
+    const onRuntimeMessage = (msg: unknown) => {
+      if (!msg || typeof msg !== 'object') return
+      const m = msg as { type?: string }
+      if (m.type === 'FDN_PANEL_TOAST') {
+        const t = msg as PanelToastBroadcast
+        if (!t.confirmationNumber) return
+        window.clearTimeout(panelToastTimerRef.current)
+        setPanelToast({
+          confirmationNumber: t.confirmationNumber,
+          detail: t.detail,
+          variant: t.variant === 'warn' ? 'warn' : 'success',
+        })
+        void refresh()
+        panelToastTimerRef.current = window.setTimeout(() => setPanelToast(null), 3000)
+        return
+      }
+      if (m.type === 'FDN_NATIVE_ID_SCAN') {
+        applyNativeIdScan(msg as NativeIdScanBroadcast)
+      }
+    }
+    chrome.runtime.onMessage.addListener(onRuntimeMessage)
+    void chrome.storage.local.get('fdn_last_native_scan').then((r) => {
+      const last = r.fdn_last_native_scan as NativeIdScanBroadcast | undefined
+      if (last?.type === 'FDN_NATIVE_ID_SCAN') applyNativeIdScan(last)
+    })
+    return () => {
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage)
+      window.clearTimeout(panelToastTimerRef.current)
+    }
+  }, [refresh, applyNativeIdScan])
 
   async function onDevLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -106,57 +136,6 @@ function App() {
     setManagerOverride(false)
     setBusy(false)
     void refresh()
-  }
-
-  async function onScanId() {
-    const ID_SCAN_LOG = '[FDN ID scan]'
-    logPipelineFromUiClick()
-    setScanBusy(true)
-    setNotice(null)
-    setScanPreviewUrl(null)
-    setScanImageB64Length(null)
-    try {
-      const res = (await chrome.runtime.sendMessage({
-        type: 'SCAN_ID_START',
-      })) as ScanIdStartResponse
-      if (!res.ok) {
-        logPipelineUiResponse(false, { error: res.error })
-        setNotice(res.error ?? 'Scan failed')
-        setScanImages(null)
-        setLastOcrProvider(null)
-        return
-      }
-      if (res.parsed) {
-        setParsed(res.parsed)
-      }
-      setLastOcrProvider(res.ocrProvider)
-      if (res.images) {
-        setScanImages({
-          front: res.images.front_image_base64,
-          back: res.images.back_image_base64,
-        })
-        try {
-          setScanPreviewUrl(base64ToDataUrl(res.images.front_image_base64))
-        } catch (err) {
-          console.warn(`${ID_SCAN_LOG} UI: preview data URL failed`, err)
-          setScanPreviewUrl(null)
-        }
-        setScanImageB64Length(
-          typeof res.imageBase64Length === 'number'
-            ? res.imageBase64Length
-            : res.images.front_image_base64.length,
-        )
-      }
-      logPipelineUiResponse(true, {
-        ocrProvider: res.ocrProvider,
-        imageBase64Length:
-          typeof res.imageBase64Length === 'number'
-            ? res.imageBase64Length
-            : res.images?.front_image_base64.length,
-      })
-    } finally {
-      setScanBusy(false)
-    }
   }
 
   async function onSave() {
@@ -534,6 +513,11 @@ function App() {
 
       <section className="fdn-card">
         <h2 className="fdn-h2">ID scan</h2>
+        <p className="fdn-help">
+          Thales / native host: scans run in the background. When the SDK sends data via native messaging,
+          fields and preview update here and we save to Supabase when the guest reservation is loaded and
+          rules allow.
+        </p>
         <label className="fdn-check">
           <input
             type="checkbox"
@@ -543,25 +527,15 @@ function App() {
           Manual entry mode (no scanner / OCR)
         </label>
         {managerOverride && <p className="fdn-note">Manager override active for DNR gate.</p>}
-        {!manualEntry && (
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--primary"
-            disabled={scanBusy}
-            onClick={() => void onScanId()}
-          >
-            {scanBusy ? 'Scanning…' : 'Scan ID'}
-          </button>
-        )}
         {!manualEntry && lastOcrProvider && (
           <p className="fdn-muted fdn-line">
-            Last scan OCR source: <strong>{lastOcrProvider}</strong>
+            Last scan source: <strong>{lastOcrProvider}</strong>
             {scanImageB64Length != null ? ` · image base64 length ${scanImageB64Length}` : null}
           </p>
         )}
         {!manualEntry && scanPreviewUrl ? (
           <div className="fdn-scan-preview">
-            <p className="fdn-help">Scan preview (front / single capture)</p>
+            <p className="fdn-help">Scan preview</p>
             <img className="fdn-scan-preview__img" src={scanPreviewUrl} alt="ID scan preview" />
           </div>
         ) : null}

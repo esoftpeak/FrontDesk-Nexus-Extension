@@ -3,6 +3,7 @@ import type {
   ExtensionMessage,
   ExtensionResponse,
   ExtensionState,
+  NativeIdScanBroadcast,
   PanelToastBroadcast,
 } from '../shared/protocol'
 import type {
@@ -15,10 +16,8 @@ import { encryptJson } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
 import { pingNativeHost } from '../lib/native-scan'
-import {
-  logPipelineServiceWorkerStart,
-} from '../nativeMessaging/pipelineLog'
-import { runIdScan } from '../nativeMessaging/scanId'
+import type { NativeScanSuccessPayload } from '../nativeMessaging/types'
+import { initNativeHost } from '../nativeHost'
 import { checkMinExtensionVersion } from '../lib/version-check'
 import { logSynxisGuestSpecConsole, parseSynxisReservationSummaryResponse } from '../lib/synxis-guest-summary'
 import { isSynxisConfirmationToken } from '../lib/synxis-confirmation-dom'
@@ -647,7 +646,7 @@ async function saveIdScan(args: {
   managerOverride: boolean
   imageFrontBase64: string | null
   imageBackBase64: string | null
-  /** Set from last `SCAN_ID_START` when not manual entry (e.g. `native_host`). */
+  /** Set from Thales/native host when not manual entry. */
   ocrProvider?: string | null
 }): Promise<ExtensionResponse> {
   lastError = null
@@ -797,6 +796,45 @@ async function saveIdScan(args: {
   if (audErr) console.warn('audit_log insert', audErr.message)
 
   return { ok: true, state: await getState() }
+}
+
+async function broadcastNativeIdScan(payload: Omit<NativeIdScanBroadcast, 'type'>) {
+  const msg: NativeIdScanBroadcast = { type: 'FDN_NATIVE_ID_SCAN', ...payload }
+  try {
+    await chrome.storage.local.set({ fdn_last_native_scan: msg })
+  } catch (e) {
+    console.warn('[FDN ID scan] storage set failed', e)
+  }
+  try {
+    await chrome.runtime.sendMessage(msg)
+  } catch {
+    /* side panel may not be listening */
+  }
+}
+
+async function handleThalesNativeScan(payload: NativeScanSuccessPayload) {
+  const b64 = payload.image_base64
+  const images = { front_image_base64: b64, back_image_base64: b64 }
+  const saveRes = await saveIdScan({
+    parsed: payload.parsed,
+    phone: null,
+    email: null,
+    manualEntry: false,
+    managerOverride: false,
+    imageFrontBase64: b64,
+    imageBackBase64: b64,
+    ocrProvider: 'native_host',
+  })
+  const autoSave: NativeIdScanBroadcast['autoSave'] = saveRes.ok
+    ? { ok: true }
+    : { ok: false, error: saveRes.error ?? 'Save failed' }
+  await broadcastNativeIdScan({
+    parsed: payload.parsed,
+    images,
+    imageBase64Length: b64.length,
+    ocrProvider: 'native_host',
+    autoSave,
+  })
 }
 
 function base64ToBlob(b64: string, type: string): Blob {
@@ -1005,39 +1043,6 @@ async function handleMessage(
     return verifyManager(msg.email, msg.password)
   }
 
-  // Scan: native messaging only → Python host (`runIdScan`). No DNR/DB here.
-  if (msg.type === 'SCAN_ID_START') {
-    const ID_SCAN_LOG = '[FDN ID scan]'
-    logPipelineServiceWorkerStart()
-    try {
-      const native = await runIdScan()
-      if (!native.ok) {
-        console.warn(`${ID_SCAN_LOG} native: runIdScan failed`, 'error' in native ? native.error : native)
-        throw new Error('error' in native ? native.error : 'Native scan failed')
-      }
-      const parsed = native.result.parsed
-      const b64 = native.result.image_base64
-      const images = { front_image_base64: b64, back_image_base64: b64 }
-      console.log(`${ID_SCAN_LOG} native: returning to side panel`, {
-        ocrProvider: 'native_host',
-        imageBase64Length: b64.length,
-        parsed,
-      })
-      return {
-        ok: true,
-        images,
-        parsed,
-        ocrProvider: 'native_host',
-        imageBase64Length: b64.length,
-      }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'Scan failed'
-      console.warn(`${ID_SCAN_LOG} SCAN_ID_START: catch`, message, e)
-      lastError = message
-      return { ok: false, error: message }
-    }
-  }
-
   if (msg.type === 'SAVE_ID_SCAN') {
     return saveIdScan({
       parsed: msg.parsed,
@@ -1116,5 +1121,7 @@ void chrome.storage.onChanged.addListener((changes, area) => {
     cachedRole = null
   }
 })
+
+void initNativeHost(handleThalesNativeScan)
 
 export {}

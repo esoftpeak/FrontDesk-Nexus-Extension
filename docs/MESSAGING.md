@@ -12,23 +12,24 @@ Messages use `chrome.runtime.sendMessage` unless noted. Payloads are JSON-serial
 | `AUTH_DEV_LOGIN`          | `{ email, password }` | `{ ok, state? \| error }` |
 | `AUTH_LOGOUT`             | —    | `{ ok, state }` |
 | `BRIDGE_SET_SESSION`      | `{ accessToken, refreshToken, expiresAt? }` | `{ ok, state? \| error }` |
-| `SCAN_ID_START`           | —    | `{ ok, images, parsed, ocrProvider: 'native_host', imageBase64Length? \| error }` — always `connectNative('com.frontdesk.nexus')` → Python; see [ID scan & save lifecycle](#id-scan--save-lifecycle) |
 | `SAVE_ID_SCAN`            | `{ parsed, phone, email, manualEntry, managerOverride, imageFrontBase64, imageBackBase64, ocrProvider? }` | `{ ok, state? \| error }` — DNR gate, storage, `id_scans`, `audit_log` (no PMS inject here) |
 | `VERIFY_MANAGER`          | `{ email, password }` | `{ ok \| error }` |
 | `INJECT_PMS`              | `{ fields: Record<string,string> }` | `{ ok, inject?, error }` |
 
+## Service worker → Side panel (push)
+
+| `type` | Body |
+|--------|------|
+| `FDN_NATIVE_ID_SCAN` | `{ parsed, images, imageBase64Length, ocrProvider, autoSave }` — Thales/SDK host sent `SCAN_RESULT` over native messaging; worker may have auto-saved (see `autoSave`). Also stored under `chrome.storage.local` key `fdn_last_native_scan`. |
+
 ## ID scan & save lifecycle
 
-End-to-end order (production). The extension **does not** run OCR on the native path; it only forwards JSON to/from the host.
-
-1. **User clicks “Scan ID”** (side panel React UI).
-2. **`SCAN_ID_START`** → service worker.
-3. **Native Messaging** → **`com.frontdesk.nexus`** Python process: `connectNative` → `postMessage({ type: 'SCAN_ID' })`.
-4. **Python host**: hardware / internal mock capture, OCR, business rules — whatever your `main.py --native-messaging` implements — then **one JSON reply** (`SCAN_RESULT` or `ERROR`).
-5. **Service worker** forwards host `parsed` + `image_base64` to the UI (still **no** Supabase write, **no** DNR check on this step).
-6. **Side panel** updates fields + preview.
-7. **User clicks “Save to Supabase”** → **`SAVE_ID_SCAN`**: reservation context, **DNR** query, optional Storage uploads, **`id_scans`** row, **`audit_log`**.
-8. **PMS** is separate: **`INJECT_PMS`** (or your “Save & write to PMS” flow) sends data to a **content script** on the guest PMS tab — not part of native messaging.
+1. **Service worker** starts **`connectNative('com.frontdesk.nexus')`** and sends **`{ type: 'SCAN_ID' }`** once per connection (handshake / ready).
+2. **Python host** (Thales SDK): when a scan completes, sends **`SCAN_RESULT`** (or **`ERROR`**) over stdout framing.
+3. **Service worker** maps fields, attempts **automatic** `id_scans` save (same rules as manual save: signed in, reservation context, DNR, etc.).
+4. **Side panel** receives **`FDN_NATIVE_ID_SCAN`** and shows fields + preview; notice reflects save outcome.
+5. **Manual** **`SAVE_ID_SCAN`** remains for edits, guest phone/email, manager override, or retry after a failed auto-save.
+6. **PMS**: **`INJECT_PMS`** — separate from native messaging.
 
 ### `ReservationSnapshot` (extension state `reservation`)
 

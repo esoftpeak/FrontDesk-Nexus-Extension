@@ -27,7 +27,6 @@ export type ExtensionMessage =
       refreshToken: string
       expiresAt?: number
     }
-  | { type: 'SCAN_ID_START' }
   | {
       type: 'SAVE_ID_SCAN'
       parsed: ParsedIdFields
@@ -37,7 +36,7 @@ export type ExtensionMessage =
       managerOverride: boolean
       imageFrontBase64: string | null
       imageBackBase64: string | null
-      /** `native_host` after SCAN_ID_START; omit for manual entry. */
+      /** `native_host` when data came from Thales/native host; omit for manual entry. */
       ocrProvider?: string | null
     }
   | { type: 'INJECT_PMS'; fields: Record<string, string> }
@@ -47,18 +46,16 @@ export type ExtensionResponse =
   | { ok: true; state?: ExtensionState }
   | { ok: false; error: string }
 
-/** Response shape for `SCAN_ID_START` (side panel ID scan). */
-export type ScanIdStartResponse =
-  | {
-      ok: true
-      images: { front_image_base64: string; back_image_base64: string }
-      parsed: ParsedIdFields
-      /** Provenance for `id_scans.ocr_provider` on save. */
-      ocrProvider: 'native_host'
-      /** Length of host `image_base64` when scan came from native host (both sides duplicate that string). */
-      imageBase64Length?: number
-    }
-  | { ok: false; error: string }
+/** Service worker → side panel: Thales/SDK host pushed a completed ID scan (no button). */
+export type NativeIdScanBroadcast = {
+  type: 'FDN_NATIVE_ID_SCAN'
+  parsed: ParsedIdFields
+  images: { front_image_base64: string; back_image_base64: string }
+  imageBase64Length: number
+  ocrProvider: 'native_host'
+  /** Result of automatic save (reservation + auth + DNR rules). */
+  autoSave: { ok: true } | { ok: false; error: string }
+}
 
 export type HardwareDevice = 'id_scanner' | 'spectral_payout' | 'rfid_encoder'
 

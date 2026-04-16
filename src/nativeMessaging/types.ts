@@ -28,18 +28,6 @@ export type NativeScanReply = NativeScanResultMessage | NativeErrorMessage | Rec
 
 export type NativeScanSuccessPayload = {
   image_base64: string
-  /** Coerced from host message in `runIdScan` (trim + null empty). */
+  /** Coerced from host message (trim + null empty). */
   parsed: ParsedIdFields
 }
-
-export type ScanResultOk = {
-  ok: true
-  result: NativeScanSuccessPayload
-}
-
-export type ScanResultErr = {
-  ok: false
-  error: string
-}
-
-export type ScanResult = ScanResultOk | ScanResultErr

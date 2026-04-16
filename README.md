@@ -35,9 +35,9 @@ SynXis and eZee DOM scraping / injection use **placeholder selectors**. Calibrat
 
 Host name: **`com.frontdesk.nexus`** (see `src/shared/protocol.ts` and `src/config/nativeMessaging.ts`). Install the Windows native messaging host separately; the host JSON must list your extension in `allowed_origins` (e.g. `chrome-extension://dhhlencfcfageiedbagdomapcfgbnhmf/` — replace with your ID from `chrome://extensions`).
 
-**Production ID flow:** side panel → service worker → **native messaging only** → your Python host (scanner + OCR + any mock logic **inside Python**) → result back → UI. **DNR** and **DB save** run on **Save**, not on Scan. **PMS inject** is a later step via the content script (`INJECT_PMS`), not via the native host.
+**Production ID flow:** service worker keeps **`connectNative('com.frontdesk.nexus')`** open → your Python + Thales SDK sends **`SCAN_RESULT`** when a scan completes → worker **auto-saves** when allowed (signed in, reservation loaded, DNR rules) and pushes **`FDN_NATIVE_ID_SCAN`** to the side panel. Use **manual entry** or **Save to Supabase** for retries/edits. **PMS inject** is separate (`INJECT_PMS`).
 
-If the host is not installed, **Scan ID** will fail until Registry + host JSON + Python are set up; you can still use **manual entry** for ID fields. See [MESSAGING.md](./docs/MESSAGING.md#id-scan--save-lifecycle).
+If the host is not registered, the connection will retry; you can still use **manual entry**. See [MESSAGING.md](./docs/MESSAGING.md#id-scan--save-lifecycle).
 
 ## Tech
 
