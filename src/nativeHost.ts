@@ -9,6 +9,50 @@ import type { NativeScanSuccessPayload } from './nativeMessaging/types'
 
 const LOG = '[nativeHost]'
 
+/**
+ * Read immediately after a chrome.runtime API call — lastError is cleared on the next async tick.
+ * Exported for ping / diagnostics (e.g. `native-scan.ts`).
+ */
+export function describeRuntimeLastError(): string {
+  const le = chrome.runtime.lastError
+  if (le == null) {
+    return '(no chrome.runtime.lastError — cleared or not set for this call)'
+  }
+  const msg = typeof le.message === 'string' ? le.message : ''
+  if (msg) return msg
+  try {
+    return JSON.stringify(le)
+  } catch {
+    return String(le)
+  }
+}
+
+/** Structured detail for DevTools (expand object in console). */
+export function runtimeLastErrorDetail(): { message?: string; raw?: string } {
+  const le = chrome.runtime.lastError
+  if (le == null) return {}
+  const message = typeof le.message === 'string' ? le.message : undefined
+  let raw: string | undefined
+  try {
+    raw = JSON.stringify(le)
+  } catch {
+    raw = String(le)
+  }
+  return { message, raw }
+}
+
+export function describeUnknownError(e: unknown): { name?: string; message: string; stack?: string } {
+  if (e instanceof Error) {
+    return { name: e.name, message: e.message, stack: e.stack }
+  }
+  if (typeof e === 'string') return { message: e }
+  try {
+    return { message: JSON.stringify(e) }
+  } catch {
+    return { message: String(e) }
+  }
+}
+
 let nativePort: chrome.runtime.Port | null = null
 let reconnectAttempt = 0
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -125,7 +169,11 @@ function scheduleReconnect(connectFn: () => void) {
   if (reconnectTimer != null) clearTimeout(reconnectTimer)
   const exp = Math.min(MIN_BACKOFF_MS * 2 ** reconnectAttempt, MAX_BACKOFF_MS)
   reconnectAttempt += 1
-  console.warn(`${LOG} reconnect in ${exp}ms (attempt ${reconnectAttempt})`)
+  console.warn(`${LOG} scheduling reconnect`, {
+    delayMs: exp,
+    attempt: reconnectAttempt,
+    host: NATIVE_HOST_NAME,
+  })
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     connectFn()
@@ -151,21 +199,34 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
     try {
       port = chrome.runtime.connectNative(NATIVE_HOST_NAME)
     } catch (e) {
-      console.warn(`${LOG} connectNative threw`, e)
-      if (chrome.runtime.lastError?.message) {
-        console.warn(`${LOG} lastError`, chrome.runtime.lastError.message)
-      }
+      const lastErr = runtimeLastErrorDetail()
+      const thrown = describeUnknownError(e)
+      console.error(`${LOG} connectNative threw — host will not run until fixed`, {
+        host: NATIVE_HOST_NAME,
+        lastErrorMessage: lastErr.message || describeRuntimeLastError(),
+        lastErrorDetail: lastErr,
+        thrown,
+      })
       scheduleReconnect(connect)
       return
     }
 
-    if (chrome.runtime.lastError?.message) {
-      console.warn(`${LOG} connectNative lastError`, chrome.runtime.lastError.message)
+    const syncLastErrorAfterConnect = runtimeLastErrorDetail()
+    if (syncLastErrorAfterConnect.message || syncLastErrorAfterConnect.raw) {
+      console.error(`${LOG} connectNative returned but chrome.runtime.lastError was set`, {
+        host: NATIVE_HOST_NAME,
+        ...syncLastErrorAfterConnect,
+        hint: 'Registry/path typo, missing native host manifest, or host exe failed to start.',
+      })
     }
 
     nativePort = port
     reconnectAttempt = 0
-    console.log(`${LOG} connected`, { host: NATIVE_HOST_NAME })
+    const portName = port.name
+    console.log(`${LOG} connected`, {
+      host: NATIVE_HOST_NAME,
+      portName,
+    })
 
     port.onMessage.addListener((raw: unknown) => {
       if (!isRecord(raw)) {
@@ -174,7 +235,10 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
       }
 
       if (raw.type === 'ERROR' && typeof raw.message === 'string') {
-        console.warn(`${LOG} host ERROR`, raw.message)
+        console.warn(`${LOG} host sent ERROR message`, {
+          hostMessage: raw.message,
+          fullMessage: raw,
+        })
         return
       }
 
@@ -189,7 +253,7 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
           parsed,
         }
         void Promise.resolve(onExtendedScan(extended, onScan)).catch((err) => {
-          console.warn(`${LOG} onScan failed`, err)
+          console.error(`${LOG} onScan failed`, describeUnknownError(err))
         })
         return
       }
@@ -200,7 +264,7 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
           parsed: parsedFieldsFromHost(raw),
         }
         void Promise.resolve(onScan(payload)).catch((err) => {
-          console.warn(`${LOG} onScan failed`, err)
+          console.error(`${LOG} onScan failed`, describeUnknownError(err))
         })
         return
       }
@@ -209,9 +273,23 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
     })
 
     port.onDisconnect.addListener(() => {
+      const lastErr = runtimeLastErrorDetail()
       nativePort = null
-      const le = chrome.runtime.lastError?.message
-      console.warn(`${LOG} onDisconnect`, le ?? '(no lastError)')
+      const reason =
+        lastErr.message ||
+        (lastErr.raw && lastErr.raw !== '{}' ? lastErr.raw : null) ||
+        'No chrome.runtime.lastError message — host process exited, crashed, or closed the pipe (check Python stderr / console).'
+      console.warn(`${LOG} native port disconnected — will reconnect with backoff`, {
+        host: NATIVE_HOST_NAME,
+        portName,
+        reason,
+        chromeRuntimeLastError: lastErr,
+        hints: [
+          'If reason is empty: Python host often exited immediately (check host stderr / Task Manager).',
+          'If "Access denied" or similar: verify registry path and manifest point to the correct exe.',
+          'Host must write valid JSON frames (4-byte length prefix) to stdout or Chrome closes the pipe.',
+        ],
+      })
       scheduleReconnect(connect)
     })
 
