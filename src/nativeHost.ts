@@ -60,6 +60,58 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 const MIN_BACKOFF_MS = 1000
 const MAX_BACKOFF_MS = 60_000
 
+const BASE64_PREVIEW_HEAD = 200
+const BASE64_PREVIEW_TAIL = 120
+
+function summarizeBase64ForConsole(b64: string): {
+  characterLength: number
+  approxDecodedBytes: number
+  previewStart: string
+  previewEnd: string
+} {
+  const len = b64.length
+  const approxDecoded = Math.floor((len * 3) / 4)
+  return {
+    characterLength: len,
+    approxDecodedBytes: approxDecoded,
+    previewStart: b64.slice(0, BASE64_PREVIEW_HEAD),
+    previewEnd: len > BASE64_PREVIEW_TAIL ? b64.slice(-BASE64_PREVIEW_TAIL) : '',
+  }
+}
+
+/** Safe JSON for nested objects (avoids circular refs). */
+function tryJson(value: unknown, maxLen = 50_000): string {
+  try {
+    const s = JSON.stringify(value, null, 2)
+    if (s.length > maxLen) return `${s.slice(0, maxLen)}\n…(truncated, ${s.length} chars total)`
+    return s
+  } catch {
+    return String(value)
+  }
+}
+
+/**
+ * DevTools: log everything Python sent. Full base64 is logged on its own line (can be large).
+ */
+function logInboundFromPython(label: string, raw: Record<string, unknown>): void {
+  const type = raw.type
+  const keys = Object.keys(raw)
+  const rawForConsole: Record<string, unknown> = {
+    ...raw,
+    ...(typeof raw.image_base64 === 'string'
+      ? { image_base64: summarizeBase64ForConsole(raw.image_base64) }
+      : {}),
+  }
+  console.log(`${LOG} ← Python native host [${label}]`, {
+    type,
+    keys,
+    rawForConsole,
+  })
+  if (typeof raw.image_base64 === 'string') {
+    console.log(`${LOG} ← Python [${label}] image_base64 FULL string (${raw.image_base64.length} chars):`, raw.image_base64)
+  }
+}
+
 /** Inbound from host when Thales/SDK pushes a completed scan. */
 export type AutoScanResultMessage = {
   type: 'AUTO_SCAN_RESULT'
@@ -230,22 +282,40 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
 
     port.onMessage.addListener((raw: unknown) => {
       if (!isRecord(raw)) {
-        console.warn(`${LOG} onMessage: not an object`, raw)
+        console.log(`${LOG} ← Python onMessage (non-object payload):`, raw)
         return
       }
 
+      console.log(`${LOG} ← Python onMessage summary`, {
+        type: raw.type,
+        keys: Object.keys(raw),
+      })
+
       if (raw.type === 'ERROR' && typeof raw.message === 'string') {
-        console.warn(`${LOG} host sent ERROR message`, {
-          hostMessage: raw.message,
-          fullMessage: raw,
-        })
+        logInboundFromPython('ERROR', raw)
+        console.log(`${LOG} host ERROR text:`, raw.message)
+        console.log(`${LOG} host ERROR full object:`, tryJson(raw))
         return
       }
 
       if (isAutoScanResult(raw)) {
+        logInboundFromPython('AUTO_SCAN_RESULT', raw)
+        console.log(`${LOG} AUTO_SCAN_RESULT top-level text fields`, {
+          first_name: raw.first_name,
+          last_name: raw.last_name,
+          document_number: raw.document_number,
+          date_of_birth: raw.date_of_birth,
+          document_type: raw.document_type,
+          expiry_date: raw.expiry_date,
+          issue_date: raw.issue_date,
+          address: raw.address,
+        })
         const document_data = raw.document_data != null && isRecord(raw.document_data) ? raw.document_data : {}
+        console.log(`${LOG} AUTO_SCAN_RESULT document_data (JSON):`, tryJson(document_data))
         const flat = flattenAutoScanFields(raw)
         const parsed = autoScanResultToParsed(raw)
+        console.log(`${LOG} AUTO_SCAN_RESULT derived flat (flattened):`, tryJson(flat))
+        console.log(`${LOG} AUTO_SCAN_RESULT derived parsed (panel fields):`, tryJson(parsed))
         const extended: NativeHostAutoScanPayload = {
           image_base64: raw.image_base64,
           document_data,
@@ -259,17 +329,24 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
       }
 
       if (isScanResultLegacy(raw)) {
+        logInboundFromPython('SCAN_RESULT (legacy)', raw)
+        const nested =
+          raw.ocr_data != null && typeof raw.ocr_data === 'object' && !Array.isArray(raw.ocr_data)
+            ? (raw.ocr_data as Record<string, unknown>)
+            : {}
+        console.log(`${LOG} SCAN_RESULT ocr_data / text (JSON):`, tryJson(nested))
         const payload: NativeScanSuccessPayload = {
           image_base64: raw.image_base64 as string,
           parsed: parsedFieldsFromHost(raw),
         }
+        console.log(`${LOG} SCAN_RESULT derived parsed (panel fields):`, tryJson(payload.parsed))
         void Promise.resolve(onScan(payload)).catch((err) => {
           console.error(`${LOG} onScan failed`, describeUnknownError(err))
         })
         return
       }
 
-      console.warn(`${LOG} unhandled message type`, raw.type)
+      console.log(`${LOG} unhandled message type — full payload (JSON):`, tryJson(raw))
     })
 
     port.onDisconnect.addListener(() => {
