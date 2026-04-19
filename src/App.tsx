@@ -67,7 +67,6 @@ function App() {
     front: string
     back: string
   } | null>(null)
-  const [scanImageB64Length, setScanImageB64Length] = useState<number | null>(null)
   const [lastOcrProvider, setLastOcrProvider] = useState<string | null>(null)
   const [idDetail, setIdDetail] = useState<IdScanDetailGuru>(emptyIdDetail)
   const [guestRemark, setGuestRemark] = useState('')
@@ -115,7 +114,6 @@ function App() {
         front: m.images.front_image_base64,
         back: m.images.back_image_base64,
       })
-      setScanImageB64Length(m.imageBase64Length)
       setLastScanReceivedAt(m.receivedAt ?? new Date().toISOString())
       setRotationDeg(0)
       setFlipH(false)
@@ -146,7 +144,7 @@ function App() {
           d.receivedAt,
           d.source,
         )
-        console.log('[FrontDesk Nexus] NativeHostRxDebugBroadcast (full payload for DevTools):', d)
+        console.log('[FrontDesk Nexus] NativeHostRxDebugBroadcast (no image base64):', d)
         return
       }
       if (m.type === 'FDN_PANEL_TOAST') {
@@ -635,7 +633,6 @@ function App() {
         {!manualEntry && lastOcrProvider && (
           <p className="fdn-muted fdn-line">
             Last scan source: <strong>{lastOcrProvider}</strong>
-            {scanImageB64Length != null ? ` · image base64 length ${scanImageB64Length}` : null}
           </p>
         )}
 

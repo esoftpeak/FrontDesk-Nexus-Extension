@@ -61,23 +61,45 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 const MIN_BACKOFF_MS = 1000
 const MAX_BACKOFF_MS = 60_000
 
-const BASE64_PREVIEW_HEAD = 200
-const BASE64_PREVIEW_TAIL = 120
-
-function summarizeBase64ForConsole(b64: string): {
-  characterLength: number
-  approxDecodedBytes: number
-  previewStart: string
-  previewEnd: string
-} {
+function summarizeBase64ForConsole(b64: string): { characterLength: number; approxDecodedBytes: number } {
   const len = b64.length
   const approxDecoded = Math.floor((len * 3) / 4)
   return {
     characterLength: len,
     approxDecodedBytes: approxDecoded,
-    previewStart: b64.slice(0, BASE64_PREVIEW_HEAD),
-    previewEnd: len > BASE64_PREVIEW_TAIL ? b64.slice(-BASE64_PREVIEW_TAIL) : '',
   }
+}
+
+function shouldRedactStringKeyAsLikelyImageB64(key: string): boolean {
+  const s = key.toLowerCase()
+  return s.includes('base64') || s.endsWith('b64')
+}
+
+function isProbablyRawBase64String(s: string): boolean {
+  if (s.length < 400) return false
+  const head = s.slice(0, 120).replace(/\s/g, '')
+  return /^[A-Za-z0-9+/]+=*$/.test(head)
+}
+
+/** Deep-clone-ish plain JSON objects and replace image-sized base64 strings (never log raw pixels). */
+function redactImageBase64Deep(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map(redactImageBase64Deep)
+  const o = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (typeof v === 'string') {
+      const byKey = shouldRedactStringKeyAsLikelyImageB64(k)
+      const byShape = (k === 'front' || k === 'back') && isProbablyRawBase64String(v)
+      if (byKey || byShape) out[k] = summarizeBase64ForConsole(v)
+      else out[k] = v
+    } else if (v !== null && typeof v === 'object') {
+      out[k] = redactImageBase64Deep(v)
+    } else {
+      out[k] = v
+    }
+  }
+  return out
 }
 
 /** Safe JSON for nested objects (avoids circular refs). */
@@ -130,50 +152,16 @@ export function extractIdCardImages(raw: Record<string, unknown>): { front: stri
   return null
 }
 
-/**
- * DevTools: log everything Python sent. Full base64 is logged on its own line (can be large).
- */
+/** DevTools: log inbound message with image/base64 fields replaced by length stats only. */
 function logInboundFromPython(label: string, raw: Record<string, unknown>): void {
   const type = raw.type
   const keys = Object.keys(raw)
-  const imgs = extractIdCardImages(raw)
-  const rawForConsole: Record<string, unknown> = { ...raw }
-  if (typeof rawForConsole.image_base64 === 'string') {
-    rawForConsole.image_base64 = summarizeBase64ForConsole(rawForConsole.image_base64) as unknown as string
-  }
-  for (const k of [
-    'image_front_base64',
-    'image_back_base64',
-    'imageFrontBase64',
-    'imageBackBase64',
-    'front_image_base64',
-    'back_image_base64',
-  ] as const) {
-    if (typeof rawForConsole[k] === 'string') {
-      rawForConsole[k] = summarizeBase64ForConsole(rawForConsole[k] as string) as unknown as string
-    }
-  }
-  if (rawForConsole.images != null && typeof rawForConsole.images === 'object' && !Array.isArray(rawForConsole.images)) {
-    const im = { ...(rawForConsole.images as Record<string, unknown>) }
-    for (const key of Object.keys(im)) {
-      if (typeof im[key] === 'string' && (im[key] as string).length > 80) {
-        im[key] = summarizeBase64ForConsole(im[key] as string) as unknown as string
-      }
-    }
-    rawForConsole.images = im
-  }
+  const rawForConsole = redactImageBase64Deep(raw) as Record<string, unknown>
   console.log(`${LOG} ← Python native host [${label}]`, {
     type,
     keys,
     rawForConsole,
   })
-  if (typeof raw.image_base64 === 'string') {
-    console.log(`${LOG} ← Python [${label}] image_base64 FULL string (${raw.image_base64.length} chars):`, raw.image_base64)
-  }
-  if (imgs) {
-    console.log(`${LOG} ← Python [${label}] image_front_base64 FULL (${imgs.front.length} chars):`, imgs.front)
-    console.log(`${LOG} ← Python [${label}] image_back_base64 FULL (${imgs.back.length} chars):`, imgs.back)
-  }
 }
 
 /** Inbound from host when Thales/SDK pushes a completed scan (flexible image keys). */
@@ -218,6 +206,10 @@ function documentDataPreviewForPanel(doc: Record<string, unknown>): Record<strin
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(doc)) {
     if (typeof v === 'string') {
+      if (shouldRedactStringKeyAsLikelyImageB64(k) || isProbablyRawBase64String(v)) {
+        out[k] = JSON.stringify(summarizeBase64ForConsole(v))
+        continue
+      }
       out[k] = v.length > 240 ? `${v.slice(0, 240)}…` : v
     } else if (typeof v === 'number' || typeof v === 'boolean') {
       out[k] = String(v)
@@ -411,7 +403,7 @@ export function initNativeHost(
       if (raw.type === 'ERROR' && typeof raw.message === 'string') {
         logInboundFromPython('ERROR', raw)
         console.log(`${LOG} host ERROR text:`, raw.message)
-        console.log(`${LOG} host ERROR full object:`, tryJson(raw))
+        console.log(`${LOG} host ERROR full object:`, tryJson(redactImageBase64Deep(raw)))
         emitNativePanelDebug(onPanelDebug, {
           type: 'FDN_NATIVE_HOST_RX',
           receivedAt: rxAt,
@@ -436,7 +428,10 @@ export function initNativeHost(
           address: raw.address,
         })
         const document_data = raw.document_data != null && isRecord(raw.document_data) ? raw.document_data : {}
-        console.log(`${LOG} AUTO_SCAN_RESULT document_data (JSON):`, tryJson(document_data))
+        console.log(
+          `${LOG} AUTO_SCAN_RESULT document_data (JSON):`,
+          tryJson(redactImageBase64Deep(document_data)),
+        )
         const flat = flattenAutoScanFields(raw as AutoScanResultMessage)
         const parsed = autoScanResultToParsed(raw as AutoScanResultMessage)
         const detail = idGuruDetailFromAutoScan(raw, document_data)
@@ -474,7 +469,7 @@ export function initNativeHost(
           raw.ocr_data != null && typeof raw.ocr_data === 'object' && !Array.isArray(raw.ocr_data)
             ? (raw.ocr_data as Record<string, unknown>)
             : {}
-        console.log(`${LOG} SCAN_RESULT ocr_data / text (JSON):`, tryJson(nested))
+        console.log(`${LOG} SCAN_RESULT ocr_data / text (JSON):`, tryJson(redactImageBase64Deep(nested)))
         const detail = idGuruDetailFromAutoScan(raw, nested)
         const merged = mergeParsedWithGuru(parsedFieldsFromHost(raw), detail)
         const single = raw.image_base64 as string
@@ -503,7 +498,10 @@ export function initNativeHost(
         return
       }
 
-      console.log(`${LOG} unhandled message type — full payload (JSON):`, tryJson(raw))
+      console.log(
+        `${LOG} unhandled message type — full payload (JSON):`,
+        tryJson(redactImageBase64Deep(raw)),
+      )
       emitNativePanelDebug(onPanelDebug, {
         type: 'FDN_NATIVE_HOST_RX',
         receivedAt: rxAt,
