@@ -860,10 +860,6 @@ function App() {
           <div className="fdn-field fdn-field--full fdn-checkin-times">
             <span className="fdn-field__label">Check-in &amp; timestamps</span>
             <dl className="fdn-kv">
-              <dt>Reservation check-in / out (PMS)</dt>
-              <dd>
-                {res?.checkInDate ?? '—'} → {res?.checkOutDate ?? '—'}
-              </dd>
               <dt>ID data received (this scan)</dt>
               <dd title="ISO: local display below">{formatLocalFromIso(lastScanReceivedAt)}</dd>
             </dl>
