@@ -6,10 +6,10 @@ function pick(
   ...keys: string[]
 ): string | null {
   for (const k of keys) {
-    const v = msg[k]
-    if (typeof v === 'string' && v.trim()) return v.trim()
     const d = doc[k]
     if (typeof d === 'string' && d.trim()) return d.trim()
+    const v = msg[k]
+    if (typeof v === 'string' && v.trim()) return v.trim()
   }
   return null
 }

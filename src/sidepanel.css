@@ -425,6 +425,78 @@
   margin-top: 10px;
 }
 
+.fdn-grid--three-names {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+@media (max-width: 420px) {
+  .fdn-grid--three-names {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fdn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #c9d1d9;
+}
+
+.fdn-field--full {
+  grid-column: 1 / -1;
+}
+
+.fdn-field__label {
+  font-size: 12px;
+  color: #c9d1d9;
+}
+
+.fdn-phone-inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 5.5rem;
+  gap: 8px;
+  align-items: center;
+}
+
+.fdn-input--country-code {
+  min-width: 0;
+  text-align: center;
+}
+
+.fdn-check--phone-flag {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.fdn-checkin-times .fdn-kv {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+
+.fdn-checkin-times dt {
+  color: #8b949e;
+  margin: 0;
+}
+
+.fdn-checkin-times dd {
+  margin: 0;
+  color: #e8eaed;
+}
+
 @media (max-width: 420px) {
   .fdn-grid--idguru {
     grid-template-columns: 1fr;
@@ -441,18 +513,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.fdn-inline--phone {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.fdn-inline--phone .fdn-input {
-  flex: 1;
-  min-width: 120px;
 }
 
 .fdn-check--inline {

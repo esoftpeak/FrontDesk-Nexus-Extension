@@ -4,6 +4,7 @@ import type {
   ExtensionResponse,
   ExtensionState,
   IdScanHistoryRow,
+  NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
   PanelToastBroadcast,
 } from '../shared/protocol'
@@ -811,8 +812,18 @@ async function saveIdScan(args: {
   return { ok: true, state: await getState() }
 }
 
-async function broadcastNativeIdScan(payload: Omit<NativeIdScanBroadcast, 'type'>) {
-  const msg: NativeIdScanBroadcast = { type: 'FDN_NATIVE_ID_SCAN', ...payload }
+function forwardNativeHostRxToPanel(payload: NativeHostRxDebugBroadcast) {
+  void chrome.runtime.sendMessage(payload).catch(() => {
+    /* side panel may not be open */
+  })
+}
+
+async function broadcastNativeIdScan(payload: Omit<NativeIdScanBroadcast, 'type' | 'receivedAt'>) {
+  const msg: NativeIdScanBroadcast = {
+    type: 'FDN_NATIVE_ID_SCAN',
+    receivedAt: new Date().toISOString(),
+    ...payload,
+  }
   try {
     await chrome.storage.local.set({ fdn_last_native_scan: msg })
   } catch (e) {
@@ -1180,6 +1191,6 @@ void chrome.storage.onChanged.addListener((changes, area) => {
   }
 })
 
-void initNativeHost(handleThalesNativeScan)
+void initNativeHost(handleThalesNativeScan, forwardNativeHostRxToPanel)
 
 export {}

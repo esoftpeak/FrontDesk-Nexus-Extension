@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ExtensionState,
   IdScanHistoryRow,
+  NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
   PanelToastBroadcast,
 } from './shared/protocol'
@@ -20,6 +21,12 @@ const emptyParsed: ParsedIdFields = {
   issueDate: null,
   expiryDate: null,
   address: null,
+}
+
+function formatLocalFromIso(iso: string | null | undefined): string {
+  if (!iso?.trim()) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 const emptyIdDetail: IdScanDetailGuru = {
@@ -68,6 +75,7 @@ function App() {
   const [rotationDeg, setRotationDeg] = useState(0)
   const [flipH, setFlipH] = useState(false)
   const [idScanHistory, setIdScanHistory] = useState<IdScanHistoryRow[]>([])
+  const [lastScanReceivedAt, setLastScanReceivedAt] = useState<string | null>(null)
 
   const refreshIdScanHistory = useCallback(async () => {
     const res = (await chrome.runtime.sendMessage({ type: 'GET_ID_SCAN_HISTORY' })) as {
@@ -108,6 +116,7 @@ function App() {
         back: m.images.back_image_base64,
       })
       setScanImageB64Length(m.imageBase64Length)
+      setLastScanReceivedAt(m.receivedAt ?? new Date().toISOString())
       setRotationDeg(0)
       setFlipH(false)
       if (m.detail?.phone?.trim()) setPhone(m.detail.phone.trim())
@@ -127,6 +136,17 @@ function App() {
     const onRuntimeMessage = (msg: unknown) => {
       if (!msg || typeof msg !== 'object') return
       const m = msg as { type?: string }
+      if (m.type === 'FDN_NATIVE_HOST_RX') {
+        const d = msg as NativeHostRxDebugBroadcast
+        console.log(
+          '%c[FrontDesk Nexus] Native host inbound',
+          'color:#58a6ff;font-weight:600',
+          d.receivedAt,
+          d.source,
+        )
+        console.log('[FrontDesk Nexus] NativeHostRxDebugBroadcast (full payload for DevTools):', d)
+        return
+      }
       if (m.type === 'FDN_PANEL_TOAST') {
         const t = msg as PanelToastBroadcast
         if (!t.confirmationNumber) return
@@ -606,7 +626,9 @@ function App() {
           label which image is which and send <code>image_front_base64</code> + <code>image_back_base64</code> in
           one <code>AUTO_SCAN_RESULT</code> with merged <code>document_data</code>. Legacy single{' '}
           <code>image_base64</code> is still accepted (duplicated to both sides). Rotate/flip applies to{' '}
-          <strong>both</strong> previews on save. History lists prior <code>id_scans</code> for this confirmation.
+          <strong>both</strong> previews on save. Open the <strong>side panel</strong> DevTools → Console to
+          see <code>FDN_NATIVE_HOST_RX</code> logs for every Python message (service worker still has verbose
+          logs too). History lists prior <code>id_scans</code> for this confirmation.
         </p>
         <label className="fdn-check">
           <input
@@ -695,8 +717,9 @@ function App() {
         ) : null}
 
         <div className="fdn-grid fdn-grid--idguru">
-          <label className="fdn-label">
-            First name
+          <div className="fdn-grid--three-names">
+            <label className="fdn-label">
+              First name
             <input
               className="fdn-input"
               value={idDetail.firstName ?? ''}
@@ -715,16 +738,17 @@ function App() {
               }
             />
           </label>
-          <label className="fdn-label">
-            Last name
-            <input
-              className="fdn-input"
-              value={idDetail.lastName ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, lastName: e.target.value.trim() || null }))
-              }
-            />
-          </label>
+            <label className="fdn-label">
+              Last name
+              <input
+                className="fdn-input"
+                value={idDetail.lastName ?? ''}
+                onChange={(e) =>
+                  setIdDetail((d) => ({ ...d, lastName: e.target.value.trim() || null }))
+                }
+              />
+            </label>
+          </div>
           <label className="fdn-label fdn-label--full">
             Street address
             <input
@@ -761,11 +785,18 @@ function App() {
               }
             />
           </label>
-          <label className="fdn-label">
-            Phone
-            <span className="fdn-inline fdn-inline--phone">
-              <input className="fdn-input" value={phone} onChange={(e) => setPhone(e.target.value)} />
-              <label className="fdn-check fdn-check--inline">
+          <div className="fdn-field fdn-field--full">
+            <span className="fdn-field__label">Phone &amp; country</span>
+            <div className="fdn-phone-inline">
+              <input
+                className="fdn-input"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="(555) 555-5555"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+              <label className="fdn-check fdn-check--phone-flag">
                 <input
                   type="checkbox"
                   checked={idDetail.usaCaPhone === true}
@@ -775,19 +806,16 @@ function App() {
                 />
                 USA/CA
               </label>
-            </span>
-          </label>
-          <label className="fdn-label">
-            Country code
-            <input
-              className="fdn-input"
-              placeholder="+1"
-              value={idDetail.phoneCountryCode ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, phoneCountryCode: e.target.value.trim() || null }))
-              }
-            />
-          </label>
+              <input
+                className="fdn-input fdn-input--country-code"
+                placeholder="+1"
+                value={idDetail.phoneCountryCode ?? ''}
+                onChange={(e) =>
+                  setIdDetail((d) => ({ ...d, phoneCountryCode: e.target.value.trim() || null }))
+                }
+              />
+            </div>
+          </div>
           <label className="fdn-label">
             Email (guest)
             <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
@@ -836,22 +864,17 @@ function App() {
             Age (from DOB)
             <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
           </label>
-          <label className="fdn-label fdn-label--full">
-            Full name (combined)
-            <input
-              className="fdn-input"
-              value={parsed.fullName ?? ''}
-              onChange={(e) => setParsed({ ...parsed, fullName: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label fdn-label--full">
-            Address (single line)
-            <input
-              className="fdn-input"
-              value={parsed.address ?? ''}
-              onChange={(e) => setParsed({ ...parsed, address: e.target.value || null })}
-            />
-          </label>
+          <div className="fdn-field fdn-field--full fdn-checkin-times">
+            <span className="fdn-field__label">Check-in &amp; timestamps</span>
+            <dl className="fdn-kv">
+              <dt>Reservation check-in / out (PMS)</dt>
+              <dd>
+                {res?.checkInDate ?? '—'} → {res?.checkOutDate ?? '—'}
+              </dd>
+              <dt>ID data received (this scan)</dt>
+              <dd title="ISO: local display below">{formatLocalFromIso(lastScanReceivedAt)}</dd>
+            </dl>
+          </div>
           <label className="fdn-label fdn-label--full">
             Guest remark
             <textarea

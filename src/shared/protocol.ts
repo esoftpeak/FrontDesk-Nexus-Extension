@@ -62,9 +62,28 @@ export type ExtensionResponse =
   | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[] }
   | { ok: false; error: string }
 
+/** Service worker → side panel: log native inbound (opens in side panel DevTools). */
+export type NativeHostRxDebugBroadcast = {
+  type: 'FDN_NATIVE_HOST_RX'
+  receivedAt: string
+  source: 'AUTO_SCAN_RESULT' | 'SCAN_RESULT' | 'ERROR' | 'other'
+  topLevelKeys: string[]
+  imageFrontB64Length?: number
+  imageBackB64Length?: number
+  legacySingleImageB64Length?: number
+  documentDataKeys: string[]
+  /** String / primitive preview (truncated); no full images. */
+  documentDataPreview?: Record<string, string>
+  parsedPreview?: Record<string, string | null>
+  errorMessage?: string
+  unhandledType?: string
+}
+
 /** Service worker → side panel: Thales/SDK host pushed a completed ID scan (no button). */
 export type NativeIdScanBroadcast = {
   type: 'FDN_NATIVE_ID_SCAN'
+  /** ISO time when the extension received this scan (for UI + audit). */
+  receivedAt?: string
   parsed: ParsedIdFields
   images: { front_image_base64: string; back_image_base64: string }
   imageBase64Length: number

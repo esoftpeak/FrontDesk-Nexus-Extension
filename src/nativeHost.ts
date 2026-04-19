@@ -3,7 +3,7 @@
  * Connect on init; reconnect on disconnect with backoff. No UI / button required.
  */
 import { idGuruDetailFromAutoScan, mergeParsedWithGuru } from './lib/id-guru-fields'
-import { NATIVE_HOST_NAME } from './shared/protocol'
+import { NATIVE_HOST_NAME, type NativeHostRxDebugBroadcast } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { parsedFieldsFromHost } from './nativeMessaging/scanId'
 import type { NativeScanSuccessPayload } from './nativeMessaging/types'
@@ -212,6 +212,50 @@ export type NativeHostAutoScanPayload = {
 
 export type NativeHostScanCallback = (payload: NativeScanSuccessPayload) => void | Promise<void>
 
+export type NativeHostPanelDebugFn = (payload: NativeHostRxDebugBroadcast) => void
+
+function documentDataPreviewForPanel(doc: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(doc)) {
+    if (typeof v === 'string') {
+      out[k] = v.length > 240 ? `${v.slice(0, 240)}…` : v
+    } else if (typeof v === 'number' || typeof v === 'boolean') {
+      out[k] = String(v)
+    } else if (v != null && typeof v === 'object' && !Array.isArray(v)) {
+      try {
+        const s = JSON.stringify(v)
+        out[k] = s.length > 200 ? `${s.slice(0, 200)}…` : s
+      } catch {
+        out[k] = '[object]'
+      }
+    }
+  }
+  return out
+}
+
+function parsedFieldsPreview(parsed: ParsedIdFields): Record<string, string | null> {
+  return {
+    fullName: parsed.fullName,
+    dateOfBirth: parsed.dateOfBirth,
+    idNumber: parsed.idNumber,
+    idType: parsed.idType,
+    issueDate: parsed.issueDate,
+    expiryDate: parsed.expiryDate,
+    address: parsed.address,
+  }
+}
+
+function emitNativePanelDebug(
+  onPanelDebug: NativeHostPanelDebugFn | undefined,
+  payload: NativeHostRxDebugBroadcast,
+) {
+  try {
+    onPanelDebug?.(payload)
+  } catch {
+    /* ignore */
+  }
+}
+
 function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x)
 }
@@ -237,8 +281,8 @@ export function autoScanResultToParsed(msg: AutoScanResultMessage): ParsedIdFiel
   const doc = (msg.document_data ?? {}) as Record<string, unknown>
 
   const first =
-    stringOrNull(msg.first_name) ?? docPick(doc, 'first_name', 'firstName')
-  const last = stringOrNull(msg.last_name) ?? docPick(doc, 'last_name', 'lastName')
+    docPick(doc, 'first_name', 'firstName') ?? stringOrNull(msg.first_name)
+  const last = docPick(doc, 'last_name', 'lastName') ?? stringOrNull(msg.last_name)
   let fullName: string | null = null
   if (first && last) fullName = `${last}, ${first}`
   else fullName = first ?? last ?? docPick(doc, 'full_name', 'fullName')
@@ -246,27 +290,27 @@ export function autoScanResultToParsed(msg: AutoScanResultMessage): ParsedIdFiel
   return {
     fullName,
     dateOfBirth:
-      stringOrNull(msg.date_of_birth) ?? docPick(doc, 'date_of_birth', 'dateOfBirth', 'dob'),
+      docPick(doc, 'date_of_birth', 'dateOfBirth', 'dob') ?? stringOrNull(msg.date_of_birth),
     idNumber:
-      stringOrNull(msg.document_number) ?? docPick(doc, 'document_number', 'id_number', 'idNumber'),
-    idType: stringOrNull(msg.document_type) ?? docPick(doc, 'document_type', 'idType'),
-    issueDate: stringOrNull(msg.issue_date) ?? docPick(doc, 'issue_date', 'issueDate'),
-    expiryDate: stringOrNull(msg.expiry_date) ?? docPick(doc, 'expiry_date', 'expiryDate'),
-    address: stringOrNull(msg.address) ?? docPick(doc, 'address', 'address_line'),
+      docPick(doc, 'document_number', 'id_number', 'idNumber') ?? stringOrNull(msg.document_number),
+    idType: docPick(doc, 'document_type', 'idType') ?? stringOrNull(msg.document_type),
+    issueDate: docPick(doc, 'issue_date', 'issueDate') ?? stringOrNull(msg.issue_date),
+    expiryDate: docPick(doc, 'expiry_date', 'expiryDate') ?? stringOrNull(msg.expiry_date),
+    address: docPick(doc, 'address', 'address_line') ?? stringOrNull(msg.address),
   }
 }
 
 function flattenAutoScanFields(msg: AutoScanResultMessage): AutoScanFlatFields {
   const doc = (msg.document_data ?? {}) as Record<string, unknown>
   return {
-    first_name: stringOrNull(msg.first_name) ?? docPick(doc, 'first_name') ?? undefined,
-    last_name: stringOrNull(msg.last_name) ?? docPick(doc, 'last_name') ?? undefined,
-    document_number: stringOrNull(msg.document_number) ?? docPick(doc, 'document_number') ?? undefined,
-    date_of_birth: stringOrNull(msg.date_of_birth) ?? docPick(doc, 'date_of_birth') ?? undefined,
-    document_type: stringOrNull(msg.document_type) ?? docPick(doc, 'document_type') ?? undefined,
-    expiry_date: stringOrNull(msg.expiry_date) ?? docPick(doc, 'expiry_date') ?? undefined,
-    issue_date: stringOrNull(msg.issue_date) ?? docPick(doc, 'issue_date') ?? undefined,
-    address: stringOrNull(msg.address) ?? docPick(doc, 'address') ?? undefined,
+    first_name: docPick(doc, 'first_name') ?? stringOrNull(msg.first_name) ?? undefined,
+    last_name: docPick(doc, 'last_name') ?? stringOrNull(msg.last_name) ?? undefined,
+    document_number: docPick(doc, 'document_number') ?? stringOrNull(msg.document_number) ?? undefined,
+    date_of_birth: docPick(doc, 'date_of_birth') ?? stringOrNull(msg.date_of_birth) ?? undefined,
+    document_type: docPick(doc, 'document_type') ?? stringOrNull(msg.document_type) ?? undefined,
+    expiry_date: docPick(doc, 'expiry_date') ?? stringOrNull(msg.expiry_date) ?? undefined,
+    issue_date: docPick(doc, 'issue_date') ?? stringOrNull(msg.issue_date) ?? undefined,
+    address: docPick(doc, 'address') ?? stringOrNull(msg.address) ?? undefined,
   }
 }
 
@@ -297,7 +341,10 @@ function scheduleReconnect(connectFn: () => void) {
  * Connect once on extension startup. Listens for AUTO_SCAN_RESULT (and legacy SCAN_RESULT).
  * Does not postMessage on connect (minimal); add commands here if needed.
  */
-export function initNativeHost(onScan: NativeHostScanCallback): void {
+export function initNativeHost(
+  onScan: NativeHostScanCallback,
+  onPanelDebug?: NativeHostPanelDebugFn,
+): void {
   const connect = () => {
     if (nativePort != null) {
       try {
@@ -342,8 +389,17 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
     })
 
     port.onMessage.addListener((raw: unknown) => {
+      const rxAt = new Date().toISOString()
       if (!isRecord(raw)) {
         console.log(`${LOG} ← Python onMessage (non-object payload):`, raw)
+        emitNativePanelDebug(onPanelDebug, {
+          type: 'FDN_NATIVE_HOST_RX',
+          receivedAt: rxAt,
+          source: 'other',
+          topLevelKeys: [],
+          documentDataKeys: [],
+          errorMessage: typeof raw === 'string' ? raw : `non-object: ${String(raw)}`,
+        })
         return
       }
 
@@ -356,6 +412,14 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
         logInboundFromPython('ERROR', raw)
         console.log(`${LOG} host ERROR text:`, raw.message)
         console.log(`${LOG} host ERROR full object:`, tryJson(raw))
+        emitNativePanelDebug(onPanelDebug, {
+          type: 'FDN_NATIVE_HOST_RX',
+          receivedAt: rxAt,
+          source: 'ERROR',
+          topLevelKeys: Object.keys(raw),
+          documentDataKeys: [],
+          errorMessage: raw.message,
+        })
         return
       }
 
@@ -387,6 +451,17 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
           parsed,
           detail,
         }
+        emitNativePanelDebug(onPanelDebug, {
+          type: 'FDN_NATIVE_HOST_RX',
+          receivedAt: rxAt,
+          source: 'AUTO_SCAN_RESULT',
+          topLevelKeys: Object.keys(raw),
+          imageFrontB64Length: cardImages.front.length,
+          imageBackB64Length: cardImages.back.length,
+          documentDataKeys: Object.keys(document_data),
+          documentDataPreview: documentDataPreviewForPanel(document_data),
+          parsedPreview: parsedFieldsPreview(parsed),
+        })
         void Promise.resolve(onExtendedScan(extended, onScan)).catch((err) => {
           console.error(`${LOG} onScan failed`, describeUnknownError(err))
         })
@@ -410,6 +485,18 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
           documentData: nested,
         }
         console.log(`${LOG} SCAN_RESULT derived parsed (panel fields):`, tryJson(payload.parsed))
+        emitNativePanelDebug(onPanelDebug, {
+          type: 'FDN_NATIVE_HOST_RX',
+          receivedAt: rxAt,
+          source: 'SCAN_RESULT',
+          topLevelKeys: Object.keys(raw),
+          legacySingleImageB64Length: single.length,
+          imageFrontB64Length: single.length,
+          imageBackB64Length: single.length,
+          documentDataKeys: Object.keys(nested),
+          documentDataPreview: documentDataPreviewForPanel(nested),
+          parsedPreview: parsedFieldsPreview(payload.parsed),
+        })
         void Promise.resolve(onScan(payload)).catch((err) => {
           console.error(`${LOG} onScan failed`, describeUnknownError(err))
         })
@@ -417,6 +504,14 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
       }
 
       console.log(`${LOG} unhandled message type — full payload (JSON):`, tryJson(raw))
+      emitNativePanelDebug(onPanelDebug, {
+        type: 'FDN_NATIVE_HOST_RX',
+        receivedAt: rxAt,
+        source: 'other',
+        topLevelKeys: Object.keys(raw),
+        documentDataKeys: [],
+        unhandledType: typeof raw.type === 'string' ? raw.type : undefined,
+      })
     })
 
     port.onDisconnect.addListener(() => {
