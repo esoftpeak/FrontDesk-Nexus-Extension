@@ -155,6 +155,18 @@ function App() {
     }
   }, [refresh, applyNativeIdScan])
 
+  const scanPreviewUrls = useMemo(() => {
+    if (!scanImages) return null
+    try {
+      return {
+        front: base64ToDataUrl(scanImages.front),
+        back: base64ToDataUrl(scanImages.back),
+      }
+    } catch {
+      return null
+    }
+  }, [scanImages])
+
   async function onDevLogin(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
@@ -370,18 +382,6 @@ function App() {
   const ezee = state.ezeeGuestDisplay
   const hw = state.hardware
   const idAgeLabel = ageLabelFromDobString(parsed.dateOfBirth)
-
-  const scanPreviewUrls = useMemo(() => {
-    if (!scanImages) return null
-    try {
-      return {
-        front: base64ToDataUrl(scanImages.front),
-        back: base64ToDataUrl(scanImages.back),
-      }
-    } catch {
-      return null
-    }
-  }, [scanImages])
 
   return (
     <div className="fdn-root">
