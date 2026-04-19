@@ -1,13 +1,25 @@
 import type {
   EzeeGuestDisplay,
+  IdScanDetailGuru,
   ParsedIdFields,
   ReservationSnapshot,
   SynxisGuestDisplay,
 } from './pms-types'
 
+export type { IdScanDetailGuru }
+
 /** chrome.runtime / Port message contracts (see docs/MESSAGING.md) */
+/** Prior scans for the current reservation confirmation (Supabase `id_scans`). */
+export type IdScanHistoryRow = {
+  id: string
+  confirmationNumber: string
+  scannedAt: string
+  manualEntry: boolean
+}
+
 export type ExtensionMessage =
   | { type: 'GET_STATE' }
+  | { type: 'GET_ID_SCAN_HISTORY' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
   /** Manual scrape: eZee tab with Arrivals drawer open (same payload as auto). */
   | { type: 'LOAD_EZEE_RESERVATION' }
@@ -38,12 +50,16 @@ export type ExtensionMessage =
       imageBackBase64: string | null
       /** `native_host` when data came from Thales/native host; omit for manual entry. */
       ocrProvider?: string | null
+      detail?: IdScanDetailGuru | null
+      documentData?: Record<string, unknown> | null
+      guestRemark?: string | null
+      checkInRemark?: string | null
     }
   | { type: 'INJECT_PMS'; fields: Record<string, string> }
   | { type: 'VERIFY_MANAGER'; email: string; password: string }
 
 export type ExtensionResponse =
-  | { ok: true; state?: ExtensionState }
+  | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[] }
   | { ok: false; error: string }
 
 /** Service worker → side panel: Thales/SDK host pushed a completed ID scan (no button). */
@@ -55,6 +71,10 @@ export type NativeIdScanBroadcast = {
   ocrProvider: 'native_host'
   /** Result of automatic save (reservation + auth + DNR rules). */
   autoSave: { ok: true } | { ok: false; error: string }
+  /** Structured fields from Python `document_data` / AUTO_SCAN_RESULT. */
+  detail?: IdScanDetailGuru | null
+  /** Raw snapshot for debugging / future use (not shown by default in UI). */
+  documentData?: Record<string, unknown> | null
 }
 
 export type HardwareDevice = 'id_scanner' | 'spectral_payout' | 'rfid_encoder'

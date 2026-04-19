@@ -34,6 +34,24 @@ export type ParsedIdFields = {
   address: string | null
 }
 
+/**
+ * Structured guest / ID fields (ID Guru–style). Filled from AUTO_SCAN_RESULT `document_data` + top-level.
+ * Optional UI-only remarks are kept in the side panel state, not always persisted.
+ */
+export type IdScanDetailGuru = {
+  firstName: string | null
+  middleName: string | null
+  lastName: string | null
+  streetAddress: string | null
+  city: string | null
+  state: string | null
+  postalCode: string | null
+  phone: string | null
+  email: string | null
+  phoneCountryCode: string | null
+  usaCaPhone: boolean | null
+}
+
 /** Fields from SynXis reservation-summary JSON for UI + one spec console line. */
 export type SynxisAddressLine = {
   country: string

@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ExtensionState, NativeIdScanBroadcast, PanelToastBroadcast } from './shared/protocol'
-import type { ParsedIdFields } from './shared/pms-types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type {
+  ExtensionState,
+  IdScanHistoryRow,
+  NativeIdScanBroadcast,
+  PanelToastBroadcast,
+} from './shared/protocol'
+import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
+import { ageLabelFromDobString, mergeParsedWithGuru } from './lib/id-guru-fields'
+import { transformBase64ImageSync } from './lib/imageTransform'
 import { splitGuestName } from './lib/name-format'
 import './sidepanel.css'
 
@@ -13,6 +20,20 @@ const emptyParsed: ParsedIdFields = {
   issueDate: null,
   expiryDate: null,
   address: null,
+}
+
+const emptyIdDetail: IdScanDetailGuru = {
+  firstName: null,
+  middleName: null,
+  lastName: null,
+  streetAddress: null,
+  city: null,
+  state: null,
+  postalCode: null,
+  phone: null,
+  email: null,
+  phoneCountryCode: null,
+  usaCaPhone: null,
 }
 
 function App() {
@@ -39,9 +60,22 @@ function App() {
     front: string
     back: string
   } | null>(null)
-  const [scanPreviewUrl, setScanPreviewUrl] = useState<string | null>(null)
   const [scanImageB64Length, setScanImageB64Length] = useState<number | null>(null)
   const [lastOcrProvider, setLastOcrProvider] = useState<string | null>(null)
+  const [idDetail, setIdDetail] = useState<IdScanDetailGuru>(emptyIdDetail)
+  const [guestRemark, setGuestRemark] = useState('')
+  const [checkInRemark, setCheckInRemark] = useState('')
+  const [rotationDeg, setRotationDeg] = useState(0)
+  const [flipH, setFlipH] = useState(false)
+  const [idScanHistory, setIdScanHistory] = useState<IdScanHistoryRow[]>([])
+
+  const refreshIdScanHistory = useCallback(async () => {
+    const res = (await chrome.runtime.sendMessage({ type: 'GET_ID_SCAN_HISTORY' })) as {
+      ok?: boolean
+      idScanHistory?: IdScanHistoryRow[]
+    }
+    if (res.ok && res.idScanHistory) setIdScanHistory(res.idScanHistory)
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -60,26 +94,34 @@ function App() {
     return () => clearInterval(t)
   }, [refresh])
 
-  const applyNativeIdScan = useCallback((m: NativeIdScanBroadcast) => {
-    setParsed(m.parsed)
-    setLastOcrProvider(m.ocrProvider)
-    setScanImages({
-      front: m.images.front_image_base64,
-      back: m.images.back_image_base64,
-    })
-    setScanImageB64Length(m.imageBase64Length)
-    try {
-      setScanPreviewUrl(base64ToDataUrl(m.images.front_image_base64))
-    } catch {
-      setScanPreviewUrl(null)
-    }
-    if (m.autoSave.ok) {
-      setNotice('Thales scan received — saved to Supabase.')
-    } else {
-      setNotice(`Thales scan received — not saved: ${m.autoSave.error}`)
-    }
-    void refresh()
-  }, [refresh])
+  useEffect(() => {
+    void refreshIdScanHistory()
+  }, [refreshIdScanHistory, state?.reservation?.confirmationNumber])
+
+  const applyNativeIdScan = useCallback(
+    (m: NativeIdScanBroadcast) => {
+      setParsed(m.parsed)
+      setLastOcrProvider(m.ocrProvider)
+      setIdDetail(m.detail ?? emptyIdDetail)
+      setScanImages({
+        front: m.images.front_image_base64,
+        back: m.images.back_image_base64,
+      })
+      setScanImageB64Length(m.imageBase64Length)
+      setRotationDeg(0)
+      setFlipH(false)
+      if (m.detail?.phone?.trim()) setPhone(m.detail.phone.trim())
+      if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
+      if (m.autoSave.ok) {
+        setNotice('Thales scan received — saved to Supabase.')
+      } else {
+        setNotice(`Thales scan received — not saved: ${m.autoSave.error}`)
+      }
+      void refresh()
+      void refreshIdScanHistory()
+    },
+    [refresh, refreshIdScanHistory],
+  )
 
   useEffect(() => {
     const onRuntimeMessage = (msg: unknown) => {
@@ -142,16 +184,37 @@ function App() {
     setBusy(true)
     setNotice(null)
     try {
+      let frontB64 = scanImages?.front ?? null
+      let backB64 = scanImages?.back ?? null
+      if ((frontB64 || backB64) && (rotationDeg !== 0 || flipH)) {
+        try {
+          if (frontB64) frontB64 = await transformBase64ImageSync(frontB64, rotationDeg, flipH)
+          if (backB64) backB64 = await transformBase64ImageSync(backB64, rotationDeg, flipH)
+        } catch (e) {
+          setNotice(e instanceof Error ? e.message : 'Could not apply image rotation.')
+          return
+        }
+      }
+      const detailForSave: IdScanDetailGuru = {
+        ...idDetail,
+        phone: phone.trim() || idDetail.phone,
+        email: emailGuest.trim() || idDetail.email,
+      }
+      const mergedParsed = mergeParsedWithGuru(parsed, detailForSave)
       const res = (await chrome.runtime.sendMessage({
         type: 'SAVE_ID_SCAN',
-        parsed,
+        parsed: mergedParsed,
         phone: phone.trim() || null,
         email: emailGuest.trim() || null,
         manualEntry,
         managerOverride,
-        imageFrontBase64: scanImages?.front ?? null,
-        imageBackBase64: scanImages?.back ?? null,
+        imageFrontBase64: frontB64,
+        imageBackBase64: backB64,
         ocrProvider: manualEntry ? null : lastOcrProvider,
+        detail: detailForSave,
+        documentData: null,
+        guestRemark: guestRemark.trim() || null,
+        checkInRemark: checkInRemark.trim() || null,
       })) as { ok: boolean; error?: string }
       if (!res.ok) {
         const err = res.error ?? 'Save failed'
@@ -163,6 +226,7 @@ function App() {
       setManagerOverride(false)
       setShowManagerModal(false)
       void refresh()
+      void refreshIdScanHistory()
     } finally {
       setBusy(false)
     }
@@ -190,7 +254,17 @@ function App() {
   }
 
   async function onInjectPms() {
-    const { firstName, lastName } = splitGuestName(parsed.fullName)
+    const split = splitGuestName(parsed.fullName)
+    const firstName = idDetail.firstName?.trim() || split.firstName
+    const lastName = idDetail.lastName?.trim() || split.lastName
+    const structuredAddr = [
+      idDetail.streetAddress,
+      idDetail.city,
+      idDetail.state,
+      idDetail.postalCode,
+    ]
+      .filter(Boolean)
+      .join(', ')
     setBusy(true)
     setNotice(null)
     try {
@@ -199,9 +273,10 @@ function App() {
         fields: {
           firstName,
           lastName,
+          middleName: idDetail.middleName ?? '',
           phone: phone.trim(),
           email: emailGuest.trim(),
-          address: parsed.address ?? '',
+          address: structuredAddr || (parsed.address ?? ''),
         },
       })) as { ok: boolean; error?: string; inject?: { ok: boolean; error?: string; applied?: string[] } }
       if (!res.ok) {
@@ -294,6 +369,19 @@ function App() {
   const guest = state.synxisGuestDisplay
   const ezee = state.ezeeGuestDisplay
   const hw = state.hardware
+  const idAgeLabel = ageLabelFromDobString(parsed.dateOfBirth)
+
+  const scanPreviewUrls = useMemo(() => {
+    if (!scanImages) return null
+    try {
+      return {
+        front: base64ToDataUrl(scanImages.front),
+        back: base64ToDataUrl(scanImages.back),
+      }
+    } catch {
+      return null
+    }
+  }, [scanImages])
 
   return (
     <div className="fdn-root">
@@ -511,12 +599,14 @@ function App() {
         </div>
       </section>
 
-      <section className="fdn-card">
-        <h2 className="fdn-h2">ID scan</h2>
+      <section className="fdn-card fdn-card--idguru">
+        <h2 className="fdn-h2">ID scan (ID Guru–style)</h2>
         <p className="fdn-help">
-          Thales / native host: scans run in the background. When the SDK sends data via native messaging,
-          fields and preview update here and we save to Supabase when the guest reservation is loaded and
-          rules allow.
+          The native app captures <strong>front</strong> then <strong>back</strong> (or the reverse); it must
+          label which image is which and send <code>image_front_base64</code> + <code>image_back_base64</code> in
+          one <code>AUTO_SCAN_RESULT</code> with merged <code>document_data</code>. Legacy single{' '}
+          <code>image_base64</code> is still accepted (duplicated to both sides). Rotate/flip applies to{' '}
+          <strong>both</strong> previews on save. History lists prior <code>id_scans</code> for this confirmation.
         </p>
         <label className="fdn-check">
           <input
@@ -533,28 +623,181 @@ function App() {
             {scanImageB64Length != null ? ` · image base64 length ${scanImageB64Length}` : null}
           </p>
         )}
-        {!manualEntry && scanPreviewUrl ? (
-          <div className="fdn-scan-preview">
-            <p className="fdn-help">Scan preview</p>
-            <img className="fdn-scan-preview__img" src={scanPreviewUrl} alt="ID scan preview" />
+
+        {!manualEntry && scanPreviewUrls ? (
+          <div className="fdn-id-preview fdn-id-preview--dual">
+            <div className="fdn-id-preview__pair">
+              <div className="fdn-id-preview__cell">
+                <p className="fdn-id-preview__side">Front</p>
+                <div className="fdn-id-preview__main">
+                  <img
+                    className="fdn-id-preview__img"
+                    src={scanPreviewUrls.front}
+                    alt="ID front"
+                    style={{
+                      transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="fdn-id-preview__cell">
+                <p className="fdn-id-preview__side">Back</p>
+                <div className="fdn-id-preview__main">
+                  <img
+                    className="fdn-id-preview__img"
+                    src={scanPreviewUrls.back}
+                    alt="ID back"
+                    style={{
+                      transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="fdn-id-preview__toolbar" aria-label="Adjust image orientation (both sides)">
+              <button
+                type="button"
+                className="fdn-id-preview__tool"
+                title="Rotate clockwise"
+                onClick={() => setRotationDeg((d) => (d + 90) % 360)}
+              >
+                ↻
+              </button>
+              <button
+                type="button"
+                className="fdn-id-preview__tool"
+                title="Rotate counter-clockwise"
+                onClick={() => setRotationDeg((d) => (d - 90 + 360) % 360)}
+              >
+                ↺
+              </button>
+              <button
+                type="button"
+                className="fdn-id-preview__tool"
+                title="Flip horizontal mirror"
+                onClick={() => setFlipH((f) => !f)}
+              >
+                ⇄
+              </button>
+              <button
+                type="button"
+                className="fdn-id-preview__tool"
+                title="Straighten (reset rotation + flip)"
+                onClick={() => {
+                  setRotationDeg(0)
+                  setFlipH(false)
+                }}
+              >
+                ⊡
+              </button>
+            </div>
           </div>
         ) : null}
 
-        <div className="fdn-grid">
+        <div className="fdn-grid fdn-grid--idguru">
           <label className="fdn-label">
-            Full name
+            First name
             <input
               className="fdn-input"
-              value={parsed.fullName ?? ''}
-              onChange={(e) => setParsed({ ...parsed, fullName: e.target.value || null })}
+              value={idDetail.firstName ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
+              }
             />
           </label>
           <label className="fdn-label">
-            DOB
+            Middle name
             <input
               className="fdn-input"
-              value={parsed.dateOfBirth ?? ''}
-              onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
+              value={idDetail.middleName ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+          <label className="fdn-label">
+            Last name
+            <input
+              className="fdn-input"
+              value={idDetail.lastName ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, lastName: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+          <label className="fdn-label fdn-label--full">
+            Street address
+            <input
+              className="fdn-input"
+              value={idDetail.streetAddress ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, streetAddress: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+          <label className="fdn-label">
+            City
+            <input
+              className="fdn-input"
+              value={idDetail.city ?? ''}
+              onChange={(e) => setIdDetail((d) => ({ ...d, city: e.target.value.trim() || null }))}
+            />
+          </label>
+          <label className="fdn-label">
+            State
+            <input
+              className="fdn-input"
+              value={idDetail.state ?? ''}
+              onChange={(e) => setIdDetail((d) => ({ ...d, state: e.target.value.trim() || null }))}
+            />
+          </label>
+          <label className="fdn-label">
+            Zip / postal
+            <input
+              className="fdn-input"
+              value={idDetail.postalCode ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, postalCode: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+          <label className="fdn-label">
+            Phone
+            <span className="fdn-inline fdn-inline--phone">
+              <input className="fdn-input" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              <label className="fdn-check fdn-check--inline">
+                <input
+                  type="checkbox"
+                  checked={idDetail.usaCaPhone === true}
+                  onChange={(e) =>
+                    setIdDetail((d) => ({ ...d, usaCaPhone: e.target.checked ? true : null }))
+                  }
+                />
+                USA/CA
+              </label>
+            </span>
+          </label>
+          <label className="fdn-label">
+            Country code
+            <input
+              className="fdn-input"
+              placeholder="+1"
+              value={idDetail.phoneCountryCode ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, phoneCountryCode: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+          <label className="fdn-label">
+            Email (guest)
+            <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
+          </label>
+          <label className="fdn-label">
+            ID type
+            <input
+              className="fdn-input"
+              value={parsed.idType ?? ''}
+              onChange={(e) => setParsed({ ...parsed, idType: e.target.value || null })}
             />
           </label>
           <label className="fdn-label">
@@ -566,37 +809,103 @@ function App() {
             />
           </label>
           <label className="fdn-label">
-            ID type
+            ID issue date
             <input
               className="fdn-input"
-              value={parsed.idType ?? ''}
-              onChange={(e) => setParsed({ ...parsed, idType: e.target.value || null })}
+              value={parsed.issueDate ?? ''}
+              onChange={(e) => setParsed({ ...parsed, issueDate: e.target.value || null })}
             />
           </label>
           <label className="fdn-label">
-            Expiry
+            ID expiration
             <input
               className="fdn-input"
               value={parsed.expiryDate ?? ''}
               onChange={(e) => setParsed({ ...parsed, expiryDate: e.target.value || null })}
             />
           </label>
+          <label className="fdn-label">
+            Date of birth
+            <input
+              className="fdn-input"
+              value={parsed.dateOfBirth ?? ''}
+              onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            Age (from DOB)
+            <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
+          </label>
           <label className="fdn-label fdn-label--full">
-            Address
+            Full name (combined)
+            <input
+              className="fdn-input"
+              value={parsed.fullName ?? ''}
+              onChange={(e) => setParsed({ ...parsed, fullName: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label fdn-label--full">
+            Address (single line)
             <input
               className="fdn-input"
               value={parsed.address ?? ''}
               onChange={(e) => setParsed({ ...parsed, address: e.target.value || null })}
             />
           </label>
-          <label className="fdn-label">
-            Phone (guest)
-            <input className="fdn-input" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <label className="fdn-label fdn-label--full">
+            Guest remark
+            <textarea
+              className="fdn-input fdn-textarea"
+              rows={2}
+              value={guestRemark}
+              onChange={(e) => setGuestRemark(e.target.value)}
+            />
           </label>
-          <label className="fdn-label">
-            Email (guest)
-            <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
+          <label className="fdn-label fdn-label--full">
+            Check-in remark
+            <textarea
+              className="fdn-input fdn-textarea"
+              rows={2}
+              value={checkInRemark}
+              onChange={(e) => setCheckInRemark(e.target.value)}
+            />
           </label>
+        </div>
+
+        <div className="fdn-id-history">
+          <h3 className="fdn-h3 fdn-id-history__title">History (this reservation)</h3>
+          <p className="fdn-muted fdn-id-history__hint">
+            Same confirmation as the loaded guest; future: match by document number across stays.
+          </p>
+          {idScanHistory.length === 0 ? (
+            <p className="fdn-muted">No prior scans for this confirmation.</p>
+          ) : (
+            <table className="fdn-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Manual</th>
+                  <th>Scan id</th>
+                </tr>
+              </thead>
+              <tbody>
+                {idScanHistory.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      {row.scannedAt
+                        ? new Date(row.scannedAt).toLocaleString(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          })
+                        : '—'}
+                    </td>
+                    <td>{row.manualEntry ? 'Yes' : 'No'}</td>
+                    <td className="fdn-mono">{row.id.slice(0, 8)}…</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
         <div className="fdn-actions">

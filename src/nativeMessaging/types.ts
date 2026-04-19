@@ -1,4 +1,4 @@
-import type { ParsedIdFields } from '../shared/pms-types'
+import type { IdScanDetailGuru, ParsedIdFields } from '../shared/pms-types'
 
 /** Outbound to Python native host (Chrome → host). */
 export type NativeScanRequest = {
@@ -26,8 +26,18 @@ export type NativeErrorMessage = {
 
 export type NativeScanReply = NativeScanResultMessage | NativeErrorMessage | Record<string, unknown>
 
+/** Front + back ID images (Python sends both after both sides are captured; order of capture may vary). */
+export type NativeScanImages = {
+  front_image_base64: string
+  back_image_base64: string
+}
+
 export type NativeScanSuccessPayload = {
-  image_base64: string
+  images: NativeScanImages
   /** Coerced from host message (trim + null empty). */
   parsed: ParsedIdFields
+  /** Structured Guru-style fields from AUTO_SCAN_RESULT / document_data. */
+  detail?: IdScanDetailGuru | null
+  /** Optional raw snapshot from Python (AUTO_SCAN_RESULT). */
+  documentData?: Record<string, unknown> | null
 }

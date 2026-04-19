@@ -3,11 +3,13 @@ import type {
   ExtensionMessage,
   ExtensionResponse,
   ExtensionState,
+  IdScanHistoryRow,
   NativeIdScanBroadcast,
   PanelToastBroadcast,
 } from '../shared/protocol'
 import type {
   EzeeGuestDisplay,
+  IdScanDetailGuru,
   ParsedIdFields,
   ReservationSnapshot,
   SynxisGuestDisplay,
@@ -648,6 +650,11 @@ async function saveIdScan(args: {
   imageBackBase64: string | null
   /** Set from Thales/native host when not manual entry. */
   ocrProvider?: string | null
+  /** Structured Guru fields + raw document_data snapshot (encrypted in pii). */
+  detail?: IdScanDetailGuru | null
+  documentData?: Record<string, unknown> | null
+  guestRemark?: string | null
+  checkInRemark?: string | null
 }): Promise<ExtensionResponse> {
   lastError = null
   const client = getClient()
@@ -742,6 +749,12 @@ async function saveIdScan(args: {
     issueDate: args.parsed.issueDate,
     expiryDate: args.parsed.expiryDate,
     address: args.parsed.address,
+    idGuru: args.detail ?? undefined,
+    documentDataSnapshot: args.documentData ?? undefined,
+    remarks: {
+      guest: args.guestRemark?.trim() || undefined,
+      checkIn: args.checkInRemark?.trim() || undefined,
+    },
   }
   const pii_encrypted = await encryptJson(piiPayload)
 
@@ -813,28 +826,65 @@ async function broadcastNativeIdScan(payload: Omit<NativeIdScanBroadcast, 'type'
 }
 
 async function handleThalesNativeScan(payload: NativeScanSuccessPayload) {
-  const b64 = payload.image_base64
-  const images = { front_image_base64: b64, back_image_base64: b64 }
+  const images = payload.images
+  const b64Front = images.front_image_base64
+  const b64Back = images.back_image_base64
+  const detail = payload.detail ?? null
+  const phone = detail?.phone?.trim() ? detail.phone.trim() : null
+  const email = detail?.email?.trim() ? detail.email.trim() : null
   const saveRes = await saveIdScan({
     parsed: payload.parsed,
-    phone: null,
-    email: null,
+    phone,
+    email,
     manualEntry: false,
     managerOverride: false,
-    imageFrontBase64: b64,
-    imageBackBase64: b64,
+    imageFrontBase64: b64Front,
+    imageBackBase64: b64Back,
     ocrProvider: 'native_host',
+    detail,
+    documentData: payload.documentData ?? null,
   })
-  const autoSave: NativeIdScanBroadcast['autoSave'] = saveRes.ok
-    ? { ok: true }
-    : { ok: false, error: saveRes.error ?? 'Save failed' }
+  const autoSave: NativeIdScanBroadcast['autoSave'] =
+    saveRes.ok === true ? { ok: true } : { ok: false, error: saveRes.error }
   await broadcastNativeIdScan({
     parsed: payload.parsed,
     images,
-    imageBase64Length: b64.length,
+    imageBase64Length: b64Front.length + b64Back.length,
     ocrProvider: 'native_host',
     autoSave,
+    detail,
+    documentData: payload.documentData ?? null,
   })
+}
+
+async function fetchIdScanHistoryForCurrentReservation(): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+  const snap = reservation
+  if (!snap?.confirmationNumber) return { ok: true, idScanHistory: [] }
+
+  const conf = snap.confirmationNumber
+  const { data, error } = await client
+    .from('id_scans')
+    .select('id, confirmation_number, manual_entry, created_at')
+    .eq('confirmation_number', conf)
+    .order('created_at', { ascending: false })
+    .limit(25)
+
+  if (error) {
+    console.warn('[FDN] id_scans history query', error.message)
+    return { ok: false, error: error.message }
+  }
+
+  const rows: IdScanHistoryRow[] = (data ?? []).map((r: Record<string, unknown>) => ({
+    id: String(r.id),
+    confirmationNumber: String(r.confirmation_number ?? ''),
+    scannedAt: typeof r.created_at === 'string' ? r.created_at : '',
+    manualEntry: Boolean(r.manual_entry),
+  }))
+  return { ok: true, idScanHistory: rows }
 }
 
 function base64ToBlob(b64: string, type: string): Blob {
@@ -852,6 +902,10 @@ async function handleMessage(
 
   if (msg.type === 'GET_STATE') {
     return { ok: true, state: await getState() }
+  }
+
+  if (msg.type === 'GET_ID_SCAN_HISTORY') {
+    return fetchIdScanHistoryForCurrentReservation()
   }
 
   if (msg.type === 'LOAD_EZEE_RESERVATION') {
@@ -1053,6 +1107,10 @@ async function handleMessage(
       imageFrontBase64: msg.imageFrontBase64,
       imageBackBase64: msg.imageBackBase64,
       ocrProvider: msg.ocrProvider,
+      detail: msg.detail ?? null,
+      documentData: msg.documentData ?? null,
+      guestRemark: msg.guestRemark ?? null,
+      checkInRemark: msg.checkInRemark ?? null,
     })
   }
 

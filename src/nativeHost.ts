@@ -2,8 +2,9 @@
  * Single native messaging connection to com.frontdesk.nexus (MV3 service worker).
  * Connect on init; reconnect on disconnect with backoff. No UI / button required.
  */
+import { idGuruDetailFromAutoScan, mergeParsedWithGuru } from './lib/id-guru-fields'
 import { NATIVE_HOST_NAME } from './shared/protocol'
-import type { ParsedIdFields } from './shared/pms-types'
+import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { parsedFieldsFromHost } from './nativeMessaging/scanId'
 import type { NativeScanSuccessPayload } from './nativeMessaging/types'
 
@@ -91,16 +92,75 @@ function tryJson(value: unknown, maxLen = 50_000): string {
 }
 
 /**
+ * Extract front + back images from AUTO_SCAN_RESULT.
+ * Python should send both after both sides are scanned (order of capture may be front-first or back-first;
+ * host is responsible for labeling front vs back). Accepts several key shapes for compatibility.
+ */
+export function extractIdCardImages(raw: Record<string, unknown>): { front: string; back: string } | null {
+  const fTop =
+    stringOrNull(raw.image_front_base64) ??
+    stringOrNull(raw.imageFrontBase64) ??
+    stringOrNull(raw.front_image_base64)
+  const bTop =
+    stringOrNull(raw.image_back_base64) ??
+    stringOrNull(raw.imageBackBase64) ??
+    stringOrNull(raw.back_image_base64)
+
+  if (fTop && bTop) return { front: fTop, back: bTop }
+
+  const nested = raw.images
+  if (nested != null && typeof nested === 'object' && !Array.isArray(nested)) {
+    const im = nested as Record<string, unknown>
+    const f =
+      stringOrNull(im.front_image_base64) ??
+      stringOrNull(im.frontImageBase64) ??
+      stringOrNull(im.front) ??
+      stringOrNull(im.image_front_base64)
+    const b =
+      stringOrNull(im.back_image_base64) ??
+      stringOrNull(im.backImageBase64) ??
+      stringOrNull(im.back) ??
+      stringOrNull(im.image_back_base64)
+    if (f && b) return { front: f, back: b }
+  }
+
+  const legacy = stringOrNull(raw.image_base64)
+  if (legacy) return { front: legacy, back: legacy }
+
+  return null
+}
+
+/**
  * DevTools: log everything Python sent. Full base64 is logged on its own line (can be large).
  */
 function logInboundFromPython(label: string, raw: Record<string, unknown>): void {
   const type = raw.type
   const keys = Object.keys(raw)
-  const rawForConsole: Record<string, unknown> = {
-    ...raw,
-    ...(typeof raw.image_base64 === 'string'
-      ? { image_base64: summarizeBase64ForConsole(raw.image_base64) }
-      : {}),
+  const imgs = extractIdCardImages(raw)
+  const rawForConsole: Record<string, unknown> = { ...raw }
+  if (typeof rawForConsole.image_base64 === 'string') {
+    rawForConsole.image_base64 = summarizeBase64ForConsole(rawForConsole.image_base64) as unknown as string
+  }
+  for (const k of [
+    'image_front_base64',
+    'image_back_base64',
+    'imageFrontBase64',
+    'imageBackBase64',
+    'front_image_base64',
+    'back_image_base64',
+  ] as const) {
+    if (typeof rawForConsole[k] === 'string') {
+      rawForConsole[k] = summarizeBase64ForConsole(rawForConsole[k] as string) as unknown as string
+    }
+  }
+  if (rawForConsole.images != null && typeof rawForConsole.images === 'object' && !Array.isArray(rawForConsole.images)) {
+    const im = { ...(rawForConsole.images as Record<string, unknown>) }
+    for (const key of Object.keys(im)) {
+      if (typeof im[key] === 'string' && (im[key] as string).length > 80) {
+        im[key] = summarizeBase64ForConsole(im[key] as string) as unknown as string
+      }
+    }
+    rawForConsole.images = im
   }
   console.log(`${LOG} ← Python native host [${label}]`, {
     type,
@@ -110,12 +170,15 @@ function logInboundFromPython(label: string, raw: Record<string, unknown>): void
   if (typeof raw.image_base64 === 'string') {
     console.log(`${LOG} ← Python [${label}] image_base64 FULL string (${raw.image_base64.length} chars):`, raw.image_base64)
   }
+  if (imgs) {
+    console.log(`${LOG} ← Python [${label}] image_front_base64 FULL (${imgs.front.length} chars):`, imgs.front)
+    console.log(`${LOG} ← Python [${label}] image_back_base64 FULL (${imgs.back.length} chars):`, imgs.back)
+  }
 }
 
-/** Inbound from host when Thales/SDK pushes a completed scan. */
+/** Inbound from host when Thales/SDK pushes a completed scan (flexible image keys). */
 export type AutoScanResultMessage = {
   type: 'AUTO_SCAN_RESULT'
-  image_base64: string
   document_data?: Record<string, unknown>
   first_name?: string
   last_name?: string
@@ -125,7 +188,7 @@ export type AutoScanResultMessage = {
   expiry_date?: string
   issue_date?: string
   address?: string
-}
+} & Record<string, unknown>
 
 export type AutoScanFlatFields = {
   first_name?: string
@@ -140,10 +203,11 @@ export type AutoScanFlatFields = {
 
 /** Extended payload for listeners that want document_data + flat SDK fields. */
 export type NativeHostAutoScanPayload = {
-  image_base64: string
+  images: { front: string; back: string }
   document_data: Record<string, unknown>
   flat: AutoScanFlatFields
   parsed: ParsedIdFields
+  detail: IdScanDetailGuru
 }
 
 export type NativeHostScanCallback = (payload: NativeScanSuccessPayload) => void | Promise<void>
@@ -207,10 +271,7 @@ function flattenAutoScanFields(msg: AutoScanResultMessage): AutoScanFlatFields {
 }
 
 function isAutoScanResult(msg: Record<string, unknown>): msg is AutoScanResultMessage {
-  return (
-    msg.type === 'AUTO_SCAN_RESULT' &&
-    typeof msg.image_base64 === 'string'
-  )
+  return msg.type === 'AUTO_SCAN_RESULT' && extractIdCardImages(msg) != null
 }
 
 function isScanResultLegacy(msg: Record<string, unknown>): boolean {
@@ -312,15 +373,19 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
         })
         const document_data = raw.document_data != null && isRecord(raw.document_data) ? raw.document_data : {}
         console.log(`${LOG} AUTO_SCAN_RESULT document_data (JSON):`, tryJson(document_data))
-        const flat = flattenAutoScanFields(raw)
-        const parsed = autoScanResultToParsed(raw)
+        const flat = flattenAutoScanFields(raw as AutoScanResultMessage)
+        const parsed = autoScanResultToParsed(raw as AutoScanResultMessage)
+        const detail = idGuruDetailFromAutoScan(raw, document_data)
+        const cardImages = extractIdCardImages(raw)!
         console.log(`${LOG} AUTO_SCAN_RESULT derived flat (flattened):`, tryJson(flat))
         console.log(`${LOG} AUTO_SCAN_RESULT derived parsed (panel fields):`, tryJson(parsed))
+        console.log(`${LOG} AUTO_SCAN_RESULT IdGuru detail:`, tryJson(detail))
         const extended: NativeHostAutoScanPayload = {
-          image_base64: raw.image_base64,
+          images: cardImages,
           document_data,
           flat,
           parsed,
+          detail,
         }
         void Promise.resolve(onExtendedScan(extended, onScan)).catch((err) => {
           console.error(`${LOG} onScan failed`, describeUnknownError(err))
@@ -335,9 +400,14 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
             ? (raw.ocr_data as Record<string, unknown>)
             : {}
         console.log(`${LOG} SCAN_RESULT ocr_data / text (JSON):`, tryJson(nested))
+        const detail = idGuruDetailFromAutoScan(raw, nested)
+        const merged = mergeParsedWithGuru(parsedFieldsFromHost(raw), detail)
+        const single = raw.image_base64 as string
         const payload: NativeScanSuccessPayload = {
-          image_base64: raw.image_base64 as string,
-          parsed: parsedFieldsFromHost(raw),
+          images: { front_image_base64: single, back_image_base64: single },
+          parsed: merged,
+          detail,
+          documentData: nested,
         }
         console.log(`${LOG} SCAN_RESULT derived parsed (panel fields):`, tryJson(payload.parsed))
         void Promise.resolve(onScan(payload)).catch((err) => {
@@ -376,14 +446,20 @@ export function initNativeHost(onScan: NativeHostScanCallback): void {
   connect()
 }
 
-/** Optional hook: same parsed payload; default forwards `parsed` + `image_base64` to onScan. */
+/** Optional hook: same parsed payload; forwards `images` + `parsed` to onScan. */
 async function onExtendedScan(
   extended: NativeHostAutoScanPayload,
   onScan: NativeHostScanCallback,
 ): Promise<void> {
+  const merged = mergeParsedWithGuru(extended.parsed, extended.detail)
   await onScan({
-    image_base64: extended.image_base64,
-    parsed: extended.parsed,
+    images: {
+      front_image_base64: extended.images.front,
+      back_image_base64: extended.images.back,
+    },
+    parsed: merged,
+    detail: extended.detail,
+    documentData: extended.document_data,
   })
 }
 
