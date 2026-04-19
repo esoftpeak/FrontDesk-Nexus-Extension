@@ -123,8 +123,10 @@ function App() {
       if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
       if (m.autoSave.ok) {
         setNotice('Thales scan received — saved to Supabase.')
-      } else {
+      } else if ('ok' in m.autoSave && !m.autoSave.ok && 'error' in m.autoSave && m.autoSave.error) {
         setNotice(`Thales scan received — not saved: ${m.autoSave.error}`)
+      } else {
+        setNotice('Thales scan received — not saved: unknown error')
       }
       void refresh()
       void refreshIdScanHistory()
@@ -621,15 +623,6 @@ function App() {
 
       <section className="fdn-card fdn-card--idguru">
         <h2 className="fdn-h2">ID scan (ID Guru–style)</h2>
-        <p className="fdn-help">
-          The native app captures <strong>front</strong> then <strong>back</strong> (or the reverse); it must
-          label which image is which and send <code>image_front_base64</code> + <code>image_back_base64</code> in
-          one <code>AUTO_SCAN_RESULT</code> with merged <code>document_data</code>. Legacy single{' '}
-          <code>image_base64</code> is still accepted (duplicated to both sides). Rotate/flip applies to{' '}
-          <strong>both</strong> previews on save. Open the <strong>side panel</strong> DevTools → Console to
-          see <code>FDN_NATIVE_HOST_RX</code> logs for every Python message (service worker still has verbose
-          logs too). History lists prior <code>id_scans</code> for this confirmation.
-        </p>
         <label className="fdn-check">
           <input
             type="checkbox"
@@ -788,14 +781,6 @@ function App() {
           <div className="fdn-field fdn-field--full">
             <span className="fdn-field__label">Phone &amp; country</span>
             <div className="fdn-phone-inline">
-              <input
-                className="fdn-input"
-                inputMode="tel"
-                autoComplete="tel"
-                placeholder="(555) 555-5555"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-              />
               <label className="fdn-check fdn-check--phone-flag">
                 <input
                   type="checkbox"
@@ -813,6 +798,14 @@ function App() {
                 onChange={(e) =>
                   setIdDetail((d) => ({ ...d, phoneCountryCode: e.target.value.trim() || null }))
                 }
+              />
+              <input
+                className="fdn-input"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="(555) 555-5555"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
               />
             </div>
           </div>
