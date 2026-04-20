@@ -75,6 +75,8 @@ function App() {
   const [flipH, setFlipH] = useState(false)
   const [idScanHistory, setIdScanHistory] = useState<IdScanHistoryRow[]>([])
   const [lastScanReceivedAt, setLastScanReceivedAt] = useState<string | null>(null)
+  /** From native host `document_data` — passed through on Save (not SynXis/eZee). */
+  const [lastDocumentData, setLastDocumentData] = useState<Record<string, unknown> | null>(null)
 
   const refreshIdScanHistory = useCallback(async () => {
     const res = (await chrome.runtime.sendMessage({ type: 'GET_ID_SCAN_HISTORY' })) as {
@@ -114,6 +116,7 @@ function App() {
         front: m.images.front_image_base64,
         back: m.images.back_image_base64,
       })
+      setLastDocumentData(m.documentData ?? null)
       setLastScanReceivedAt(m.receivedAt ?? new Date().toISOString())
       setRotationDeg(0)
       setFlipH(false)
@@ -244,7 +247,7 @@ function App() {
         imageBackBase64: backB64,
         ocrProvider: manualEntry ? null : lastOcrProvider,
         detail: detailForSave,
-        documentData: null,
+        documentData: manualEntry ? null : lastDocumentData,
         guestRemark: guestRemark.trim() || null,
         checkInRemark: checkInRemark.trim() || null,
       })) as { ok: boolean; error?: string }

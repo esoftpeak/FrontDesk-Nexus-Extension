@@ -641,6 +641,36 @@ function normalizeIdNumber(n: string | null): string {
   return (n ?? '').replace(/\s+/g, '').toUpperCase()
 }
 
+/**
+ * Minimal reservation row so `id_scans.reservation_id` can be set when the user has not loaded
+ * SynXis/eZee — ID scan data still persists under `pii_encrypted` only (no PMS fields).
+ */
+function standaloneReservationSnapshot(
+  confirmationNumber: string,
+  parsed: ParsedIdFields,
+): ReservationSnapshot {
+  const now = new Date().toISOString()
+  return {
+    pms: 'ezee',
+    confirmationNumber,
+    guestName: parsed.fullName,
+    roomNumber: null,
+    stayDatesRaw: null,
+    addressRaw: null,
+    checkInDate: null,
+    checkOutDate: null,
+    email: null,
+    phone: null,
+    rateAmount: null,
+    reservationTotal: null,
+    amountPaid: null,
+    dueAmount: null,
+    restricted: false,
+    loadedAt: now,
+    pageUrl: 'chrome-extension://fdn/id-scan-without-pms',
+  }
+}
+
 async function saveIdScan(args: {
   parsed: ParsedIdFields
   phone: string | null
@@ -662,15 +692,6 @@ async function saveIdScan(args: {
   const { data: sess } = await client.auth.getSession()
   if (!sess.session) return { ok: false, error: 'Not signed in' }
   if (versionBlocked) return { ok: false, error: versionMessage ?? 'Extension version blocked' }
-
-  const snap = reservation
-  if (!snap?.confirmationNumber) {
-    return {
-      ok: false,
-      error:
-        'No reservation context. Load SynXis (Get Guest Data) or open an eZee guest in the Arrivals drawer.',
-    }
-  }
 
   const rawId = (args.parsed.idNumber ?? '').trim()
   if (rawId && !args.managerOverride) {
@@ -694,20 +715,29 @@ async function saveIdScan(args: {
   const terminalId = await ensureTerminal(client)
   const user = sess.session.user
 
-  const snapForSave: ReservationSnapshot = {
-    ...snap,
-    guestName: snap.guestName ?? args.parsed.fullName,
-    loadedAt: new Date().toISOString(),
+  const snap = reservation
+  const scanId = crypto.randomUUID()
+
+  let conf: string
+  let snapForUpsert: ReservationSnapshot
+  if (snap?.confirmationNumber) {
+    conf = snap.confirmationNumber
+    snapForUpsert = {
+      ...snap,
+      guestName: snap.guestName ?? args.parsed.fullName,
+      loadedAt: new Date().toISOString(),
+    }
+  } else {
+    conf = `FDN-IDONLY-${scanId}`
+    snapForUpsert = standaloneReservationSnapshot(conf, args.parsed)
   }
-  const ur = await upsertReservationSnapshot(client, snapForSave)
+
+  const ur = await upsertReservationSnapshot(client, snapForUpsert)
   if (!ur.ok) {
     lastError = 'Reservation upsert failed'
     return { ok: false, error: lastError }
   }
   const resRow = { id: ur.id }
-
-  const scanId = crypto.randomUUID()
-  const conf = snap.confirmationNumber
   const basePath = `${conf}/${scanId}`
 
   let imageFrontPath: string | null = null
