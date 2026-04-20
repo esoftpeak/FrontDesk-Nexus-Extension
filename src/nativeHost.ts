@@ -113,41 +113,93 @@ function tryJson(value: unknown, maxLen = 50_000): string {
   }
 }
 
+/** Read candidate front/back base64 from a plain object (message root, `images`, or `document_data`). */
+function extractSidesFromRecord(rec: Record<string, unknown>): { f: string | null; b: string | null } {
+  const f =
+    stringOrNull(rec.image_front_base64) ??
+    stringOrNull(rec.imageFrontBase64) ??
+    stringOrNull(rec.front_image_base64) ??
+    stringOrNull(rec.front) ??
+    stringOrNull(rec.image_front_base64)
+  const b =
+    stringOrNull(rec.image_back_base64) ??
+    stringOrNull(rec.imageBackBase64) ??
+    stringOrNull(rec.back_image_base64) ??
+    stringOrNull(rec.back) ??
+    stringOrNull(rec.image_back_base64)
+  return { f, b }
+}
+
+function distinctImagePair(f: string | null, b: string | null): { front: string; back: string } | null {
+  if (!f || !b) return null
+  if (f === b) return null
+  return { front: f, back: b }
+}
+
+function distinctPairFromStringArray(arr: unknown[]): { front: string; back: string } | null {
+  if (arr.length < 2) return null
+  return distinctImagePair(stringOrNull(arr[0]), stringOrNull(arr[1]))
+}
+
+function tryImagesNestedObject(nested: Record<string, unknown>): { front: string; back: string } | null {
+  const { f, b } = extractSidesFromRecord(nested)
+  return distinctImagePair(f, b)
+}
+
+function tryDocumentDataImages(doc: Record<string, unknown>): { front: string; back: string } | null {
+  const sides = extractSidesFromRecord(doc)
+  let p = distinctImagePair(sides.f, sides.b)
+  if (p) return p
+  const inner = doc.images
+  if (inner != null && typeof inner === 'object') {
+    if (Array.isArray(inner)) return distinctPairFromStringArray(inner as unknown[])
+    return tryImagesNestedObject(inner as Record<string, unknown>)
+  }
+  return null
+}
+
 /**
  * Extract front + back images from AUTO_SCAN_RESULT.
- * Python should send both after both sides are scanned (order of capture may be front-first or back-first;
- * host is responsible for labeling front vs back). Accepts several key shapes for compatibility.
+ * The host must send two different base64 strings when both sides exist. If top-level front/back are
+ * identical (common host bug: both set to last capture), we fall back to nested `images`, `document_data`,
+ * `captured_images`, or legacy `image_base64`.
  */
 export function extractIdCardImages(raw: Record<string, unknown>): { front: string; back: string } | null {
-  const fTop =
-    stringOrNull(raw.image_front_base64) ??
-    stringOrNull(raw.imageFrontBase64) ??
-    stringOrNull(raw.front_image_base64)
-  const bTop =
-    stringOrNull(raw.image_back_base64) ??
-    stringOrNull(raw.imageBackBase64) ??
-    stringOrNull(raw.back_image_base64)
-
-  if (fTop && bTop) return { front: fTop, back: bTop }
+  const root = extractSidesFromRecord(raw)
+  let p = distinctImagePair(root.f, root.b)
+  if (p) return p
 
   const nested = raw.images
-  if (nested != null && typeof nested === 'object' && !Array.isArray(nested)) {
-    const im = nested as Record<string, unknown>
-    const f =
-      stringOrNull(im.front_image_base64) ??
-      stringOrNull(im.frontImageBase64) ??
-      stringOrNull(im.front) ??
-      stringOrNull(im.image_front_base64)
-    const b =
-      stringOrNull(im.back_image_base64) ??
-      stringOrNull(im.backImageBase64) ??
-      stringOrNull(im.back) ??
-      stringOrNull(im.image_back_base64)
-    if (f && b) return { front: f, back: b }
+  if (nested != null && typeof nested === 'object') {
+    if (Array.isArray(nested)) {
+      p = distinctPairFromStringArray(nested as unknown[])
+      if (p) return p
+    } else {
+      p = tryImagesNestedObject(nested as Record<string, unknown>)
+      if (p) return p
+    }
+  }
+
+  const doc = raw.document_data
+  if (doc != null && typeof doc === 'object' && !Array.isArray(doc)) {
+    p = tryDocumentDataImages(doc as Record<string, unknown>)
+    if (p) return p
+  }
+
+  const captured = raw.captured_images
+  if (Array.isArray(captured)) {
+    p = distinctPairFromStringArray(captured)
+    if (p) return p
   }
 
   const legacy = stringOrNull(raw.image_base64)
   if (legacy) return { front: legacy, back: legacy }
+
+  if (root.f && root.b) return { front: root.f, back: root.b }
+  if (root.f || root.b) {
+    const one = root.f ?? root.b!
+    return { front: one, back: one }
+  }
 
   return null
 }
@@ -436,6 +488,12 @@ export function initNativeHost(
         const parsed = autoScanResultToParsed(raw as AutoScanResultMessage)
         const detail = idGuruDetailFromAutoScan(raw, document_data)
         const cardImages = extractIdCardImages(raw)!
+        if (cardImages.front === cardImages.back) {
+          console.warn(
+            `${LOG} AUTO_SCAN_RESULT: front and back payloads are the same string (${cardImages.front.length} chars). ` +
+              'The native host must assign a different image to image_front_base64 / image_back_base64 (or nested images.* / document_data.*).',
+          )
+        }
         console.log(`${LOG} AUTO_SCAN_RESULT derived flat (flattened):`, tryJson(flat))
         console.log(`${LOG} AUTO_SCAN_RESULT derived parsed (panel fields):`, tryJson(parsed))
         console.log(`${LOG} AUTO_SCAN_RESULT IdGuru detail:`, tryJson(detail))
