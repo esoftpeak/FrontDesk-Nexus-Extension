@@ -1,5 +1,8 @@
 import type { IdScanDetailGuru, ParsedIdFields } from '../shared/pms-types'
 
+/** AAMVA PDF417 uses these sentinel strings to indicate an absent field. */
+const AAMVA_SENTINELS = new Set(['NONE', 'UNAVAILABLE', 'N/A', 'NA'])
+
 function pick(
   doc: Record<string, unknown>,
   msg: Record<string, unknown>,
@@ -7,9 +10,9 @@ function pick(
 ): string | null {
   for (const k of keys) {
     const d = doc[k]
-    if (typeof d === 'string' && d.trim()) return d.trim()
+    if (typeof d === 'string' && d.trim() && !AAMVA_SENTINELS.has(d.trim().toUpperCase())) return d.trim()
     const v = msg[k]
-    if (typeof v === 'string' && v.trim()) return v.trim()
+    if (typeof v === 'string' && v.trim() && !AAMVA_SENTINELS.has(v.trim().toUpperCase())) return v.trim()
   }
   return null
 }
