@@ -208,17 +208,13 @@ export function extractIdCardImages(raw: Record<string, unknown>): { front: stri
     if (p) return p
   }
 
-  if (root.f && root.b && root.f === root.b && legacy) {
-    return { front: legacy, back: legacy }
-  }
+  // Explicit side keys are present: return them as-is (back may be empty string while
+  // the second scan pass is pending). Do NOT fill the empty slot from image_base64 —
+  // that duplicates a single image into both FRONT and BACK slots.
+  if (root.f || root.b) return { front: root.f ?? '', back: root.b ?? '' }
 
+  // True legacy path: no side keys at all, only image_base64 (single-image hosts).
   if (legacy) return { front: legacy, back: legacy }
-
-  if (root.f && root.b) return { front: root.f, back: root.b }
-  if (root.f || root.b) {
-    const one = root.f ?? root.b!
-    return { front: one, back: one }
-  }
 
   return null
 }
