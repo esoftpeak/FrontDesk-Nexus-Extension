@@ -113,20 +113,27 @@ function tryJson(value: unknown, maxLen = 50_000): string {
   }
 }
 
-/** Read candidate front/back base64 from a plain object (message root, `images`, or `document_data`). */
+/**
+ * Read candidate front / rear (back) base64 from one object (AUTO_SCAN_RESULT root, `images`, `document_data`, …).
+ * Matches Python host + Thales-style keys: canonical `image_*_base64` plus SDK `visible_image_*` / `visible_image_rear_base64`.
+ */
 function extractSidesFromRecord(rec: Record<string, unknown>): { f: string | null; b: string | null } {
   const f =
     stringOrNull(rec.image_front_base64) ??
     stringOrNull(rec.imageFrontBase64) ??
     stringOrNull(rec.front_image_base64) ??
-    stringOrNull(rec.front) ??
-    stringOrNull(rec.image_front_base64)
+    stringOrNull(rec.visible_image_front_base64) ??
+    stringOrNull(rec.visibleImageFrontBase64) ??
+    stringOrNull(rec.front)
   const b =
     stringOrNull(rec.image_back_base64) ??
     stringOrNull(rec.imageBackBase64) ??
     stringOrNull(rec.back_image_base64) ??
-    stringOrNull(rec.back) ??
-    stringOrNull(rec.image_back_base64)
+    stringOrNull(rec.visible_image_rear_base64) ??
+    stringOrNull(rec.visibleImageRearBase64) ??
+    stringOrNull(rec.visible_image_back_base64) ??
+    stringOrNull(rec.visibleImageBackBase64) ??
+    stringOrNull(rec.back)
   return { f, b }
 }
 
@@ -159,13 +166,22 @@ function tryDocumentDataImages(doc: Record<string, unknown>): { front: string; b
 }
 
 /**
- * Extract front + back images from AUTO_SCAN_RESULT.
- * The host must send two different base64 strings when both sides exist. If top-level front/back are
- * identical (common host bug: both set to last capture), we fall back to nested `images`, `document_data`,
- * `captured_images`, or legacy `image_base64`.
+ * Extract front + back images from `AUTO_SCAN_RESULT`.
+ *
+ * **Primary (Python contract):** `image_front_base64` and `image_back_base64` — both non-empty strings
+ * and **not identical** (see also SDK aliases in `extractSidesFromRecord`).
+ *
+ * **Fallback order:**
+ * 1. Distinct pair from root (canonical + `visible_image_*` / `visible_image_rear_base64`, …).
+ * 2. Distinct pair from nested `images`, `document_data` (incl. `document_data.images`), `captured_images`.
+ * 3. If root front & rear strings are **identical**, use legacy **`image_base64`** for both panels (same image twice).
+ * 4. Else legacy `image_base64` alone (single raster).
+ * 5. Else duplicate root pair or single side (last resort).
  */
 export function extractIdCardImages(raw: Record<string, unknown>): { front: string; back: string } | null {
+  const legacy = stringOrNull(raw.image_base64)
   const root = extractSidesFromRecord(raw)
+
   let p = distinctImagePair(root.f, root.b)
   if (p) return p
 
@@ -192,7 +208,10 @@ export function extractIdCardImages(raw: Record<string, unknown>): { front: stri
     if (p) return p
   }
 
-  const legacy = stringOrNull(raw.image_base64)
+  if (root.f && root.b && root.f === root.b && legacy) {
+    return { front: legacy, back: legacy }
+  }
+
   if (legacy) return { front: legacy, back: legacy }
 
   if (root.f && root.b) return { front: root.f, back: root.b }
@@ -202,6 +221,15 @@ export function extractIdCardImages(raw: Record<string, unknown>): { front: stri
   }
 
   return null
+}
+
+/** Lengths from primary root keys (canonical + SDK aliases) — use to verify SDK returned non-empty, distinct front vs rear. */
+function logAutoScanPrimaryImageStats(raw: Record<string, unknown>): void {
+  const root = extractSidesFromRecord(raw)
+  const xf = root.f?.length ?? 0
+  const xb = root.b?.length ?? 0
+  const identical = root.f != null && root.b != null && root.f === root.b
+  console.info(`${LOG} Image fetch: front_b64_chars=${xf} rear_b64_chars=${xb} identical=${identical}`)
 }
 
 /** DevTools: log inbound message with image/base64 fields replaced by length stats only. */
@@ -487,6 +515,7 @@ export function initNativeHost(
         const flat = flattenAutoScanFields(raw as AutoScanResultMessage)
         const parsed = autoScanResultToParsed(raw as AutoScanResultMessage)
         const detail = idGuruDetailFromAutoScan(raw, document_data)
+        logAutoScanPrimaryImageStats(raw)
         const cardImages = extractIdCardImages(raw)!
         if (cardImages.front === cardImages.back) {
           console.warn(
