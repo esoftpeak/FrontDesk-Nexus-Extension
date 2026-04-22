@@ -44,20 +44,36 @@ function synxisSet(el: HTMLInputElement | HTMLTextAreaElement, value: string): v
 }
 
 /**
- * The Guest Details modal is uniquely identified by a visible "Primary/Mobile Phone" input.
- * Using input presence avoids fragile textContent matching on container divs.
+ * SynXis inputs have NO placeholder text — they use Spark UI with spark-label spans.
+ * Detect the modal by the stable id="guest-first-name" input being visible.
  */
 function isGuestDetailsModalOpen(): boolean {
-  const el = document.querySelector<HTMLInputElement>('input[placeholder*="Mobile Phone" i]')
+  const el = document.getElementById('guest-first-name') as HTMLInputElement | null
+    ?? document.querySelector<HTMLInputElement>('input.spark-input__field')
   if (!el) return false
   const rect = el.getBoundingClientRect()
   return rect.width > 0 && rect.height > 0
 }
 
-function findInput(placeholderSubstr: string): HTMLInputElement | null {
-  return document.querySelector<HTMLInputElement>(
-    `input[placeholder*="${placeholderSubstr}" i], textarea[placeholder*="${placeholderSubstr}" i]`,
-  ) ?? null
+/**
+ * Spark UI: inputs have empty placeholder attributes.
+ * Find input via spark-label span text → closest label[for] → input#id.
+ */
+function findSynxisInput(labelSubstr: string): HTMLInputElement | null {
+  for (const span of Array.from(document.querySelectorAll<HTMLElement>('span.spark-label, label span'))) {
+    if ((span.textContent?.trim() ?? '').toLowerCase().includes(labelSubstr.toLowerCase())) {
+      const lbl = span.closest('label')
+      if (!lbl) continue
+      const forId = lbl.getAttribute('for')
+      if (forId) {
+        const el = document.getElementById(forId) as HTMLInputElement | null
+        if (el) return el
+      }
+      const el = lbl.querySelector<HTMLInputElement>('input, textarea')
+      if (el) return el
+    }
+  }
+  return null
 }
 
 function findSelect(labelSubstr: string): HTMLSelectElement | null {
@@ -117,25 +133,25 @@ async function fillSynxisGuestForm(data: FillPayload): Promise<void> {
 
   await sleep(400)
 
-  const textFields: Array<[string, string | null | undefined]> = [
-    ['First Name',      data.first_name],
-    ['Last Name',       data.last_name],
-    ['Middle',          data.middle_name ? data.middle_name.charAt(0) : null],
-    ['Mobile Phone',    data.phone ? normalizePhone(data.phone) : null],
-    ['Primary Email',   data.email],
-    ['Primary Address', data.address],
-    ['Zip',             data.postal_code],
-    ['City',            data.city],
+  // Use stable IDs where known, spark-label text search for dynamic IDs
+  const textFields: Array<[string, string | null | undefined, HTMLInputElement | null]> = [
+    ['First Name',     data.first_name,   document.getElementById('guest-first-name') as HTMLInputElement | null],
+    ['Last Name',      data.last_name,    document.getElementById('guest-last-name')  as HTMLInputElement | null],
+    ['Middle Initial', data.middle_name ? data.middle_name.charAt(0) : null, findSynxisInput('Middle')],
+    ['Mobile Phone',   data.phone ? normalizePhone(data.phone) : null,       findSynxisInput('Mobile Phone')],
+    ['Primary Email',  data.email,        findSynxisInput('Primary Email')],
+    ['Primary Address',data.address,      findSynxisInput('Primary Address')],
+    ['Zip',            data.postal_code,  findSynxisInput('Zip')],
+    ['City',           data.city,         findSynxisInput('City')],
   ]
 
-  for (const [placeholder, value] of textFields) {
+  for (const [label, value, el] of textFields) {
     if (!value) continue
-    const el = findInput(placeholder)
     if (el) {
       synxisSet(el, value)
-      console.log('[FDN SynXis] filled:', placeholder, '←', value)
+      console.log('[FDN SynXis] filled:', label, '←', value)
     } else {
-      console.warn('[FDN SynXis] input not found:', placeholder)
+      console.warn('[FDN SynXis] input not found:', label)
     }
     await sleep(80)
   }
