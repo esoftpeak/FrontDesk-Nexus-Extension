@@ -896,6 +896,29 @@ async function handleThalesNativeScan(payload: NativeScanSuccessPayload) {
     detail,
     documentData: payload.documentData ?? null,
   })
+
+  // Write normalised lastScanResult for eZee content-script auto-fill.
+  const docData = payload.documentData ?? {}
+  const pr = payload.parsed
+  await chrome.storage.local.set({
+    lastScanResult: {
+      first_name:    detail?.firstName  ?? null,
+      middle_name:   detail?.middleName ?? null,
+      last_name:     detail?.lastName   ?? null,
+      dob:           pr.dateOfBirth     ?? null,
+      id_number:     pr.idNumber        ?? null,
+      expiry_date:   pr.expiryDate      ?? null,
+      issue_date:    pr.issueDate       ?? null,
+      gender:        (typeof docData.gender === 'string' ? docData.gender
+                      : typeof docData.sex === 'string'  ? docData.sex
+                      : null),
+      address:       detail?.streetAddress ?? null,
+      city:          detail?.city          ?? null,
+      state:         detail?.state         ?? null,
+      postal_code:   detail?.postalCode    ?? null,
+      document_type: pr.idType            ?? null,
+    },
+  })
 }
 
 async function fetchIdScanHistoryForCurrentReservation(): Promise<ExtensionResponse> {
