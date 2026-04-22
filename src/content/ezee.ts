@@ -157,9 +157,9 @@ for (const ms of BACKUP_RUN_AT_MS) {
 
 chrome.runtime.onMessage.addListener(
   (
-    message: { type?: string; fields?: Record<string, string> },
+    message: { type?: string; fields?: Record<string, string>; payload?: LastScanResult },
     _sender: chrome.runtime.MessageSender,
-    sendResponse: (r: InjectResult | ReturnType<typeof buildExtractPayload>) => void,
+    sendResponse: (r: InjectResult | ReturnType<typeof buildExtractPayload> | { ok: boolean }) => void,
   ) => {
     if (message?.type === 'FDN_INJECT' && message.fields) {
       sendResponse(injectFields(EZEE_INJECT_SELECTORS, message.fields))
@@ -167,6 +167,13 @@ chrome.runtime.onMessage.addListener(
     }
     if (message?.type === 'EZEE_EXTRACT_NOW') {
       sendResponse(buildExtractPayload())
+      return
+    }
+    if (message?.type === 'FDN_FILL_GUEST_FORM') {
+      const payload = message.payload ?? null
+      console.log('[FDN] received FDN_FILL_GUEST_FORM, payload:', payload)
+      triggerFill(payload)
+      sendResponse({ ok: true })
       return
     }
   },
@@ -188,30 +195,6 @@ const US_STATES: Record<string, string> = {
   WI:'Wisconsin',WY:'Wyoming',DC:'District of Columbia',
 }
 
-const DOC_TYPE_MAP: Record<string, string> = {
-  DRIVERS_LICENSE:"Driving License",DRIVER_LICENSE:"Driving License",
-  DL:"Driving License",PASSPORT:'Passport',ID_CARD:'ID Card',
-  STATE_ID:'State ID',MILITARY_ID:'Military ID',
-}
-
-/** Normalize OCR doc type to match exact site option text. */
-function normalizeDocType(raw: string | null | undefined): string {
-  if (!raw) return ''
-  const key = raw.toLowerCase().trim()
-  const patterns: [string, string][] = [
-    ['driver', 'Driving License'],
-    ['driving', 'Driving License'],
-    ['passport', 'Passport'],
-    ['id card', 'ID Card'],
-    ['state id', 'State ID'],
-    ['military', 'Military ID'],
-  ]
-  for (const [pattern, mapped] of patterns) {
-    if (key.includes(pattern)) return mapped
-  }
-  const docKey = raw.toUpperCase().replace(/[\s\-]/g, '_')
-  return DOC_TYPE_MAP[docKey] ?? raw
-}
 
 type LastScanResult = {
   first_name:string|null; middle_name:string|null; last_name:string|null
@@ -221,11 +204,7 @@ type LastScanResult = {
   document_type:string|null; phone:string|null; email:string|null
 }
 
-// 'idle' → ready to fill; 'filling' → in progress; 'done' → filled this session
-type FillState = 'idle' | 'filling' | 'done'
-let _fillState: FillState = 'idle'
-let _noDataAttempts = 0
-let _sidebarWasOpen = false
+let _fillInProgress = false
 let _addResDebounce = 0
 
 const sleep = (ms: number) => new Promise<void>(r => window.setTimeout(r, ms))
@@ -234,11 +213,13 @@ const sleep = (ms: number) => new Promise<void>(r => window.setTimeout(r, ms))
 
 /** React-controlled input: must use native setter then dispatch events. */
 function reactSet(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  el.focus()
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
   if (setter) setter.call(el, value)
   else el.value = value
   el.dispatchEvent(new Event('input',  { bubbles: true }))
   el.dispatchEvent(new Event('change', { bubbles: true }))
+  el.blur()
 }
 
 function fillPlaceholder(placeholder: string, value: string | null | undefined): boolean {
@@ -337,108 +318,6 @@ async function fillCityWithPoll(cityItem: Element, cityName: string, maxWaitMs =
   return false
 }
 
-const MONTHS_SHORT = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
-
-function parseCalendarHeader(text: string): [number, number] {
-  const parts = text.trim().split(/\s+/)
-  const m = MONTHS_SHORT.findIndex(m => parts[0].toLowerCase().startsWith(m)) + 1
-  const y = parseInt(parts[1] ?? parts[0], 10)
-  return [m, y]
-}
-
-/**
- * Open an AntD date-picker, navigate to the correct month/year, then click the day cell.
- * dateStr format: "M/D/YYYY" (as stored from Thales OCR).
- */
-async function fillCalendarDate(labelText_: string, dateStr: string | null | undefined): Promise<void> {
-  if (!dateStr) return
-  const parts = dateStr.split('/')
-  if (parts.length < 3) return
-  const month = parseInt(parts[0], 10)
-  const day   = parseInt(parts[1], 10)
-  const year  = parseInt(parts[2], 10)
-  if (!month || !day || !year) return
-
-  const item = findFormItemByLabel(labelText_)
-  const input = (item ?? document).querySelector<HTMLInputElement>(
-    '.ant-picker-input input, input[class*="picker"], input[placeholder*="date" i], input[placeholder*="Date" i]'
-  )
-  if (!input) { console.warn('[FDN] date picker input not found for label:', labelText_); return }
-
-  input.click()
-  await sleep(500)
-
-  // Navigate to correct month/year (max 36 steps)
-  for (let i = 0; i < 36; i++) {
-    // AntD renders the picker panel outside the input — search whole document
-    const header = document.querySelector<HTMLElement>(
-      '.ant-picker-header-view, [class*="picker-header-view"]'
-    )
-    if (!header) { console.warn('[FDN] calendar header not found'); break }
-
-    const [dispMonth, dispYear] = parseCalendarHeader(header.textContent ?? '')
-    console.log('[FDN] calendar at:', dispMonth, dispYear, '→ target:', month, year)
-    if (dispYear === year && dispMonth === month) break
-
-    const goNext = dispYear < year || (dispYear === year && dispMonth < month)
-
-    // AntD month-navigation buttons: .ant-picker-header-next-btn / prev-btn
-    // Fallback: find by aria-label or by being the >/< button inside the header
-    const headerEl = header.closest('.ant-picker-header, [class*="picker-header"]') ?? header.parentElement
-    const buttons = headerEl
-      ? Array.from(headerEl.querySelectorAll<HTMLElement>('button, [role="button"]'))
-      : []
-
-    let navBtn: HTMLElement | null = null
-    if (goNext) {
-      navBtn =
-        document.querySelector<HTMLElement>('.ant-picker-header-next-btn') ??
-        buttons.find(b =>
-          b.className.includes('next') && !b.className.includes('super') ||
-          (b.getAttribute('aria-label') ?? '').toLowerCase().includes('next month')
-        ) ?? null
-    } else {
-      navBtn =
-        document.querySelector<HTMLElement>('.ant-picker-header-prev-btn') ??
-        buttons.find(b =>
-          b.className.includes('prev') && !b.className.includes('super') ||
-          (b.getAttribute('aria-label') ?? '').toLowerCase().includes('prev month')
-        ) ?? null
-    }
-
-    if (!navBtn) {
-      console.warn('[FDN] calendar nav button not found; buttons:', buttons.map(b => b.className))
-      break
-    }
-    navBtn.click()
-    await sleep(250)
-  }
-
-  await sleep(150)
-
-  // Click the correct day — restrict to cells in the current view month (.ant-picker-cell-in-view)
-  const inView = Array.from(document.querySelectorAll<HTMLElement>(
-    '.ant-picker-cell.ant-picker-cell-in-view:not(.ant-picker-cell-disabled) .ant-picker-cell-inner, ' +
-    '[class*="picker-cell-in-view"]:not([class*="disabled"]) [class*="cell-inner"]'
-  ))
-  // Fallback: all gridcells if AntD-specific selectors find nothing
-  const cells = inView.length > 0
-    ? inView
-    : Array.from(document.querySelectorAll<HTMLElement>(
-        '[role="gridcell"]:not([aria-disabled="true"]), td:not([class*="disabled"]):not([class*="outside"])'
-      ))
-  console.log('[FDN] calendar day cells:', cells.map(c => c.textContent?.trim()))
-
-  const match = cells.find(c => c.textContent?.trim() === String(day))
-  if (match) {
-    match.click()
-    console.log('[FDN] calendar date selected:', dateStr)
-    await sleep(150)
-  } else {
-    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-    console.warn('[FDN] calendar: day cell not found for day', day)
-  }
-}
 
 // ── storage ──────────────────────────────────────────────────────────────────
 
@@ -519,30 +398,19 @@ function isSidebarClosed(): boolean {
 
 // ── fill orchestrator ────────────────────────────────────────────────────────
 
-async function autoFillGuestInfo(): Promise<void> {
-  if (_fillState !== 'idle') return
-  _fillState = 'filling'
+async function autoFillGuestInfo(scan: LastScanResult): Promise<void> {
+  if (_fillInProgress) { console.log('[FDN] fill already in progress — skipped'); return }
+  _fillInProgress = true
 
-  const scan = await getLastScanResult()
-  if (!scan) {
-    _noDataAttempts++
-    console.warn(`[FDN] autoFill: no scan data in storage (attempt ${_noDataAttempts})`)
-    // After 5 failed attempts give up until sidebar reopens
-    _fillState = _noDataAttempts >= 5 ? 'done' : 'idle'
-    return
-  }
-
-  console.log('[FDN] autoFill: starting fill', { first: scan.first_name, last: scan.last_name, state: scan.state })
-  await sleep(400) // let form fully render
+  console.log('[FDN] autoFill: starting', { first: scan.first_name, last: scan.last_name })
+  await sleep(400)
 
   // ── Title prefix ────────────────────────────────────────────────────────────
   if (scan.gender) {
     const g = scan.gender.toUpperCase()
     const title = (g === 'F' || g === 'FEMALE') ? 'Ms.' : 'Mr.'
-    // Title prefix select sits in the same row as Full Name input
     const fullNameEl = document.querySelector<HTMLInputElement>('input[placeholder="Full Name"]')
     if (fullNameEl) {
-      // Walk up to find the row/form-item, then find the first ant-select inside it
       let node: Element | null = fullNameEl.parentElement
       let titleTrigger: HTMLElement | null = null
       for (let i = 0; i < 8 && node; i++) {
@@ -550,141 +418,103 @@ async function autoFillGuestInfo(): Promise<void> {
         if (titleTrigger) break
         node = node.parentElement
       }
-      if (titleTrigger) {
-        await openAndPickOption(titleTrigger, title, 200)
-        await sleep(100)
-      }
+      if (titleTrigger) { await openAndPickOption(titleTrigger, title, 200); await sleep(100) }
     }
   }
 
-  // ── Text inputs ─────────────────────────────────────────────────────────────
+  // ── Full Name ────────────────────────────────────────────────────────────────
   const fullName = [scan.first_name, scan.last_name].filter(Boolean).join(' ')
   fillPlaceholder('Full Name', fullName)
 
   // ── Mobile ──────────────────────────────────────────────────────────────────
   if (scan.phone) {
     const raw = scan.phone.replace(/\D/g, '')
-    // Strip country code only when 11 digits starting with "1" (US +1 prefix)
     const digits = (raw.length === 11 && raw.startsWith('1')) ? raw.slice(1) : raw
-    console.log('[FDN] phone value:', scan.phone, '→ digits:', digits)
+    console.log('[FDN] phone:', scan.phone, '→', digits)
     const mobileEl = document.querySelector<HTMLInputElement>('input[placeholder="Mobile"]')
     if (mobileEl) reactSet(mobileEl, digits)
     else console.warn('[FDN] Mobile input not found')
   }
 
-  // ── Email (BUG 2 fix) ────────────────────────────────────────────────────────
-  console.log('[FDN] email value:', scan.email)
+  // ── Email ────────────────────────────────────────────────────────────────────
+  console.log('[FDN] email:', scan.email)
   if (scan.email) {
     const emailEl = document.querySelector<HTMLInputElement>('input[placeholder="Email"]')
     if (emailEl) reactSet(emailEl, scan.email)
     else console.warn('[FDN] Email input not found')
   }
 
+  // ── Address / Zip ────────────────────────────────────────────────────────────
   fillPlaceholder('Address', scan.address)
   fillPlaceholder('Zip', scan.postal_code)
 
   // ── Country ─────────────────────────────────────────────────────────────────
   await fillDropdownByLabel('Country', 'United States of America')
 
-  // ── State (2-letter code → full state name) ──────────────────────────────────
+  // ── State ────────────────────────────────────────────────────────────────────
   const stateCode = (scan.state ?? '').toUpperCase().trim()
   const stateName = US_STATES[stateCode] ?? scan.state ?? ''
   if (stateName) {
     await fillDropdownByLabel('State', stateName)
-    await sleep(500) // City options cascade from State — wait for them to load
+    await sleep(500)
   }
 
   // ── City ─────────────────────────────────────────────────────────────────────
   if (scan.city) {
     const cityItem = findFormItemByLabel('City')
-    if (cityItem) {
-      await fillCityWithPoll(cityItem, scan.city)
-    } else {
-      console.warn('[FDN] City form item not found')
-    }
+    if (cityItem) await fillCityWithPoll(cityItem, scan.city)
+    else console.warn('[FDN] City form item not found')
   }
 
-  // ── ID Number ────────────────────────────────────────────────────────────────
-  fillPlaceholder('ID Number', scan.id_number)
-
-  // ── ID Type — portal-rendered options, use normalizeDocType for site text match ──
-  const docLabel = normalizeDocType(scan.document_type)
-  if (docLabel) {
-    const idTypeItem = findFormItemByLabel('ID Type')
-    const idTypeTrigger = idTypeItem
-      ? getAntSelectTrigger(idTypeItem)
-      : document.querySelector<HTMLElement>(
-          '[class*="idType"] .ant-select-selector, [class*="id-type"] .ant-select-selector'
-        )
-    if (idTypeTrigger) {
-      console.log('[FDN] ID Type: clicking trigger')
-      idTypeTrigger.click()
-      await sleep(400)
-      // Options render in a portal at body level — use [role="option"] + broad selectors
-      const opts = Array.from(document.querySelectorAll<HTMLElement>(
-        '[role="option"], .ant-select-item-option-content, .ant-select-item, [class*="option-content"], [class*="option-item"]'
-      ))
-      console.log('[FDN] ID Type options:', opts.map(o => o.textContent?.trim()))
-      const needle = docLabel.toLowerCase()
-      const match =
-        opts.find(o => (o.textContent?.trim() ?? '').toLowerCase() === needle) ??
-        opts.find(o => (o.textContent?.trim() ?? '').toLowerCase().includes(needle))
-      if (match) {
-        match.click()
-        console.log('[FDN] ID Type selected →', match.textContent?.trim())
-        await sleep(120)
-      } else {
-        document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-        console.warn('[FDN] ID Type: no match for', docLabel)
-      }
-    } else {
-      console.warn('[FDN] ID Type trigger not found')
-    }
-  }
-
-  // ── Expiry Date (BUG 4 fix) — navigate calendar and click day cell ───────────
-  if (scan.expiry_date) {
-    await fillCalendarDate('expiry_date', scan.expiry_date)
-  }
-
-  _fillState = 'done'
+  _fillInProgress = false
   console.log('[FDN] autoFill: complete ✓')
 }
 
-// ── observer ─────────────────────────────────────────────────────────────────
+// ── trigger (called from message listener) ───────────────────────────────────
 
-function checkGuestForm(): void {
-  const visible = isGuestFormVisible()
-  console.log('[FDN] checkGuestForm:', { visible, fillState: _fillState })
+function triggerFill(payload: LastScanResult | null): void {
+  void (async () => {
+    const scan = payload ?? await getLastScanResult()
+    if (!scan) { console.warn('[FDN] triggerFill: no scan data'); return }
 
-  // Detect sidebar close → reset for next open
-  if (_sidebarWasOpen && !visible && isSidebarClosed()) {
-    _fillState = 'idle'
-    _noDataAttempts = 0
-    _sidebarWasOpen = false
-    console.log('[FDN] Add Reservation closed — fill state reset')
-    return
-  }
-
-  if (visible) {
-    _sidebarWasOpen = true
-    if (_fillState === 'idle') {
-      console.log('[FDN] Guest form visible + idle → starting autoFill')
-      void autoFillGuestInfo()
+    if (isGuestFormVisible()) {
+      void autoFillGuestInfo(scan)
+      return
     }
-  }
+
+    // Step 2 not open yet — wait up to 30 s
+    console.log('[FDN] Guest form not visible yet — waiting...')
+    const obs = new MutationObserver(() => {
+      if (isGuestFormVisible()) {
+        obs.disconnect()
+        window.clearTimeout(timeout)
+        setTimeout(() => void autoFillGuestInfo(scan), 300)
+      }
+    })
+    obs.observe(document.body, { childList: true, subtree: true, attributes: true })
+    const timeout = window.setTimeout(() => {
+      obs.disconnect()
+      console.warn('[FDN] triggerFill: timed out waiting for Guest form')
+    }, 30_000)
+  })()
 }
+
+// ── modal-close observer (resets fill guard when modal dismissed) ─────────────
 
 const addResObserver = new MutationObserver(() => {
   window.clearTimeout(_addResDebounce)
-  _addResDebounce = window.setTimeout(checkGuestForm, 180)
+  _addResDebounce = window.setTimeout(() => {
+    if (_fillInProgress && isSidebarClosed()) {
+      _fillInProgress = false
+      console.log('[FDN] Add Reservation closed — fill guard reset')
+    }
+  }, 180)
 })
 addResObserver.observe(document.body, {
   subtree: true,
   childList: true,
   attributes: true,
-  attributeFilter: ['class', 'style', 'aria-selected', 'aria-expanded', 'aria-hidden'],
+  attributeFilter: ['class', 'style', 'aria-hidden'],
 })
-console.log('[FDN] addResObserver registered on document.body')
 
 export {}

@@ -10,7 +10,6 @@ import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
 import { ageLabelFromDobString, mergeParsedWithGuru } from './lib/id-guru-fields'
 import { transformBase64ImageSync } from './lib/imageTransform'
-import { splitGuestName } from './lib/name-format'
 import './sidepanel.css'
 
 const emptyParsed: ParsedIdFields = {
@@ -215,7 +214,7 @@ function App() {
     void refresh()
   }
 
-  async function onSave() {
+  async function onSave(fillTab = false) {
     setBusy(true)
     setNotice(null)
     try {
@@ -262,6 +261,41 @@ function App() {
       setShowManagerModal(false)
       void refresh()
       void refreshIdScanHistory()
+
+      if (fillTab) {
+        try {
+          const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+          const tabId = tabs[0]?.id
+          if (tabId) {
+            const docData = lastDocumentData ?? {}
+            await chrome.tabs.sendMessage(tabId, {
+              type: 'FDN_FILL_GUEST_FORM',
+              payload: {
+                first_name:   detailForSave.firstName   ?? null,
+                middle_name:  detailForSave.middleName  ?? null,
+                last_name:    detailForSave.lastName     ?? null,
+                address:      detailForSave.streetAddress ?? null,
+                city:         detailForSave.city         ?? null,
+                state:        detailForSave.state        ?? null,
+                postal_code:  detailForSave.postalCode   ?? null,
+                phone:        phone.trim() || null,
+                email:        emailGuest.trim() || null,
+                gender:       (typeof docData.gender === 'string' ? docData.gender
+                               : typeof (docData as Record<string,unknown>).sex === 'string'
+                                 ? (docData as Record<string,unknown>).sex as string
+                               : null),
+                dob:          mergedParsed.dateOfBirth ?? null,
+                id_number:    null,
+                expiry_date:  null,
+                issue_date:   null,
+                document_type: null,
+              },
+            })
+          }
+        } catch (e) {
+          console.warn('[FDN] Could not send fill command to tab:', e)
+        }
+      }
     } finally {
       setBusy(false)
     }
@@ -288,46 +322,6 @@ function App() {
     }
   }
 
-  async function onInjectPms() {
-    const split = splitGuestName(parsed.fullName)
-    const firstName = idDetail.firstName?.trim() || split.firstName
-    const lastName = idDetail.lastName?.trim() || split.lastName
-    const structuredAddr = [
-      idDetail.streetAddress,
-      idDetail.city,
-      idDetail.state,
-      idDetail.postalCode,
-    ]
-      .filter(Boolean)
-      .join(', ')
-    setBusy(true)
-    setNotice(null)
-    try {
-      const res = (await chrome.runtime.sendMessage({
-        type: 'INJECT_PMS',
-        fields: {
-          firstName,
-          lastName,
-          middleName: idDetail.middleName ?? '',
-          phone: phone.trim(),
-          email: emailGuest.trim(),
-          address: structuredAddr || (parsed.address ?? ''),
-        },
-      })) as { ok: boolean; error?: string; inject?: { ok: boolean; error?: string; applied?: string[] } }
-      if (!res.ok) {
-        setNotice(res.error ?? 'Inject failed')
-        return
-      }
-      const inj = res.inject
-      if (inj && 'ok' in inj && inj.ok) {
-        setNotice(`Injected fields: ${(inj.applied ?? []).join(', ')}`)
-      } else if (inj && 'ok' in inj && !inj.ok) {
-        setNotice(inj.error ?? 'PMS inject reported failure')
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
 
   async function onGetGuestData() {
     setBusy(true)
@@ -925,17 +919,17 @@ function App() {
             type="button"
             className="fdn-btn fdn-btn--primary"
             disabled={busy || !state.auth.signedIn}
-            onClick={() => void onSave()}
+            onClick={() => void onSave(true)}
           >
-            Save to Supabase
+            Save DB &amp; PMS
           </button>
           <button
             type="button"
             className="fdn-btn fdn-btn--secondary"
             disabled={busy || !state.auth.signedIn}
-            onClick={() => void onInjectPms()}
+            onClick={() => void onSave(false)}
           >
-            Save &amp; write to PMS (inject)
+            Save DB
           </button>
         </div>
       </section>

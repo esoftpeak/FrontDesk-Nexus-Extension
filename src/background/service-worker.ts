@@ -839,6 +839,17 @@ async function saveIdScan(args: {
   })
   if (audErr) console.warn('audit_log insert', audErr.message)
 
+  // Patch lastScanResult with manually-entered phone/email so content scripts can read them.
+  const stored = await chrome.storage.local.get('lastScanResult')
+  const prev = (stored.lastScanResult ?? {}) as Record<string, unknown>
+  await chrome.storage.local.set({
+    lastScanResult: {
+      ...prev,
+      phone: args.phone?.trim() || prev.phone || null,
+      email: args.email?.trim() || prev.email || null,
+    },
+  })
+
   return { ok: true, state: await getState() }
 }
 
