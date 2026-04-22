@@ -501,18 +501,9 @@ async function autoFillGuestDetailsTab(scan: LastScanResult): Promise<void> {
     }
   }
 
-  // ── Full Name input ───────────────────────────────────────────────────────────
+  // ── Full Name input (placeholder="Name", id="GuestTranDetails_name") ─────────
   const fullName = [scan.first_name, scan.last_name].filter(Boolean).join(' ')
-  const nameInput = Array.from(document.querySelectorAll<HTMLInputElement>('input')).find(i => {
-    const ph = (i.placeholder ?? '').toLowerCase()
-    if (ph.includes('search') || ph.includes('quick')) return false
-    const rect = i.getBoundingClientRect()
-    if (rect.width === 0 || rect.height === 0) return false
-    const formItem = i.closest('.ant-form-item, [class*="form-item"], [class*="form-row"]')
-    if (!formItem) return false
-    return Array.from(formItem.querySelectorAll('label, [class*="label"]'))
-      .some(l => labelText(l) === 'Name')
-  })
+  const nameInput = document.querySelector<HTMLInputElement>('input[placeholder="Name"]')
   if (nameInput) { reactSet(nameInput, fullName); await sleep(100) }
   else console.warn('[FDN] Guest Details: Name input not found')
 
@@ -562,17 +553,6 @@ async function autoFillGuestDetailsTab(scan: LastScanResult): Promise<void> {
     const cityItem = findFormItemByLabel('City')
     if (cityItem) await fillCityWithPoll(cityItem, scan.city)
     else console.warn('[FDN] Guest Details: City form item not found')
-  }
-
-  // ── Click Save ────────────────────────────────────────────────────────────────
-  await sleep(300)
-  const saveBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-    .find(b => b.textContent?.trim() === 'Save' && (b as HTMLElement).offsetParent !== null)
-  if (saveBtn) {
-    saveBtn.click()
-    console.log('[FDN] Guest Details: Save clicked ✓')
-  } else {
-    console.warn('[FDN] Guest Details: Save button not found — click manually')
   }
 
   _fillInProgress = false
