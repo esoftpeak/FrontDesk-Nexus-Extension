@@ -199,7 +199,7 @@ type LastScanResult = {
   dob:string|null; id_number:string|null; expiry_date:string|null
   issue_date:string|null; gender:string|null; address:string|null
   city:string|null; state:string|null; postal_code:string|null
-  document_type:string|null
+  document_type:string|null; phone:string|null; email:string|null
 }
 
 // 'idle' → ready to fill; 'filling' → in progress; 'done' → filled this session
@@ -318,19 +318,70 @@ async function fillCityWithPoll(cityItem: Element, cityName: string, maxWaitMs =
   return false
 }
 
-async function fillDatePicker(labelText_: string, dateStr: string | null | undefined): Promise<void> {
+const MONTHS_SHORT = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+
+function parseCalendarHeader(text: string): [number, number] {
+  const parts = text.trim().split(/\s+/)
+  const m = MONTHS_SHORT.findIndex(m => parts[0].toLowerCase().startsWith(m)) + 1
+  const y = parseInt(parts[1] ?? parts[0], 10)
+  return [m, y]
+}
+
+/**
+ * Open an AntD date-picker, navigate to the correct month/year, then click the day cell.
+ * dateStr format: "M/D/YYYY" (as stored from Thales OCR).
+ */
+async function fillCalendarDate(labelText_: string, dateStr: string | null | undefined): Promise<void> {
   if (!dateStr) return
+  const parts = dateStr.split('/')
+  if (parts.length < 3) return
+  const month = parseInt(parts[0], 10)
+  const day   = parseInt(parts[1], 10)
+  const year  = parseInt(parts[2], 10)
+  if (!month || !day || !year) return
+
   const item = findFormItemByLabel(labelText_)
   const input = (item ?? document).querySelector<HTMLInputElement>(
     '.ant-picker-input input, input[class*="picker"], input[placeholder*="date" i], input[placeholder*="Date" i]'
   )
   if (!input) { console.warn('[FDN] date picker input not found for label:', labelText_); return }
-  input.focus()
-  reactSet(input, dateStr)
-  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await sleep(150)
-  document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-  console.log('[FDN] date filled:', labelText_, '←', dateStr)
+
+  input.click()
+  await sleep(400)
+
+  // Navigate to correct month/year (max 36 months)
+  for (let i = 0; i < 36; i++) {
+    const header = document.querySelector<HTMLElement>(
+      '.ant-picker-header-view, [class*="picker-header-view"], [class*="calendar-header"]'
+    )
+    if (!header) break
+    const [dispMonth, dispYear] = parseCalendarHeader(header.textContent ?? '')
+    if (dispYear === year && dispMonth === month) break
+    const goNext = dispYear < year || (dispYear === year && dispMonth < month)
+    const navBtn = document.querySelector<HTMLElement>(
+      goNext
+        ? '.ant-picker-next-icon, [class*="picker-next"], [aria-label*="next month" i], button[class*="next"]'
+        : '.ant-picker-prev-icon, [class*="picker-prev"], [aria-label*="prev month" i], button[class*="prev"]'
+    )
+    if (!navBtn) break
+    navBtn.click()
+    await sleep(200)
+  }
+
+  // Click the correct day cell
+  const cells = Array.from(document.querySelectorAll<HTMLElement>(
+    '.ant-picker-cell:not(.ant-picker-cell-disabled) .ant-picker-cell-inner, [class*="picker-cell"]:not([class*="disabled"]) [class*="cell-inner"], [role="gridcell"]:not([aria-disabled="true"])'
+  ))
+  console.log('[FDN] calendar day cells:', cells.map(c => c.textContent?.trim()))
+  const match = cells.find(c => c.textContent?.trim() === String(day))
+  if (match) {
+    match.click()
+    console.log('[FDN] calendar date selected:', dateStr)
+    await sleep(150)
+  } else {
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    console.warn('[FDN] calendar: day cell not found for day', day)
+  }
 }
 
 // ── storage ──────────────────────────────────────────────────────────────────
@@ -375,6 +426,8 @@ async function getLastScanResult(): Promise<LastScanResult | null> {
     state:         (d.state         ?? null) as string|null,
     postal_code:   (d.postalCode    ?? null) as string|null,
     document_type: (p.idType        ?? null) as string|null,
+    phone:         (d.phone         ?? null) as string|null,
+    email:         (d.email         ?? null) as string|null,
   }
 }
 
@@ -451,6 +504,24 @@ async function autoFillGuestInfo(): Promise<void> {
   // ── Text inputs ─────────────────────────────────────────────────────────────
   const fullName = [scan.first_name, scan.last_name].filter(Boolean).join(' ')
   fillPlaceholder('Full Name', fullName)
+
+  // ── Mobile (BUG 1 fix) ───────────────────────────────────────────────────────
+  if (scan.phone) {
+    const digits = scan.phone.replace(/^\+?1/, '').replace(/\D/g, '')
+    console.log('[FDN] phone value:', scan.phone, '→ digits:', digits)
+    const mobileEl = document.querySelector<HTMLInputElement>('input[placeholder="Mobile"]')
+    if (mobileEl) reactSet(mobileEl, digits)
+    else console.warn('[FDN] Mobile input not found')
+  }
+
+  // ── Email (BUG 2 fix) ────────────────────────────────────────────────────────
+  console.log('[FDN] email value:', scan.email)
+  if (scan.email) {
+    const emailEl = document.querySelector<HTMLInputElement>('input[placeholder="Email"]')
+    if (emailEl) reactSet(emailEl, scan.email)
+    else console.warn('[FDN] Email input not found')
+  }
+
   fillPlaceholder('Address', scan.address)
   fillPlaceholder('Zip', scan.postal_code)
 
@@ -475,15 +546,49 @@ async function autoFillGuestInfo(): Promise<void> {
     }
   }
 
-  // ── Identity section ─────────────────────────────────────────────────────────
+  // ── ID Number ────────────────────────────────────────────────────────────────
   fillPlaceholder('ID Number', scan.id_number)
 
+  // ── ID Type (BUG 3 fix) — portal-rendered options, targeted by role="option" ──
   const docKey = (scan.document_type ?? '').toUpperCase().replace(/[\s\-]/g, '_')
   const docLabel = DOC_TYPE_MAP[docKey] ?? scan.document_type ?? ''
-  if (docLabel) await fillDropdownByLabel('ID Type', docLabel)
+  if (docLabel) {
+    const idTypeItem = findFormItemByLabel('ID Type')
+    const idTypeTrigger = idTypeItem
+      ? getAntSelectTrigger(idTypeItem)
+      : document.querySelector<HTMLElement>(
+          '[class*="idType"] .ant-select-selector, [class*="id-type"] .ant-select-selector'
+        )
+    if (idTypeTrigger) {
+      console.log('[FDN] ID Type: clicking trigger')
+      idTypeTrigger.click()
+      await sleep(400)
+      // Options render in a portal at body level — use [role="option"] + broad selectors
+      const opts = Array.from(document.querySelectorAll<HTMLElement>(
+        '[role="option"], .ant-select-item-option-content, .ant-select-item, [class*="option-content"], [class*="option-item"]'
+      ))
+      console.log('[FDN] ID Type options:', opts.map(o => o.textContent?.trim()))
+      const needle = docLabel.toLowerCase()
+      const match =
+        opts.find(o => (o.textContent?.trim() ?? '').toLowerCase() === needle) ??
+        opts.find(o => (o.textContent?.trim() ?? '').toLowerCase().includes(needle))
+      if (match) {
+        match.click()
+        console.log('[FDN] ID Type selected →', match.textContent?.trim())
+        await sleep(120)
+      } else {
+        document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        console.warn('[FDN] ID Type: no match for', docLabel)
+      }
+    } else {
+      console.warn('[FDN] ID Type trigger not found')
+    }
+  }
 
-  // ── Expiry Date ──────────────────────────────────────────────────────────────
-  await fillDatePicker('Expiry Date', scan.expiry_date)
+  // ── Expiry Date (BUG 4 fix) — navigate calendar and click day cell ───────────
+  if (scan.expiry_date) {
+    await fillCalendarDate('expiry_date', scan.expiry_date)
+  }
 
   _fillState = 'done'
   console.log('[FDN] autoFill: complete ✓')

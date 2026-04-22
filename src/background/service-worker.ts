@@ -917,6 +917,8 @@ async function handleThalesNativeScan(payload: NativeScanSuccessPayload) {
       state:         detail?.state         ?? null,
       postal_code:   detail?.postalCode    ?? null,
       document_type: pr.idType            ?? null,
+      phone:         detail?.phone?.trim()  || null,
+      email:         detail?.email?.trim()  || null,
     },
   })
 }
