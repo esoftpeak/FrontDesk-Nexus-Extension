@@ -161,20 +161,26 @@ function normalizePhone(phone: string): string {
 }
 
 function triggerSynxisFill(payload: FillPayload | null): void {
+  console.log('[FDN SynXis] triggerFill called', { hasPayload: !!payload, isModalOpen: isGuestDetailsModalOpen() })
   void (async () => {
     if (!payload) { console.warn('[FDN SynXis] triggerFill: no payload'); return }
 
+    // Reset stuck guard from any previous failed fill
+    _synxisFillInProgress = false
+
     if (isGuestDetailsModalOpen()) {
+      // Modal already open — fill immediately
       await fillSynxisGuestForm(payload)
       return
     }
 
-    console.log('[FDN SynXis] Guest Details modal not open yet — waiting...')
+    // Modal not yet open — wait up to 30s via observer
+    console.log('[FDN SynXis] modal not detected yet, waiting...')
     const obs = new MutationObserver(() => {
-      if (isGuestDetailsModalOpen()) {
+      if (isGuestDetailsModalOpen() && !_synxisFillInProgress) {
         obs.disconnect()
         window.clearTimeout(timeout)
-        window.setTimeout(() => void fillSynxisGuestForm(payload), 600)
+        window.setTimeout(() => void fillSynxisGuestForm(payload), 400)
       }
     })
     obs.observe(document.body, { childList: true, subtree: true })
@@ -312,6 +318,7 @@ chrome.runtime.onMessage.addListener(
       return true
     }
     if (message?.type === 'FDN_FILL_GUEST_FORM') {
+      console.log('[FDN SynXis] FDN_FILL_GUEST_FORM received')
       triggerSynxisFill((message as { type: string; payload?: FillPayload }).payload ?? null)
       sendResponse({ ok: true })
       return
