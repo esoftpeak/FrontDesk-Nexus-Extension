@@ -396,6 +396,17 @@ function isSidebarClosed(): boolean {
   return !allTitles.some(el => el.textContent?.includes('Add Reservation'))
 }
 
+/**
+ * Guest Details TAB (reservation detail page) is visible when Phone input is
+ * present and visible. The Add Reservation modal uses "Mobile" not "Phone".
+ */
+function isGuestDetailsTabVisible(): boolean {
+  const el = document.querySelector<HTMLInputElement>('input[placeholder="Phone"]')
+  if (!el) return false
+  const rect = el.getBoundingClientRect()
+  return rect.width > 0 && rect.height > 0
+}
+
 // ── fill orchestrator ────────────────────────────────────────────────────────
 
 async function autoFillGuestInfo(scan: LastScanResult): Promise<void> {
@@ -470,6 +481,104 @@ async function autoFillGuestInfo(scan: LastScanResult): Promise<void> {
   console.log('[FDN] autoFill: complete ✓')
 }
 
+// ── Guest Details tab fill ───────────────────────────────────────────────────
+
+async function autoFillGuestDetailsTab(scan: LastScanResult): Promise<void> {
+  if (_fillInProgress) { console.log('[FDN] Guest Details fill already in progress — skipped'); return }
+  _fillInProgress = true
+  console.log('[FDN] Guest Details tab fill started', { first: scan.first_name, last: scan.last_name })
+
+  await sleep(300)
+
+  // ── Title prefix ─────────────────────────────────────────────────────────────
+  if (scan.gender) {
+    const g = scan.gender.toUpperCase()
+    const title = (g === 'F' || g === 'FEMALE') ? 'Ms.' : 'Mr.'
+    const nameFormItem = findFormItemByLabel('Name')
+    if (nameFormItem) {
+      const trigger = getAntSelectTrigger(nameFormItem)
+      if (trigger) { await openAndPickOption(trigger, title, 200); await sleep(100) }
+    }
+  }
+
+  // ── Full Name input ───────────────────────────────────────────────────────────
+  const fullName = [scan.first_name, scan.last_name].filter(Boolean).join(' ')
+  const nameInput = Array.from(document.querySelectorAll<HTMLInputElement>('input')).find(i => {
+    const ph = (i.placeholder ?? '').toLowerCase()
+    if (ph.includes('search') || ph.includes('quick')) return false
+    const rect = i.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return false
+    const formItem = i.closest('.ant-form-item, [class*="form-item"], [class*="form-row"]')
+    if (!formItem) return false
+    return Array.from(formItem.querySelectorAll('label, [class*="label"]'))
+      .some(l => labelText(l) === 'Name')
+  })
+  if (nameInput) { reactSet(nameInput, fullName); await sleep(100) }
+  else console.warn('[FDN] Guest Details: Name input not found')
+
+  // ── Phone + Mobile ────────────────────────────────────────────────────────────
+  if (scan.phone) {
+    const raw = scan.phone.replace(/\D/g, '')
+    const digits = (raw.length === 11 && raw.startsWith('1')) ? raw.slice(1) : raw
+    const phoneEl = document.querySelector<HTMLInputElement>('input[placeholder="Phone"]')
+    if (phoneEl) { reactSet(phoneEl, digits); await sleep(80) }
+    else console.warn('[FDN] Guest Details: Phone input not found')
+    const mobileEl = document.querySelector<HTMLInputElement>('input[placeholder="Mobile"]')
+    if (mobileEl) { reactSet(mobileEl, digits); await sleep(80) }
+  }
+
+  // ── Email ─────────────────────────────────────────────────────────────────────
+  if (scan.email) {
+    const emailEl = document.querySelector<HTMLInputElement>('input[placeholder="Email"]')
+    if (emailEl) { reactSet(emailEl, scan.email); await sleep(80) }
+    else console.warn('[FDN] Guest Details: Email input not found')
+  }
+
+  // ── Gender dropdown ───────────────────────────────────────────────────────────
+  if (scan.gender) {
+    const g = scan.gender.toUpperCase()
+    await fillDropdownByLabel('Gender', (g === 'F' || g === 'FEMALE') ? 'Female' : 'Male')
+    await sleep(200)
+  }
+
+  // ── Address / Zip ─────────────────────────────────────────────────────────────
+  fillPlaceholder('Address', scan.address)
+  await sleep(80)
+  fillPlaceholder('Zip', scan.postal_code)
+  await sleep(80)
+
+  // ── Country → State → City (order matters: state loads city options) ──────────
+  await fillDropdownByLabel('Country', 'United States of America')
+  await sleep(400)
+
+  const stateCode = (scan.state ?? '').toUpperCase().trim()
+  const stateName = US_STATES[stateCode] ?? scan.state ?? ''
+  if (stateName) {
+    await fillDropdownByLabel('State', stateName)
+    await sleep(600)
+  }
+
+  if (scan.city) {
+    const cityItem = findFormItemByLabel('City')
+    if (cityItem) await fillCityWithPoll(cityItem, scan.city)
+    else console.warn('[FDN] Guest Details: City form item not found')
+  }
+
+  // ── Click Save ────────────────────────────────────────────────────────────────
+  await sleep(300)
+  const saveBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+    .find(b => b.textContent?.trim() === 'Save' && (b as HTMLElement).offsetParent !== null)
+  if (saveBtn) {
+    saveBtn.click()
+    console.log('[FDN] Guest Details: Save clicked ✓')
+  } else {
+    console.warn('[FDN] Guest Details: Save button not found — click manually')
+  }
+
+  _fillInProgress = false
+  console.log('[FDN] Guest Details tab fill complete ✓')
+}
+
 // ── trigger (called from message listener) ───────────────────────────────────
 
 function triggerFill(payload: LastScanResult | null): void {
@@ -482,19 +591,28 @@ function triggerFill(payload: LastScanResult | null): void {
       return
     }
 
-    // Step 2 not open yet — wait up to 30 s
-    console.log('[FDN] Guest form not visible yet — waiting...')
+    if (isGuestDetailsTabVisible()) {
+      void autoFillGuestDetailsTab(scan)
+      return
+    }
+
+    // Neither view open yet — wait up to 30s for either
+    console.log('[FDN] No fill target visible yet — waiting...')
     const obs = new MutationObserver(() => {
       if (isGuestFormVisible()) {
         obs.disconnect()
         window.clearTimeout(timeout)
         setTimeout(() => void autoFillGuestInfo(scan), 300)
+      } else if (isGuestDetailsTabVisible()) {
+        obs.disconnect()
+        window.clearTimeout(timeout)
+        setTimeout(() => void autoFillGuestDetailsTab(scan), 300)
       }
     })
     obs.observe(document.body, { childList: true, subtree: true, attributes: true })
     const timeout = window.setTimeout(() => {
       obs.disconnect()
-      console.warn('[FDN] triggerFill: timed out waiting for Guest form')
+      console.warn('[FDN] triggerFill: timed out waiting for fill target')
     }, 30_000)
   })()
 }
@@ -515,6 +633,15 @@ addResObserver.observe(document.body, {
   childList: true,
   attributes: true,
   attributeFilter: ['class', 'style', 'aria-hidden'],
+})
+
+// Reset fill guard when user navigates away from Guest Details tab
+document.addEventListener('click', (e) => {
+  const target = e.target as Element
+  const clickedTab = target.closest('[class*="tab"], [role="tab"]')
+  if (clickedTab && !clickedTab.textContent?.includes('Guest Details')) {
+    _fillInProgress = false
+  }
 })
 
 export {}
