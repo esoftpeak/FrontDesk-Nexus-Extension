@@ -2,12 +2,226 @@
  * Runs on https://sph.synxis.com/* (guest stay UI). Control Center keeps the same URL while swapping
  * SPA views; we detect "Guest Stay Record" in this frame, debounce DOM churn, then ask the service
  * worker to load the reservation API + Supabase (same path as manual Get Guest Data, no toast).
+ *
+ * Also handles FDN_FILL_GUEST_FORM — runs inside SphContentIframe where Guest Details inputs live.
  */
 import {
   extractConfirmationFromDocument,
   extractRoomHintFromDocument,
   isLikelyGuestStayRecordView,
 } from '../lib/synxis-confirmation-dom'
+
+// ── Guest Details auto-fill (runs inside sph.synxis.com iframe) ───────────────
+
+type FillPayload = {
+  first_name: string | null
+  last_name: string | null
+  middle_name: string | null
+  phone: string | null
+  email: string | null
+  address: string | null
+  postal_code: string | null
+  city: string | null
+  state: string | null
+  [key: string]: string | null | undefined
+}
+
+const US_STATES: Record<string, string> = {
+  AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',
+  CO:'Colorado',CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',
+  HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',
+  KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',
+  MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',
+  NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',
+  NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',
+  OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',
+  SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',
+  VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',
+  WI:'Wisconsin',WY:'Wyoming',DC:'District of Columbia',
+}
+
+let _synxisFillInProgress = false
+const sphSleep = (ms: number) => new Promise<void>(r => window.setTimeout(r, ms))
+
+function synxisSet(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  el.focus()
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+  if (setter) setter.call(el, value)
+  else el.value = value
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+  el.blur()
+}
+
+function isGuestDetailsModalOpen(): boolean {
+  const el = document.getElementById('guest-first-name') as HTMLInputElement | null
+    ?? document.querySelector<HTMLInputElement>('input.spark-input__field')
+  if (!el) return false
+  const rect = el.getBoundingClientRect()
+  return rect.width > 0 && rect.height > 0
+}
+
+function findSynxisInput(labelSubstr: string): HTMLInputElement | null {
+  for (const span of Array.from(document.querySelectorAll<HTMLElement>('span.spark-label, label span'))) {
+    if ((span.textContent?.trim() ?? '').toLowerCase().includes(labelSubstr.toLowerCase())) {
+      const lbl = span.closest('label')
+      if (!lbl) continue
+      const forId = lbl.getAttribute('for')
+      if (forId) {
+        const el = document.getElementById(forId) as HTMLInputElement | null
+        if (el) return el
+      }
+      const el = lbl.querySelector<HTMLInputElement>('input, textarea')
+      if (el) return el
+    }
+  }
+  return null
+}
+
+function findSynxisSelect(labelSubstr: string): HTMLSelectElement | null {
+  for (const lbl of Array.from(document.querySelectorAll('label'))) {
+    if (lbl.textContent?.toLowerCase().includes(labelSubstr.toLowerCase())) {
+      const forAttr = lbl.getAttribute('for')
+      if (forAttr) {
+        const sel = document.querySelector<HTMLSelectElement>(`select#${forAttr}`)
+        if (sel) return sel
+      }
+      const parent = lbl.parentElement
+      if (parent) {
+        const sel = parent.querySelector<HTMLSelectElement>('select')
+        if (sel) return sel
+      }
+    }
+  }
+  for (const el of Array.from(document.querySelectorAll('*'))) {
+    if (el.children.length === 0 &&
+        el.textContent?.trim().toLowerCase().includes(labelSubstr.toLowerCase())) {
+      const parent = el.closest('td, tr, div, li')
+      if (parent) {
+        const sel = parent.querySelector<HTMLSelectElement>('select') ??
+                    parent.nextElementSibling?.querySelector<HTMLSelectElement>('select')
+        if (sel) return sel
+      }
+    }
+  }
+  return null
+}
+
+function fillSynxisSelect(labelSubstr: string, value: string): boolean {
+  if (!value) return false
+  const sel = findSynxisSelect(labelSubstr)
+  if (!sel) { console.warn('[FDN SPH] select not found:', labelSubstr); return false }
+  const needle = value.toLowerCase()
+  const match = Array.from(sel.options).find(
+    o => o.text.toLowerCase().includes(needle) || o.value.toLowerCase().includes(needle)
+  )
+  if (!match) {
+    console.warn('[FDN SPH] no option match for', labelSubstr, value,
+      'available:', Array.from(sel.options).map(o => o.text))
+    return false
+  }
+  sel.value = match.value
+  sel.dispatchEvent(new Event('change', { bubbles: true }))
+  console.log('[FDN SPH] select filled:', labelSubstr, '→', match.text)
+  return true
+}
+
+function normalizePhone(phone: string): string {
+  const raw = phone.replace(/\D/g, '')
+  return (raw.length === 11 && raw.startsWith('1')) ? raw.slice(1) : raw
+}
+
+async function fillSynxisGuestForm(data: FillPayload): Promise<void> {
+  if (_synxisFillInProgress) { console.log('[FDN SPH] fill already in progress'); return }
+  _synxisFillInProgress = true
+  console.log('[FDN SPH] fill started', data)
+
+  await sphSleep(400)
+
+  const textFields: Array<[string, string | null | undefined, HTMLInputElement | null]> = [
+    ['First Name',     data.first_name,   document.getElementById('guest-first-name') as HTMLInputElement | null],
+    ['Last Name',      data.last_name,    document.getElementById('guest-last-name')  as HTMLInputElement | null],
+    ['Middle Initial', data.middle_name ? data.middle_name.charAt(0) : null, findSynxisInput('Middle')],
+    ['Mobile Phone',   data.phone ? normalizePhone(data.phone) : null,       findSynxisInput('Mobile Phone')],
+    ['Primary Email',  data.email,        findSynxisInput('Primary Email')],
+    ['Primary Address',data.address,      findSynxisInput('Primary Address')],
+    ['Zip',            data.postal_code,  findSynxisInput('Zip')],
+    ['City',           data.city,         findSynxisInput('City')],
+  ]
+
+  for (const [label, value, el] of textFields) {
+    if (!value) continue
+    if (el) {
+      synxisSet(el, value)
+      console.log('[FDN SPH] filled:', label, '←', value)
+    } else {
+      console.warn('[FDN SPH] input not found:', label)
+    }
+    await sphSleep(80)
+  }
+
+  const stateCode = (data.state ?? '').toUpperCase().trim()
+  const stateName = US_STATES[stateCode] ?? data.state ?? ''
+  if (stateName) {
+    fillSynxisSelect('State', stateName)
+    await sphSleep(200)
+  }
+
+  fillSynxisSelect('Country', 'United States')
+
+  _synxisFillInProgress = false
+  console.log('[FDN SPH] fill complete ✓')
+}
+
+function triggerSynxisFill(payload: FillPayload | null): void {
+  console.log('[FDN SPH] triggerFill called', { hasPayload: !!payload, isModalOpen: isGuestDetailsModalOpen() })
+  void (async () => {
+    if (!payload) { console.warn('[FDN SPH] triggerFill: no payload'); return }
+
+    _synxisFillInProgress = false
+
+    if (isGuestDetailsModalOpen()) {
+      await fillSynxisGuestForm(payload)
+      return
+    }
+
+    console.log('[FDN SPH] modal not detected yet, waiting...')
+    const obs = new MutationObserver(() => {
+      if (isGuestDetailsModalOpen() && !_synxisFillInProgress) {
+        obs.disconnect()
+        window.clearTimeout(timeout)
+        window.setTimeout(() => void fillSynxisGuestForm(payload), 400)
+      }
+    })
+    obs.observe(document.body, { childList: true, subtree: true })
+    const timeout = window.setTimeout(() => {
+      obs.disconnect()
+      console.warn('[FDN SPH] triggerFill: timed out waiting for Guest Details modal')
+    }, 30_000)
+  })()
+}
+
+const sphModalObserver = new MutationObserver(() => {
+  if (_synxisFillInProgress && !isGuestDetailsModalOpen()) {
+    _synxisFillInProgress = false
+  }
+})
+sphModalObserver.observe(document.body, { childList: true, subtree: true })
+
+chrome.runtime.onMessage.addListener(
+  (
+    message: { type?: string; payload?: FillPayload },
+    _sender,
+    sendResponse: (r: { ok: boolean }) => void,
+  ) => {
+    if (message?.type === 'FDN_FILL_GUEST_FORM') {
+      console.log('[FDN SPH] FDN_FILL_GUEST_FORM received')
+      triggerSynxisFill(message.payload ?? null)
+      sendResponse({ ok: true })
+      return
+    }
+  },
+)
 
 const DEBOUNCE_MS = 100
 /** Skip re-sending the same confirmation while the user stays on the same record. */
