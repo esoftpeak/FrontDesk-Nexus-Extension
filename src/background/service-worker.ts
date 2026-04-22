@@ -643,35 +643,6 @@ function normalizeIdNumber(n: string | null): string {
   return (n ?? '').replace(/\s+/g, '').toUpperCase()
 }
 
-/**
- * Minimal placeholder reservation so `id_scans.reservation_id` FK can be satisfied when no
- * SynXis/eZee reservation is loaded. OCR identity data stays in `pii_encrypted` only —
- * none of it is written to the `reservations` table.
- */
-function standaloneReservationSnapshot(
-  confirmationNumber: string,
-): ReservationSnapshot {
-  const now = new Date().toISOString()
-  return {
-    pms: 'ezee',
-    confirmationNumber,
-    guestName: null,
-    roomNumber: null,
-    stayDatesRaw: null,
-    addressRaw: null,
-    checkInDate: null,
-    checkOutDate: null,
-    email: null,
-    phone: null,
-    rateAmount: null,
-    reservationTotal: null,
-    amountPaid: null,
-    dueAmount: null,
-    restricted: false,
-    loadedAt: now,
-    pageUrl: 'chrome-extension://fdn/id-scan-without-pms',
-  }
-}
 
 async function saveIdScan(args: {
   parsed: ParsedIdFields
@@ -727,10 +698,10 @@ async function saveIdScan(args: {
   const snap = reservation
   const scanId = crypto.randomUUID()
 
-  // SELECT-only: never write to reservations from the Save buttons.
-  // If a reservation was loaded by eZee auto-detection, look it up by confirmation number.
-  // Only create an FDN-IDONLY placeholder (unavoidable) when no reservation is active.
-  let resId: string
+  // Never write to reservations from Save buttons.
+  // SELECT existing reservation ID only if a confirmation number is loaded; otherwise null.
+  let resId: string | null = null
+  const conf: string = snap?.confirmationNumber ?? `NO-RES-${scanId}`
   if (snap?.confirmationNumber) {
     const { data, error } = await client
       .from('reservations')
@@ -739,33 +710,8 @@ async function saveIdScan(args: {
       .eq('pms_source', snap.pms)
       .maybeSingle()
     if (error) console.warn('[FDN SW] reservation select', error.message)
-    if (data?.id) {
-      resId = data.id as string
-    } else {
-      // Reservation not yet in DB — upsert as fallback so FK is satisfied.
-      const snapForUpsert: ReservationSnapshot = {
-        ...snap,
-        guestName: snap.guestName ?? null,
-        loadedAt: new Date().toISOString(),
-      }
-      const ur = await upsertReservationSnapshot(client, snapForUpsert)
-      if (!ur.ok) {
-        lastError = 'Reservation upsert failed'
-        return { ok: false, error: lastError }
-      }
-      resId = ur.id!
-    }
-  } else {
-    // No active reservation — create a standalone placeholder to satisfy NOT NULL FK.
-    const placeholderConf = `FDN-IDONLY-${scanId}`
-    const ur = await upsertReservationSnapshot(client, standaloneReservationSnapshot(placeholderConf))
-    if (!ur.ok) {
-      lastError = 'Reservation upsert failed'
-      return { ok: false, error: lastError }
-    }
-    resId = ur.id!
+    resId = (data?.id as string) ?? null
   }
-  const conf = snap?.confirmationNumber ?? `FDN-IDONLY-${scanId}`
   const resRow = { id: resId }
   const basePath = `${conf}/${scanId}`
 
