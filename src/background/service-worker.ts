@@ -727,26 +727,46 @@ async function saveIdScan(args: {
   const snap = reservation
   const scanId = crypto.randomUUID()
 
-  let conf: string
-  let snapForUpsert: ReservationSnapshot
+  // SELECT-only: never write to reservations from the Save buttons.
+  // If a reservation was loaded by eZee auto-detection, look it up by confirmation number.
+  // Only create an FDN-IDONLY placeholder (unavoidable) when no reservation is active.
+  let resId: string
   if (snap?.confirmationNumber) {
-    conf = snap.confirmationNumber
-    snapForUpsert = {
-      ...snap,
-      guestName: snap.guestName ?? null,
-      loadedAt: new Date().toISOString(),
+    const { data, error } = await client
+      .from('reservations')
+      .select('id')
+      .eq('confirmation_number', snap.confirmationNumber)
+      .eq('pms_source', snap.pms)
+      .maybeSingle()
+    if (error) console.warn('[FDN SW] reservation select', error.message)
+    if (data?.id) {
+      resId = data.id as string
+    } else {
+      // Reservation not yet in DB — upsert as fallback so FK is satisfied.
+      const snapForUpsert: ReservationSnapshot = {
+        ...snap,
+        guestName: snap.guestName ?? null,
+        loadedAt: new Date().toISOString(),
+      }
+      const ur = await upsertReservationSnapshot(client, snapForUpsert)
+      if (!ur.ok) {
+        lastError = 'Reservation upsert failed'
+        return { ok: false, error: lastError }
+      }
+      resId = ur.id!
     }
   } else {
-    conf = `FDN-IDONLY-${scanId}`
-    snapForUpsert = standaloneReservationSnapshot(conf)
+    // No active reservation — create a standalone placeholder to satisfy NOT NULL FK.
+    const placeholderConf = `FDN-IDONLY-${scanId}`
+    const ur = await upsertReservationSnapshot(client, standaloneReservationSnapshot(placeholderConf))
+    if (!ur.ok) {
+      lastError = 'Reservation upsert failed'
+      return { ok: false, error: lastError }
+    }
+    resId = ur.id!
   }
-
-  const ur = await upsertReservationSnapshot(client, snapForUpsert)
-  if (!ur.ok) {
-    lastError = 'Reservation upsert failed'
-    return { ok: false, error: lastError }
-  }
-  const resRow = { id: ur.id }
+  const conf = snap?.confirmationNumber ?? `FDN-IDONLY-${scanId}`
+  const resRow = { id: resId }
   const basePath = `${conf}/${scanId}`
 
   let imageFrontPath: string | null = null
