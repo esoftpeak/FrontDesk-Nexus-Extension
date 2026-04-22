@@ -642,18 +642,18 @@ function normalizeIdNumber(n: string | null): string {
 }
 
 /**
- * Minimal reservation row so `id_scans.reservation_id` can be set when the user has not loaded
- * SynXis/eZee — ID scan data still persists under `pii_encrypted` only (no PMS fields).
+ * Minimal placeholder reservation so `id_scans.reservation_id` FK can be satisfied when no
+ * SynXis/eZee reservation is loaded. OCR identity data stays in `pii_encrypted` only —
+ * none of it is written to the `reservations` table.
  */
 function standaloneReservationSnapshot(
   confirmationNumber: string,
-  parsed: ParsedIdFields,
 ): ReservationSnapshot {
   const now = new Date().toISOString()
   return {
     pms: 'ezee',
     confirmationNumber,
-    guestName: parsed.fullName,
+    guestName: null,
     roomNumber: null,
     stayDatesRaw: null,
     addressRaw: null,
@@ -724,12 +724,12 @@ async function saveIdScan(args: {
     conf = snap.confirmationNumber
     snapForUpsert = {
       ...snap,
-      guestName: snap.guestName ?? args.parsed.fullName,
+      guestName: snap.guestName ?? null,
       loadedAt: new Date().toISOString(),
     }
   } else {
     conf = `FDN-IDONLY-${scanId}`
-    snapForUpsert = standaloneReservationSnapshot(conf, args.parsed)
+    snapForUpsert = standaloneReservationSnapshot(conf)
   }
 
   const ur = await upsertReservationSnapshot(client, snapForUpsert)
