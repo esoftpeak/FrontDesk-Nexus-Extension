@@ -189,9 +189,28 @@ const US_STATES: Record<string, string> = {
 }
 
 const DOC_TYPE_MAP: Record<string, string> = {
-  DRIVERS_LICENSE:"Driver License",DRIVER_LICENSE:"Driver License",
-  DL:"Driver License",PASSPORT:'Passport',ID_CARD:'ID Card',
+  DRIVERS_LICENSE:"Driving License",DRIVER_LICENSE:"Driving License",
+  DL:"Driving License",PASSPORT:'Passport',ID_CARD:'ID Card',
   STATE_ID:'State ID',MILITARY_ID:'Military ID',
+}
+
+/** Normalize OCR doc type to match exact site option text. */
+function normalizeDocType(raw: string | null | undefined): string {
+  if (!raw) return ''
+  const key = raw.toLowerCase().trim()
+  const patterns: [string, string][] = [
+    ['driver', 'Driving License'],
+    ['driving', 'Driving License'],
+    ['passport', 'Passport'],
+    ['id card', 'ID Card'],
+    ['state id', 'State ID'],
+    ['military', 'Military ID'],
+  ]
+  for (const [pattern, mapped] of patterns) {
+    if (key.includes(pattern)) return mapped
+  }
+  const docKey = raw.toUpperCase().replace(/[\s\-]/g, '_')
+  return DOC_TYPE_MAP[docKey] ?? raw
 }
 
 type LastScanResult = {
@@ -347,32 +366,69 @@ async function fillCalendarDate(labelText_: string, dateStr: string | null | und
   if (!input) { console.warn('[FDN] date picker input not found for label:', labelText_); return }
 
   input.click()
-  await sleep(400)
+  await sleep(500)
 
-  // Navigate to correct month/year (max 36 months)
+  // Navigate to correct month/year (max 36 steps)
   for (let i = 0; i < 36; i++) {
+    // AntD renders the picker panel outside the input — search whole document
     const header = document.querySelector<HTMLElement>(
-      '.ant-picker-header-view, [class*="picker-header-view"], [class*="calendar-header"]'
+      '.ant-picker-header-view, [class*="picker-header-view"]'
     )
-    if (!header) break
+    if (!header) { console.warn('[FDN] calendar header not found'); break }
+
     const [dispMonth, dispYear] = parseCalendarHeader(header.textContent ?? '')
+    console.log('[FDN] calendar at:', dispMonth, dispYear, '→ target:', month, year)
     if (dispYear === year && dispMonth === month) break
+
     const goNext = dispYear < year || (dispYear === year && dispMonth < month)
-    const navBtn = document.querySelector<HTMLElement>(
-      goNext
-        ? '.ant-picker-next-icon, [class*="picker-next"], [aria-label*="next month" i], button[class*="next"]'
-        : '.ant-picker-prev-icon, [class*="picker-prev"], [aria-label*="prev month" i], button[class*="prev"]'
-    )
-    if (!navBtn) break
+
+    // AntD month-navigation buttons: .ant-picker-header-next-btn / prev-btn
+    // Fallback: find by aria-label or by being the >/< button inside the header
+    const headerEl = header.closest('.ant-picker-header, [class*="picker-header"]') ?? header.parentElement
+    const buttons = headerEl
+      ? Array.from(headerEl.querySelectorAll<HTMLElement>('button, [role="button"]'))
+      : []
+
+    let navBtn: HTMLElement | null = null
+    if (goNext) {
+      navBtn =
+        document.querySelector<HTMLElement>('.ant-picker-header-next-btn') ??
+        buttons.find(b =>
+          b.className.includes('next') && !b.className.includes('super') ||
+          (b.getAttribute('aria-label') ?? '').toLowerCase().includes('next month')
+        ) ?? null
+    } else {
+      navBtn =
+        document.querySelector<HTMLElement>('.ant-picker-header-prev-btn') ??
+        buttons.find(b =>
+          b.className.includes('prev') && !b.className.includes('super') ||
+          (b.getAttribute('aria-label') ?? '').toLowerCase().includes('prev month')
+        ) ?? null
+    }
+
+    if (!navBtn) {
+      console.warn('[FDN] calendar nav button not found; buttons:', buttons.map(b => b.className))
+      break
+    }
     navBtn.click()
-    await sleep(200)
+    await sleep(250)
   }
 
-  // Click the correct day cell
-  const cells = Array.from(document.querySelectorAll<HTMLElement>(
-    '.ant-picker-cell:not(.ant-picker-cell-disabled) .ant-picker-cell-inner, [class*="picker-cell"]:not([class*="disabled"]) [class*="cell-inner"], [role="gridcell"]:not([aria-disabled="true"])'
+  await sleep(150)
+
+  // Click the correct day — restrict to cells in the current view month (.ant-picker-cell-in-view)
+  const inView = Array.from(document.querySelectorAll<HTMLElement>(
+    '.ant-picker-cell.ant-picker-cell-in-view:not(.ant-picker-cell-disabled) .ant-picker-cell-inner, ' +
+    '[class*="picker-cell-in-view"]:not([class*="disabled"]) [class*="cell-inner"]'
   ))
+  // Fallback: all gridcells if AntD-specific selectors find nothing
+  const cells = inView.length > 0
+    ? inView
+    : Array.from(document.querySelectorAll<HTMLElement>(
+        '[role="gridcell"]:not([aria-disabled="true"]), td:not([class*="disabled"]):not([class*="outside"])'
+      ))
   console.log('[FDN] calendar day cells:', cells.map(c => c.textContent?.trim()))
+
   const match = cells.find(c => c.textContent?.trim() === String(day))
   if (match) {
     match.click()
@@ -505,9 +561,11 @@ async function autoFillGuestInfo(): Promise<void> {
   const fullName = [scan.first_name, scan.last_name].filter(Boolean).join(' ')
   fillPlaceholder('Full Name', fullName)
 
-  // ── Mobile (BUG 1 fix) ───────────────────────────────────────────────────────
+  // ── Mobile ──────────────────────────────────────────────────────────────────
   if (scan.phone) {
-    const digits = scan.phone.replace(/^\+?1/, '').replace(/\D/g, '')
+    const raw = scan.phone.replace(/\D/g, '')
+    // Strip country code only when 11 digits starting with "1" (US +1 prefix)
+    const digits = (raw.length === 11 && raw.startsWith('1')) ? raw.slice(1) : raw
     console.log('[FDN] phone value:', scan.phone, '→ digits:', digits)
     const mobileEl = document.querySelector<HTMLInputElement>('input[placeholder="Mobile"]')
     if (mobileEl) reactSet(mobileEl, digits)
@@ -549,9 +607,8 @@ async function autoFillGuestInfo(): Promise<void> {
   // ── ID Number ────────────────────────────────────────────────────────────────
   fillPlaceholder('ID Number', scan.id_number)
 
-  // ── ID Type (BUG 3 fix) — portal-rendered options, targeted by role="option" ──
-  const docKey = (scan.document_type ?? '').toUpperCase().replace(/[\s\-]/g, '_')
-  const docLabel = DOC_TYPE_MAP[docKey] ?? scan.document_type ?? ''
+  // ── ID Type — portal-rendered options, use normalizeDocType for site text match ──
+  const docLabel = normalizeDocType(scan.document_type)
   if (docLabel) {
     const idTypeItem = findFormItemByLabel('ID Type')
     const idTypeTrigger = idTypeItem
