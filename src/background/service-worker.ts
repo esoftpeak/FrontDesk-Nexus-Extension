@@ -310,6 +310,7 @@ async function completeSynxisReservationFromConfirmation(
   reservation = apiRes.payload
   synxisGuestDisplay = apiRes.guestDisplay
   ezeeGuestDisplay = null
+  void chrome.storage.local.set({ fdn_active_reservation: reservation })
   const { data: sess } = await client.auth.getSession()
   let dbSaved = false
   if (sess.session) {
@@ -362,6 +363,7 @@ async function completeEzeeReservationFromSnapshot(
   reservation = { ...snapshot, pageUrl: tabUrl }
   synxisGuestDisplay = null
   ezeeGuestDisplay = guestDisplay
+  void chrome.storage.local.set({ fdn_active_reservation: reservation })
 
   const { data: sess } = await client.auth.getSession()
   let dbSaved = false
@@ -715,6 +717,13 @@ async function saveIdScan(args: {
   const terminalId = await ensureTerminal(client)
   const user = sess.session.user
 
+  // Restore persisted reservation if service worker was restarted (in-memory state lost).
+  if (!reservation) {
+    const stored = await chrome.storage.local.get('fdn_active_reservation')
+    if (stored.fdn_active_reservation) {
+      reservation = stored.fdn_active_reservation as ReservationSnapshot
+    }
+  }
   const snap = reservation
   const scanId = crypto.randomUUID()
 
@@ -1165,6 +1174,7 @@ async function handleMessage(
     await client.auth.signOut()
     cachedRole = null
     reservation = null
+    void chrome.storage.local.remove('fdn_active_reservation')
     synxisGuestDisplay = null
     ezeeGuestDisplay = null
     return { ok: true, state: await getState() }
