@@ -278,3 +278,4 @@ scheduleCheck()
 for (const ms of BACKUP_RUN_AT_MS) {
   window.setTimeout(() => void runDetection(), ms)
 }
+
