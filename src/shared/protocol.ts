@@ -25,6 +25,8 @@ export type ExtensionMessage =
   | { type: 'LOAD_EZEE_RESERVATION' }
   /** Content script on sph.synxis.com: Guest Stay Record detected, confirmation extracted from DOM. */
   | { type: 'SYNXIS_AUTO_GUEST_DETECTED'; confirmation: string; roomHint?: string | null }
+  /** Content script on sph.synxis.com: user clicked "Print Basic Registration Card" in the toolbar. */
+  | { type: 'SYNXIS_PRINT_BASIC_CARD_CLICKED' }
   /** Content script on live.ipms247.com: Ant Design guest drawer scraped. */
   | {
       type: 'EZEE_AUTO_GUEST_DETECTED'

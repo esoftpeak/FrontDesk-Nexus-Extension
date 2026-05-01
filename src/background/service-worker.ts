@@ -1112,6 +1112,12 @@ async function handleMessage(
     }
   }
 
+  if (msg.type === 'SYNXIS_PRINT_BASIC_CARD_CLICKED') {
+    console.log('[FDN] Print Basic Registration Card clicked')
+    // TODO: implement print card action here
+    return { ok: true, state: await getState() }
+  }
+
   if (msg.type === 'AUTH_DEV_LOGIN') {
     lastError = null
     const { error } = await client.auth.signInWithPassword({
