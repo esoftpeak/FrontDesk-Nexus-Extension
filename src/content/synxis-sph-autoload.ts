@@ -276,6 +276,26 @@ document.addEventListener(
     if (el.tagName === 'LI' && el.textContent?.trim() === 'Print Basic Registration Card') {
       const confirmation = extractConfirmationFromDocument(document)
       console.log('[FDN SPH] Print Basic Registration Card clicked | confirmation:', confirmation)
+      if (!confirmation) { console.warn('[FDN SPH] No confirmation number found, aborting PDF fetch'); return }
+      void (async () => {
+        try {
+          console.log('[FDN SPH] Fetching registration card PDF...')
+          const res = await fetch(
+            'https://sph.synxis.com/pms-web-ui/service/v1/guest-mgt/guest-stay-record/registration-card',
+            {
+              method: 'POST',
+              credentials: 'include', // sends session cookies automatically (same origin)
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ payload: { crsConfirmationNumber: confirmation } }),
+            },
+          )
+          if (!res.ok) { console.error('[FDN SPH] PDF fetch failed:', res.status, res.statusText); return }
+          const data = await res.json() as { reportData?: string; status?: string; successful?: boolean }
+          console.log('[FDN SPH] Registration card PDF base64:', data.reportData)
+        } catch (err) {
+          console.error('[FDN SPH] PDF fetch error:', err)
+        }
+      })()
     }
   },
   true, // capture phase — fires before any component stopPropagation
