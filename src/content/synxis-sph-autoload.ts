@@ -274,8 +274,8 @@ document.addEventListener(
   (event) => {
     const el = event.target as HTMLElement
     if (el.tagName === 'LI' && el.textContent?.trim() === 'Print Basic Registration Card') {
-      console.log('[FDN SPH] Print Basic Registration Card clicked')
-      chrome.runtime.sendMessage({ type: 'SYNXIS_PRINT_BASIC_CARD_CLICKED' }).catch(() => {})
+      const confirmation = extractConfirmationFromDocument(document)
+      console.log('[FDN SPH] Print Basic Registration Card clicked | confirmation:', confirmation)
     }
   },
   true, // capture phase — fires before any component stopPropagation
