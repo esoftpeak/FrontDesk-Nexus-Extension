@@ -291,7 +291,53 @@ document.addEventListener(
           )
           if (!res.ok) { console.error('[FDN SPH] PDF fetch failed:', res.status, res.statusText); return }
           const data = await res.json() as { reportData?: string; status?: string; successful?: boolean }
-          console.log('[FDN SPH] Registration card PDF base64:', data.reportData)
+          if (!data.reportData) { console.error('[FDN SPH] No reportData in response'); return }
+          console.log('[FDN SPH] Registration card PDF received, opening viewer...')
+
+          // Convert base64 data URL → Blob → object URL
+          const base64 = data.reportData.split(',')[1] ?? data.reportData
+          const binary = atob(base64)
+          const bytes = new Uint8Array(binary.length)
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+          const blob = new Blob([bytes], { type: 'application/pdf' })
+          const pdfUrl = URL.createObjectURL(blob)
+
+          const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Registration Card – ${confirmation}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; background: #f0f0f0; }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #1565c0; color: #fff; padding: 10px 20px; flex-shrink: 0;
+    }
+    header .title { font-size: 1rem; font-weight: 600; letter-spacing: 0.05em; }
+    header .conf  { font-size: 0.85rem; opacity: 0.85; }
+    header button {
+      background: #fff; color: #1565c0; border: none; border-radius: 4px;
+      padding: 6px 18px; font-weight: 700; cursor: pointer; font-size: 0.9rem;
+    }
+    header button:hover { background: #e3f2fd; }
+    embed { flex: 1; width: 100%; border: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="title">Basic Registration Card</div>
+      <div class="conf">Confirmation: ${confirmation}</div>
+    </div>
+    <button onclick="window.close()">CLOSE</button>
+  </header>
+  <embed src="${pdfUrl}" type="application/pdf" />
+</body>
+</html>`
+          const htmlBlob = new Blob([html], { type: 'text/html' })
+          const htmlUrl = URL.createObjectURL(htmlBlob)
+          window.open(htmlUrl, '_blank')
         } catch (err) {
           console.error('[FDN SPH] PDF fetch error:', err)
         }
