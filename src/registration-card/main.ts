@@ -89,9 +89,11 @@ function setupSignatureCanvas() {
   let drawing = false
 
   function getPos(e: MouseEvent | TouchEvent) {
-    const r   = canvas.getBoundingClientRect()
-    const src = 'touches' in e ? e.touches[0] : e
-    return { x: src.clientX - r.left, y: src.clientY - r.top }
+    const r     = canvas.getBoundingClientRect()
+    const src   = 'touches' in e ? e.touches[0] : e
+    const scaleX = canvas.width  / r.width
+    const scaleY = canvas.height / r.height
+    return { x: (src.clientX - r.left) * scaleX, y: (src.clientY - r.top) * scaleY }
   }
 
   canvas.addEventListener('mousedown',  e => { drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y) })
