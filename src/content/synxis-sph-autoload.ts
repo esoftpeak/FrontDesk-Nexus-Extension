@@ -297,7 +297,10 @@ document.addEventListener(
           // Store PDF + confirmation in extension storage, then open the extension page
           await chrome.storage.local.set({ regCardData: { pdfBase64: data.reportData, confirmation } })
           const pageUrl = chrome.runtime.getURL('registration-card.html')
-          window.open(pageUrl, '_blank', 'popup,width=900,height=950,left=80,top=40')
+          // Open directly on the second (right) monitor: left = primary screen width
+          const sw = window.screen.width
+          const sh = window.screen.availHeight
+          window.open(pageUrl, '_blank', `popup,left=${sw},top=0,width=${sw},height=${sh}`)
         } catch (err) {
           console.error('[FDN SPH] PDF fetch error:', err)
         }
