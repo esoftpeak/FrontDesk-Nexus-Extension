@@ -37,7 +37,7 @@
       display: none; position: fixed; inset: 0;
       background: rgba(0,0,0,0.55); z-index: 100;
       align-items: flex-end; justify-content: center;
-      padding-bottom: 420px;
+      padding-bottom: 420;
     }
     .sign-modal.open { display: flex; }
     .sign-box {
@@ -86,7 +86,7 @@
   </div>
 
   <div class="banner">
-    To sign, click <strong>Sign Here</strong> &nbsp;·&nbsp; Confirmation: <strong id="confLabel">—</strong>
+   Confirmation: <strong id="confLabel">—</strong>
   </div>
 
   <div class="pdf-wrap">
@@ -96,8 +96,7 @@
   <!-- Sign modal -->
   <div class="sign-modal" id="signModal">
     <div class="sign-box">
-      <h3>Guest Signature</h3>
-      <canvas id="sigCanvas" width="472" height="180"></canvas>
+      <canvas id="sigCanvas" width="600" height="130"></canvas>
       <p class="status" id="sigStatus"></p>
       <div class="sign-actions">
         <button class="btn-clear"  id="btnClear">Clear</button>
