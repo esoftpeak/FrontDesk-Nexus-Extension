@@ -24,6 +24,7 @@ export default defineManifest({
     'cookies',
     'windowManagement',
     'windows',
+    'system.display',
   ],
   web_accessible_resources: [
     {
