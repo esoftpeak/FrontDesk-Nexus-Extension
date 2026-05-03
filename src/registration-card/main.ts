@@ -44,32 +44,30 @@ function showPdf(bytes: Uint8Array) {
 }
 
 // ── Window Management: move popup to second monitor ──────────────────────────────
+// Uses chrome.system.display.getInfo() — no user gesture or extra permission needed.
 async function moveToSecondScreen() {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const screenDetails = await (window as any).getScreenDetails() as {
-      screens: Array<{ availLeft: number; availTop: number; availWidth: number; availHeight: number; label?: string; isPrimary?: boolean }>
-    }
-    const screens = screenDetails.screens
-    console.log('[FDN RegCard] Screens:', screens.map((s, i) => `${i}: ${s.label ?? 'screen'} ${s.availWidth}×${s.availHeight} primary=${s.isPrimary}`))
+    const displays = await chrome.system.display.getInfo()
+    console.log('[FDN RegCard] Displays detected:', displays.map(d =>
+      `"${d.name}" primary=${d.isPrimary} workArea=${JSON.stringify(d.workArea)}`
+    ))
 
-    const second = screens.find(s => s.isPrimary === false) ?? screens[1]
-    if (!second) { console.log('[FDN RegCard] Only one screen — staying on current screen'); return }
+    const second = displays.find(d => !d.isPrimary) ?? displays[1]
+    if (!second) { console.log('[FDN RegCard] Only one display — staying on current screen'); return }
 
-    // chrome.windows.update is far more reliable than window.moveTo/resizeTo for cross-screen moves
     const win = await chrome.windows.getCurrent()
-    if (win.id !== undefined) {
-      await chrome.windows.update(win.id, {
-        left:   second.availLeft,
-        top:    second.availTop,
-        width:  second.availWidth,
-        height: second.availHeight,
-        state:  'normal',
-      })
-      console.log('[FDN RegCard] Moved to tablet screen:', second.label ?? 'second screen', `${second.availWidth}×${second.availHeight}`)
-    }
+    if (win.id === undefined) return
+
+    await chrome.windows.update(win.id, {
+      left:   second.workArea.left,
+      top:    second.workArea.top,
+      width:  second.workArea.width,
+      height: second.workArea.height,
+      state:  'normal',
+    })
+    console.log('[FDN RegCard] Moved to:', second.name, second.workArea)
   } catch (e) {
-    console.warn('[FDN RegCard] Window Management API unavailable:', e)
+    console.error('[FDN RegCard] Display detection failed:', e)
   }
 }
 
