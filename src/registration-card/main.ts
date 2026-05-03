@@ -33,6 +33,9 @@ async function init() {
 
   showPdf(currentPdfBytes)
   setupSignatureCanvas()
+  window.setTimeout(() => {
+    document.getElementById('signModal')!.classList.add('open')
+  }, 1000)
   await moveToSecondScreen()
 }
 
@@ -40,7 +43,7 @@ function showPdf(bytes: Uint8Array) {
   if (currentPdfUrl) URL.revokeObjectURL(currentPdfUrl)
   const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' })
   currentPdfUrl = URL.createObjectURL(blob)
-  ;(document.getElementById('pdfEmbed') as HTMLIFrameElement).src = currentPdfUrl
+  ;(document.getElementById('pdfEmbed') as HTMLIFrameElement).src = currentPdfUrl + '#zoom=140'
 }
 
 // ── Window Management: move popup to second monitor ──────────────────────────────
@@ -98,12 +101,6 @@ function setupSignatureCanvas() {
   canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y) }, { passive: false })
   canvas.addEventListener('touchmove',  e => { e.preventDefault(); if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke() }, { passive: false })
   canvas.addEventListener('touchend',   () => { drawing = false })
-
-  document.getElementById('btnSignHere')!.onclick = () => {
-    status.textContent = ''
-    status.className = 'status'
-    modal.classList.add('open')
-  }
 
   document.getElementById('btnClear')!.onclick  = () => ctx.clearRect(0, 0, canvas.width, canvas.height)
   document.getElementById('btnCancel')!.onclick = () => modal.classList.remove('open')
