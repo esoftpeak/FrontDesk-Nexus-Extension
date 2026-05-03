@@ -1,13 +1,14 @@
 import { PDFDocument } from 'pdf-lib'
 
 // ── Signature position on PDF page (points, origin = bottom-left corner) ────────
-// US Letter page = 612 × 792 pts. "Guest Signature:" line is ~25% from bottom.
-// Signature area sits to the right of the label, spanning the underline.
-// Tweak these if the overlay is off after testing.
-const SIG_X = 130   // points from left edge  (after "Guest Signature:" label)
-const SIG_Y = 190   // points from bottom edge (~2.64" up = ~25% from bottom)
-const SIG_W = 240   // width  (~3.33" — covers the underline)
-const SIG_H = 38    // height (~0.53" — sits cleanly above the line)
+// US Letter page = 612 × 792 pts. Y increases upward from the page bottom.
+// "Guest Signature:" underline sits at ~258 pts from bottom (~33% up the page).
+// The image bottom-left corner is placed at (SIG_X, SIG_Y); image extends upward by SIG_H.
+// Tweak SIG_Y up/down if the overlay drifts — each ~14 pts ≈ one text line.
+const SIG_X = 200   // points from left edge  (starts after "Guest Signature:" label)
+const SIG_Y = 258   // points from bottom edge (bottom of image on the underline)
+const SIG_W = 235   // width  (spans the signature underline)
+const SIG_H = 40    // height (extends upward above the line)
 
 type RegCardData = { pdfBase64: string; confirmation: string }
 
