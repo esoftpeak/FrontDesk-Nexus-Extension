@@ -5,8 +5,8 @@ import { PDFDocument } from 'pdf-lib'
 // "Guest Signature:" underline sits at ~258 pts from bottom (~33% up the page).
 // The image bottom-left corner is placed at (SIG_X, SIG_Y); image extends upward by SIG_H.
 // Tweak SIG_Y up/down if the overlay drifts — each ~14 pts ≈ one text line.
-const SIG_X = 155   // points from left edge  (just after "Guest Signature:" label text)
-const SIG_Y = 295   // points from bottom edge — each ~14 pts = 1 text line
+const SIG_X = 140   // points from left edge  (just after "Guest Signature:" label text)
+const SIG_Y = 350   // points from bottom edge — each ~14 pts = 1 text line
 const SIG_W = 200   // width  (spans the underline)
 const SIG_H = 40    // height (extends upward above the line)
 
