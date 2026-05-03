@@ -15,6 +15,11 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Module path overrides for packages without exports field */
+    "paths": {
+      "pdf-lib": ["./node_modules/pdf-lib/cjs/index.d.ts"]
+    },
+
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,

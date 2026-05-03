@@ -128,8 +128,9 @@ async function embedSignature(canvas: HTMLCanvasElement, modal: HTMLElement, sta
 
     page.drawImage(pngImage, { x: SIG_X, y: SIG_Y, width: SIG_W, height: SIG_H })
 
-    currentPdfBytes = await pdfDoc.save()
-    showPdf(currentPdfBytes)
+    const savedBytes = await pdfDoc.save()
+    currentPdfBytes = savedBytes
+    showPdf(savedBytes)
 
     modal.classList.remove('open')
     status.textContent = '✓ Signature saved'
