@@ -132,6 +132,20 @@ async function embedSignature(canvas: HTMLCanvasElement, modal: HTMLElement, sta
     status.textContent = '✓ Signature saved'
     status.className = 'status ok'
     console.log('[FDN RegCard] Signature embedded into PDF ✓ (x=%d y=%d w=%d h=%d)', SIG_X, SIG_Y, SIG_W, SIG_H)
+
+    const confirmation = document.getElementById('confLabel')?.textContent ?? ''
+    try {
+      await chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icon.png'),
+        title: 'Guest Signature Complete',
+        message: confirmation ? `Confirmation ${confirmation} — guest has signed.` : 'Guest has signed the registration card.',
+      })
+    } catch (ne) {
+      console.warn('[FDN RegCard] Notification failed:', ne)
+    }
+
+    window.setTimeout(() => window.close(), 2500)
   } catch (e) {
     console.error('[FDN RegCard] Failed to embed signature:', e)
     status.textContent = 'Failed to embed signature — see console'
