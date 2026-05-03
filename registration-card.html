@@ -41,8 +41,8 @@
     }
     .sign-modal.open { display: flex; }
     .sign-box {
-      background: #fff; border-radius: 8px; padding: 24px; width: calc(100% - 20px);
-      box-shadow: 0 8px 32px rgba(0,0,0,0.35); display: flex; flex-direction: column; gap: 14px;
+      background: #fff; border-radius: 8px; padding: 16px 24px; width: calc(100% - 170px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35); display: flex; flex-direction: column; gap: 5px;
     }
     .sign-box h3 { font-size: 1rem; color: #1565c0; }
     canvas {
@@ -96,7 +96,7 @@
   <!-- Sign modal -->
   <div class="sign-modal" id="signModal">
     <div class="sign-box">
-      <canvas id="sigCanvas" width="850" height="130"></canvas>
+      <canvas id="sigCanvas" width="650" height="130"></canvas>
       <p class="status" id="sigStatus"></p>
       <div class="sign-actions">
         <button class="btn-clear"  id="btnClear">Clear</button>
