@@ -22,6 +22,14 @@ export default defineManifest({
     'nativeMessaging',
     'notifications',
     'cookies',
+    'windowManagement',
+    'windows',
+  ],
+  web_accessible_resources: [
+    {
+      resources: ['registration-card.html'],
+      matches: ['https://sph.synxis.com/*'],
+    },
   ],
   host_permissions: [
     'https://controlcenter-p2.synxis.com/*',

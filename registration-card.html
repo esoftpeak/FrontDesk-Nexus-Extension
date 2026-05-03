@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Registration Card</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; background: #e0e0e0; overflow: hidden; }
+
+    /* Top bar */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #1565c0; color: #fff; padding: 10px 20px; flex-shrink: 0;
+    }
+    .pages { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 1rem; letter-spacing: 0.08em; }
+    .pages button { background: none; border: none; color: #fff; font-size: 1.4rem; cursor: pointer; padding: 0 2px; line-height: 1; }
+    .pages button:hover { opacity: 0.7; }
+    .cancel-btn {
+      display: flex; align-items: center; gap: 6px; background: none; border: none;
+      color: #fff; font-weight: 700; font-size: 1rem; cursor: pointer; letter-spacing: 0.05em;
+    }
+    .cancel-btn:hover { opacity: 0.7; }
+    .cancel-btn svg { width: 22px; height: 22px; }
+
+    /* Banner */
+    .banner {
+      background: #1976d2; color: #fff; text-align: center;
+      padding: 7px 16px; font-size: 0.88rem; flex-shrink: 0;
+    }
+
+    /* PDF */
+    .pdf-wrap { flex: 1; overflow: hidden; }
+    embed { width: 100%; height: 100%; border: none; display: block; }
+
+    /* Sign modal */
+    .sign-modal {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.55); z-index: 100;
+      align-items: center; justify-content: center;
+    }
+    .sign-modal.open { display: flex; }
+    .sign-box {
+      background: #fff; border-radius: 8px; padding: 24px; width: 520px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35); display: flex; flex-direction: column; gap: 14px;
+    }
+    .sign-box h3 { font-size: 1rem; color: #1565c0; }
+    canvas {
+      border: 2px solid #1565c0; border-radius: 4px;
+      cursor: crosshair; touch-action: none; background: #f8f9ff;
+    }
+    .sign-actions { display: flex; gap: 10px; justify-content: flex-end; }
+    .sign-actions button {
+      padding: 8px 22px; border-radius: 4px; border: none;
+      font-weight: 600; cursor: pointer; font-size: 0.9rem;
+    }
+    .btn-clear  { background: #f0f0f0; color: #333; }
+    .btn-clear:hover { background: #ddd; }
+    .btn-cancel { background: #f0f0f0; color: #333; }
+    .btn-cancel:hover { background: #ddd; }
+    .btn-save   { background: #1565c0; color: #fff; }
+    .btn-save:hover { background: #0d47a1; }
+
+    /* Status message */
+    .status { font-size: 0.8rem; color: #555; min-height: 1.2em; }
+    .status.ok  { color: #2e7d32; }
+    .status.err { color: #c62828; }
+
+    /* Floating sign button */
+    #btnSignHere {
+      position: fixed; bottom: 24px; right: 24px; z-index: 50;
+      background: #1565c0; color: #fff; border: none; border-radius: 28px;
+      padding: 13px 30px; font-size: 1rem; font-weight: 700;
+      cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+    #btnSignHere:hover { background: #0d47a1; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="pages">
+      <button id="btnPrev">&#8592;</button>
+      PAGES &nbsp;<span id="pageLabel">1 / 1</span>
+      <button id="btnNext">&#8594;</button>
+    </div>
+    <button class="cancel-btn" onclick="window.close()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="15" y1="9" x2="9" y2="15"/>
+        <line x1="9" y1="9" x2="15" y2="15"/>
+      </svg>
+      CANCEL
+    </button>
+  </div>
+
+  <div class="banner">
+    To sign, click <strong>Sign Here</strong> &nbsp;·&nbsp; Confirmation: <strong id="confLabel">—</strong>
+  </div>
+
+  <div class="pdf-wrap">
+    <embed id="pdfEmbed" type="application/pdf" src="" />
+  </div>
+
+  <!-- Sign modal -->
+  <div class="sign-modal" id="signModal">
+    <div class="sign-box">
+      <h3>Guest Signature</h3>
+      <canvas id="sigCanvas" width="472" height="180"></canvas>
+      <p class="status" id="sigStatus"></p>
+      <div class="sign-actions">
+        <button class="btn-clear"  id="btnClear">Clear</button>
+        <button class="btn-cancel" id="btnCancel">Cancel</button>
+        <button class="btn-save"   id="btnSave">Save Signature</button>
+      </div>
+    </div>
+  </div>
+
+  <button id="btnSignHere">&#9997; Sign Here</button>
+
+  <script type="module" src="/src/registration-card/main.ts"></script>
+</body>
+</html>
