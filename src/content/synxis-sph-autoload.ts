@@ -300,7 +300,7 @@ document.addEventListener(
           // Open directly on the second (right) monitor: left = primary screen width
           // const sw = window.screen.width
           // const sh = window.screen.availHeight
-          window.open(pageUrl, '_blank', `popup,left=2200,top=50,width=600,height=900`)
+          window.open(pageUrl, '_blank', `popup,left=3200,top=500,width=600,height=900`)
         } catch (err) {
           console.error('[FDN SPH] PDF fetch error:', err)
         }
