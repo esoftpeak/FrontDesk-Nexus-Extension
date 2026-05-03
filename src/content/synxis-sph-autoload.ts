@@ -298,9 +298,9 @@ document.addEventListener(
           await chrome.storage.local.set({ regCardData: { pdfBase64: data.reportData, confirmation } })
           const pageUrl = chrome.runtime.getURL('registration-card.html')
           // Open directly on the second (right) monitor: left = primary screen width
-          const sw = window.screen.width
-          const sh = window.screen.availHeight
-          window.open(pageUrl, '_blank', `popup,left=${sw},top=0,width=${sw},height=${sh}`)
+          // const sw = window.screen.width
+          // const sh = window.screen.availHeight
+          window.open(pageUrl, '_blank', `popup,left=1950,top=100,width=600,height=900`)
         } catch (err) {
           console.error('[FDN SPH] PDF fetch error:', err)
         }
