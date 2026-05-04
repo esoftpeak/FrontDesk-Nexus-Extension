@@ -31,6 +31,10 @@ export default defineManifest({
       resources: ['registration-card.html'],
       matches: ['https://sph.synxis.com/*'],
     },
+    {
+      resources: ['registration-card.html'],
+      matches: ['https://live.ipms247.com/*', 'https://*.ipms247.com/*'],
+    },
   ],
   host_permissions: [
     'https://controlcenter-p2.synxis.com/*',
@@ -52,6 +56,12 @@ export default defineManifest({
     {
       matches: ['https://live.ipms247.com/*', 'https://*.ipms247.com/*'],
       js: ['src/content/ezee.ts'],
+    },
+    {
+      // Stimulsoft print popup — captures the rendered card and opens the signing window
+      matches: ['https://live.ipms247.com/*', 'https://*.ipms247.com/*'],
+      js: ['src/content/ezee-print-card.ts'],
+      run_at: 'document_idle',
     },
   ],
 })
