@@ -61,14 +61,14 @@ async function moveToSecondScreen() {
     const win = await chrome.windows.getCurrent()
     if (win.id === undefined) return
 
-    // Nudge onto the target monitor first, then go fullscreen on it
     await chrome.windows.update(win.id, {
-      left:  second.workArea.left + 1,
-      top:   second.workArea.top  + 1,
-      state: 'normal',
+      left:   second.workArea.left,
+      top:    second.workArea.top,
+      width:  second.workArea.width,
+      height: second.workArea.height,
+      state:  'normal',
     })
-    await chrome.windows.update(win.id, { state: 'fullscreen' })
-    console.log('[FDN RegCard] Fullscreen on:', second.name, second.workArea)
+    console.log('[FDN RegCard] Moved to:', second.name, second.workArea)
   } catch (e) {
     console.error('[FDN RegCard] Display detection failed:', e)
   }
