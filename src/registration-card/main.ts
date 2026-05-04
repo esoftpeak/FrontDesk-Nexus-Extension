@@ -43,7 +43,7 @@ function showPdf(bytes: Uint8Array) {
   if (currentPdfUrl) URL.revokeObjectURL(currentPdfUrl)
   const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' })
   currentPdfUrl = URL.createObjectURL(blob)
-  ;(document.getElementById('pdfEmbed') as HTMLIFrameElement).src = currentPdfUrl + '#toolbar=0&zoom=140'
+  ;(document.getElementById('pdfEmbed') as HTMLIFrameElement).src = currentPdfUrl + '#zoom=140'
 }
 
 // ── Window Management: move popup to second monitor ──────────────────────────────
@@ -61,14 +61,14 @@ async function moveToSecondScreen() {
     const win = await chrome.windows.getCurrent()
     if (win.id === undefined) return
 
-    // First nudge the window onto the target monitor, then go fullscreen there
     await chrome.windows.update(win.id, {
-      left:  second.workArea.left + 1,
-      top:   second.workArea.top  + 1,
-      state: 'normal',
+      left:   second.workArea.left,
+      top:    second.workArea.top,
+      width:  second.workArea.width,
+      height: second.workArea.height,
+      state:  'normal',
     })
-    await chrome.windows.update(win.id, { state: 'fullscreen' })
-    console.log('[FDN RegCard] Moved to fullscreen on:', second.name, second.workArea)
+    console.log('[FDN RegCard] Moved to:', second.name, second.workArea)
   } catch (e) {
     console.error('[FDN RegCard] Display detection failed:', e)
   }
