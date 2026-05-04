@@ -78,14 +78,36 @@ function waitForContent(cardEl: HTMLElement): Promise<void> {
 // ── Capture element → base64 PDF ─────────────────────────────────────────────
 
 async function captureCardAsPdfBase64(cardEl: HTMLElement): Promise<string> {
-  const canvas = await html2canvas(cardEl, {
-    scale: 2,
-    useCORS: true,
-    logging: false,
-    backgroundColor: '#ffffff',
-    scrollX: 0,
-    scrollY: 0,
-  })
+  // The element has overflow:hidden + fixed height — lift both so html2canvas
+  // captures the full content instead of clipping to the visible box.
+  const prevOverflow = cardEl.style.overflow
+  const prevHeight   = cardEl.style.height
+  cardEl.style.overflow = 'visible'
+  cardEl.style.height   = 'auto'
+
+  const fullW = cardEl.scrollWidth
+  const fullH = cardEl.scrollHeight
+  console.log('[FDN eZee] Capture dimensions:', fullW, '×', fullH, 'px')
+
+  let canvas: HTMLCanvasElement
+  try {
+    canvas = await html2canvas(cardEl, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+      scrollX: 0,
+      scrollY: 0,
+      width:  fullW,
+      height: fullH,
+    })
+  } finally {
+    // Always restore original styles
+    cardEl.style.overflow = prevOverflow
+    cardEl.style.height   = prevHeight
+  }
+
+  console.log('[FDN eZee] Canvas size:', canvas.width, '×', canvas.height, 'px')
 
   const dataUrl  = canvas.toDataURL('image/png')
   const b64raw   = dataUrl.split(',')[1]!
@@ -113,8 +135,9 @@ async function captureCard(cardEl: HTMLElement): Promise<void> {
   // 1. Wait for rows to reach MIN_ROWS (report AJAX complete)
   await waitForContent(cardEl)
 
+  const rowCount = cardEl.querySelectorAll('tr').length
   // 2. Extra settle — let final paint finish
-  console.log(`[FDN eZee] Report rows ready (${cardEl.querySelectorAll('tr').length} rows) — settling ${SETTLE_MS}ms...`)
+  console.log(`[FDN eZee] Report rows ready (${rowCount} rows) — settling ${SETTLE_MS}ms before capture...`)
   showBanner('FrontDesk Nexus: capturing card…', '#1565c0')
   await new Promise<void>((r) => window.setTimeout(r, SETTLE_MS))
 
