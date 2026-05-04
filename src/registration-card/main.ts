@@ -43,7 +43,7 @@ function showPdf(bytes: Uint8Array) {
   if (currentPdfUrl) URL.revokeObjectURL(currentPdfUrl)
   const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' })
   currentPdfUrl = URL.createObjectURL(blob)
-  ;(document.getElementById('pdfEmbed') as HTMLIFrameElement).src = currentPdfUrl + '#toolbar=0&zoom=140'
+  ;(document.getElementById('pdfEmbed') as HTMLIFrameElement).src = currentPdfUrl + '#zoom=140'
 }
 
 // ── Window Management: move popup to second monitor ──────────────────────────────
