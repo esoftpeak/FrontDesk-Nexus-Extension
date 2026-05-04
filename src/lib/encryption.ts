@@ -38,6 +38,23 @@ export type EncryptedPayload = {
   ciphertext: string
 }
 
+/**
+ * Encrypts raw bytes with AES-256-GCM.
+ * Returns a single Uint8Array: [12-byte IV][ciphertext].
+ * Upload this blob directly to Supabase Storage as application/octet-stream.
+ */
+export async function encryptBinary(data: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
+  const key = await getOrCreateAesKey()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  // slice() produces a plain ArrayBuffer (not SharedArrayBuffer), satisfying SubtleCrypto's BufferSource
+  const plain = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain)
+  const out = new Uint8Array(12 + ciphertext.byteLength)
+  out.set(iv, 0)
+  out.set(new Uint8Array(ciphertext), 12)
+  return out
+}
+
 export async function encryptJson(payload: unknown): Promise<EncryptedPayload> {
   const key = await getOrCreateAesKey()
   const iv = crypto.getRandomValues(new Uint8Array(12))

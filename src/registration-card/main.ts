@@ -110,7 +110,14 @@ function setupSignatureCanvas() {
   document.getElementById('btnSave')!.onclick = () => void embedSignature(canvas, modal, status)
 }
 
-// ── Embed signature into PDF using pdf-lib ────────────────────────────────────────
+// ── Safe base64 encode for large Uint8Arrays (avoids spread stack overflow) ───────
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+  return btoa(binary)
+}
+
+// ── Embed signature into PDF and save to Supabase ─────────────────────────────────
 async function embedSignature(canvas: HTMLCanvasElement, modal: HTMLElement, status: HTMLElement) {
   if (!currentPdfBytes) return
 
@@ -129,19 +136,43 @@ async function embedSignature(canvas: HTMLCanvasElement, modal: HTMLElement, sta
     const savedBytes = await pdfDoc.save()
     currentPdfBytes = savedBytes
     showPdf(savedBytes)
-
     modal.classList.remove('open')
-    status.textContent = '✓ Signature saved'
-    status.className = 'status ok'
+
     console.log('[FDN RegCard] Signature embedded into PDF ✓ (x=%d y=%d w=%d h=%d)', SIG_X, SIG_Y, SIG_W, SIG_H)
 
-    const confirmation = document.getElementById('confLabel')?.textContent ?? ''
+    const confirmation = document.getElementById('confLabel')?.textContent?.trim() ?? ''
+
+    // ── Upload encrypted PDF to Supabase via service worker ───────────────────
+    status.textContent = 'Saving to cloud…'
+    status.className = 'status'
+
+    let cloudOk = false
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'SAVE_SIGNATURE',
+        pdfBase64: uint8ToBase64(savedBytes),
+        confirmationNumber: confirmation,
+      })
+      cloudOk = result?.ok === true
+      if (!cloudOk) {
+        console.warn('[FDN RegCard] Cloud save failed:', result?.error)
+      }
+    } catch (msgErr) {
+      console.warn('[FDN RegCard] Could not reach service worker:', msgErr)
+    }
+
+    status.textContent = cloudOk ? '✓ Signature saved to cloud' : '✓ Signed — cloud save failed (check console)'
+    status.className   = cloudOk ? 'status ok' : 'status warn'
+
+    // ── Chrome notification ────────────────────────────────────────────────────
     try {
       await chrome.notifications.create({
         type: 'basic',
         iconUrl: chrome.runtime.getURL('icon.png'),
         title: 'Guest Signature Complete',
-        message: confirmation ? `Confirmation ${confirmation} — guest has signed.` : 'Guest has signed the registration card.',
+        message: confirmation
+          ? `Confirmation ${confirmation} — guest has signed.`
+          : 'Guest has signed the registration card.',
       })
     } catch (ne) {
       console.warn('[FDN RegCard] Notification failed:', ne)

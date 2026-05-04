@@ -15,7 +15,7 @@ import type {
   ReservationSnapshot,
   SynxisGuestDisplay,
 } from '../shared/pms-types'
-import { encryptJson } from '../lib/encryption'
+import { encryptBinary, encryptJson } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
 import { pingNativeHost } from '../lib/native-scan'
@@ -828,6 +828,93 @@ async function saveIdScan(args: {
   return { ok: true, state: await getState() }
 }
 
+async function saveSignature(args: {
+  pdfBase64: string
+  confirmationNumber: string
+}): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+
+  const terminalId = await ensureTerminal(client)
+  const user = sess.session.user
+  const conf = args.confirmationNumber.trim()
+
+  if (!reservation) {
+    const stored = await chrome.storage.local.get('fdn_active_reservation')
+    if (stored.fdn_active_reservation) {
+      reservation = stored.fdn_active_reservation as ReservationSnapshot
+    }
+  }
+
+  let resId: string | null = null
+  if (conf) {
+    const pms = reservation?.pms ?? 'synxis'
+    const { data, error } = await client
+      .from('reservations')
+      .select('id')
+      .eq('confirmation_number', conf)
+      .eq('pms_source', pms)
+      .maybeSingle()
+    if (error) console.warn('[FDN SW] signature: reservation lookup', error.message)
+    resId = (data?.id as string) ?? null
+  }
+
+  const bin = atob(args.pdfBase64)
+  const pdfBytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) pdfBytes[i] = bin.charCodeAt(i)
+
+  const encryptedBytes = await encryptBinary(pdfBytes)
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const fileId = crypto.randomUUID()
+  const storagePath = `${conf}/${timestamp}_${fileId}.pdf.enc`
+
+  const blob = new Blob([encryptedBytes], { type: 'application/octet-stream' })
+  const { error: upErr } = await client.storage
+    .from('signature-pdfs')
+    .upload(storagePath, blob, { contentType: 'application/octet-stream', upsert: false })
+
+  if (upErr) {
+    lastError = upErr.message
+    return { ok: false, error: `PDF upload failed: ${upErr.message}` }
+  }
+
+  const { data: sigRow, error: sigErr } = await client
+    .from('signatures')
+    .insert({
+      confirmation_number: conf,
+      reservation_id: resId,
+      storage_path: storagePath,
+      signed_by: user.id,
+      signed_by_username: user.email,
+      terminal_id: terminalId,
+    })
+    .select('id')
+    .single()
+
+  if (sigErr) {
+    lastError = sigErr.message
+    return { ok: false, error: sigErr.message }
+  }
+
+  const { error: audErr } = await client.from('audit_log').insert({
+    user_id: user.id,
+    username: user.email,
+    user_role: cachedRole,
+    terminal_id: terminalId,
+    action_type: 'SIGNATURE',
+    confirmation_number: conf,
+    description: 'Guest registration card signed — encrypted PDF stored',
+    new_value: { signature_id: sigRow?.id, storage_path: storagePath },
+  })
+  if (audErr) console.warn('[FDN SW] audit_log insert (signature)', audErr.message)
+
+  lastError = null
+  return { ok: true, signaturePath: storagePath }
+}
+
 function forwardNativeHostRxToPanel(payload: NativeHostRxDebugBroadcast) {
   void chrome.runtime.sendMessage(payload).catch(() => {
     /* side panel may not be open */
@@ -1110,6 +1197,10 @@ async function handleMessage(
     } finally {
       synxisAutoInFlight.delete(fk)
     }
+  }
+
+  if (msg.type === 'SAVE_SIGNATURE') {
+    return saveSignature({ pdfBase64: msg.pdfBase64, confirmationNumber: msg.confirmationNumber })
   }
 
   if (msg.type === 'SYNXIS_PRINT_BASIC_CARD_CLICKED') {

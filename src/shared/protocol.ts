@@ -59,9 +59,15 @@ export type ExtensionMessage =
     }
   | { type: 'INJECT_PMS'; fields: Record<string, string> }
   | { type: 'VERIFY_MANAGER'; email: string; password: string }
+  | {
+      type: 'SAVE_SIGNATURE'
+      /** Base64-encoded signed PDF bytes (from pdf-lib save()). */
+      pdfBase64: string
+      confirmationNumber: string
+    }
 
 export type ExtensionResponse =
-  | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[] }
+  | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[]; signaturePath?: string }
   | { ok: false; error: string }
 
 /** Service worker → side panel: log native inbound (opens in side panel DevTools). */
