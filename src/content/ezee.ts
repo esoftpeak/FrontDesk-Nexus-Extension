@@ -624,4 +624,28 @@ document.addEventListener('click', (e) => {
   }
 })
 
+// ── Print Guest Registration Card detection ───────────────────────────────────
+// eZee renders the dropdown at body level via Ant Design portal.
+// Capture phase fires before any component stopPropagation.
+document.addEventListener(
+  'click',
+  (event) => {
+    const el = event.target as HTMLElement
+    // Walk up in case the click lands on a child <span> inside the <li>
+    const menuItem = el.closest('li[role="menuitem"]') as HTMLElement | null
+    if (!menuItem) return
+    if (menuItem.textContent?.trim() !== 'Print Guest Registration Card') return
+
+    // lastDedupeKey is "confNumber|roomHint" — split to get just the confirmation
+    const conf = lastDedupeKey ? lastDedupeKey.split('|')[0]! : ''
+    console.log('[FDN eZee] Print Guest Registration Card clicked | confirmation:', conf || '(unknown)')
+
+    void chrome.runtime.sendMessage({
+      type: 'EZEE_PRINT_BASIC_CARD_CLICKED',
+      confirmation: conf,
+    }).catch(() => { /* extension may not be listening */ })
+  },
+  true, // capture phase
+)
+
 export {}

@@ -33,6 +33,8 @@ export type ExtensionMessage =
       snapshot: ReservationSnapshot
       guestDisplay: EzeeGuestDisplay
     }
+  /** Content script on live.ipms247.com: user clicked "Print Guest Registration Card". */
+  | { type: 'EZEE_PRINT_BASIC_CARD_CLICKED'; confirmation: string }
   | { type: 'AUTH_DEV_LOGIN'; email: string; password: string }
   | { type: 'AUTH_LOGOUT' }
   | {

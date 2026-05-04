@@ -1209,6 +1209,17 @@ async function handleMessage(
     return { ok: true, state: await getState() }
   }
 
+  if (msg.type === 'EZEE_PRINT_BASIC_CARD_CLICKED') {
+    console.log('[FDN eZee] Print Guest Registration Card clicked | confirmation:', msg.confirmation)
+    void notifyUser(
+      'FrontDesk Nexus — Print Card',
+      msg.confirmation
+        ? `Registration card for ${msg.confirmation} requested`
+        : 'Guest registration card print requested',
+    )
+    return { ok: true }
+  }
+
   if (msg.type === 'AUTH_DEV_LOGIN') {
     lastError = null
     const { error } = await client.auth.signInWithPassword({
