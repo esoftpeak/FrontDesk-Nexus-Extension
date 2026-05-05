@@ -1009,11 +1009,85 @@ async function embedSignatureIntoEzeePdf(
 }
 
 /**
+ * Injected into the Stimulsoft popup in the MAIN world — patches URL.createObjectURL to
+ * intercept the client-side PDF blob Stimulsoft generates, then fires a 'fdn-pdf-ready'
+ * CustomEvent so the ISOLATED world overlay receives the bytes without any network I/O.
+ */
+function eZeeMainWorldCapture(): void {
+  const win0 = window as unknown as Record<string, unknown>
+  if (win0['__fdnPdfCapture']) return
+  win0['__fdnPdfCapture'] = true
+
+  const origCreateObjectURL = URL.createObjectURL.bind(URL)
+  const origAnchorClick     = HTMLAnchorElement.prototype.click
+  let   suppressNextClick   = false
+
+  // Prevent auto-download of the intercepted PDF blob.
+  HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+    if (suppressNextClick && this.href.startsWith('blob:')) {
+      suppressNextClick = false
+      return
+    }
+    return origAnchorClick.call(this)
+  }
+
+  URL.createObjectURL = function (obj: Blob | MediaSource | File): string {
+    const url = origCreateObjectURL(obj as Blob)
+    if (obj instanceof Blob && obj.size > 1000) {
+      obj.slice(0, 5).text().then(header => {
+        if (!header.startsWith('%PDF-')) return
+        suppressNextClick = true
+        const reader = new FileReader()
+        reader.onload = () => {
+          const dataUrl = reader.result as string
+          const b64     = dataUrl.split(',')[1] ?? ''
+          document.dispatchEvent(new CustomEvent('fdn-pdf-ready', { detail: b64 }))
+          console.log('[FDN MAIN] PDF blob intercepted:', b64.length, 'b64 chars')
+        }
+        reader.readAsDataURL(obj)
+      }).catch(() => { /* ignore */ })
+    }
+    return url
+  }
+
+  // Wait for the viewer to initialise, then trigger a silent PDF export.
+  setTimeout(() => {
+    try {
+      const win = window as unknown as Record<string, unknown>
+      const S   = (win['Stimulsoft'] ?? win['stimulsoft']) as Record<string, unknown> | undefined
+      if (!S) { console.warn('[FDN MAIN] Stimulsoft not found on window'); return }
+      const instances = (
+        (S['Viewer'] as Record<string, unknown>)?.['StiViewer'] as Record<string, unknown[]>
+      )?.['instances'] ?? []
+      for (const inst of instances as Record<string, unknown>[]) {
+        const downloadFile = inst['downloadFile']
+        if (typeof downloadFile !== 'function') continue
+        const fmtObj = (S['Report'] as Record<string, Record<string, unknown>>)?.['StiExportFormat']
+        const pdfFmt = fmtObj?.['Pdf'] ?? fmtObj?.['PDF'] ?? 'Pdf'
+        ;(downloadFile as (fmt: unknown, x: null, y: boolean) => void).call(inst, pdfFmt, null, false)
+        console.log('[FDN MAIN] viewer.downloadFile triggered, format:', pdfFmt)
+        return
+      }
+      console.warn('[FDN MAIN] No viewer instance with downloadFile found')
+    } catch (err) {
+      console.warn('[FDN MAIN] PDF trigger error:', err)
+    }
+  }, 1500)
+}
+
+/**
  * Self-contained sign overlay injected into the Stimulsoft popup tab.
  * Must not close over any module-level variables — all inputs come via args[].
  */
 function eZeeSignOverlayFunc(conf: string): void {
   if (document.getElementById('fdn-sign-overlay')) return
+
+  // Receives the PDF base64 dispatched by eZeeMainWorldCapture (MAIN world).
+  let preCapturePdf: string | null = null
+  document.addEventListener('fdn-pdf-ready', (e) => {
+    preCapturePdf = (e as CustomEvent<string>).detail
+    console.log('[FDN eZee overlay] PDF ready:', preCapturePdf?.length, 'b64 chars')
+  }, { once: true })
 
   const overlay = document.createElement('div')
   overlay.id = 'fdn-sign-overlay'
@@ -1086,86 +1160,20 @@ function eZeeSignOverlayFunc(conf: string): void {
   btnSave.onclick = () => {
     btnSave.disabled = true
     btnSave.textContent = 'Saving…'
-    statusEl.textContent = 'Capturing registration card…'
+    statusEl.textContent = 'Saving signature…'
     statusEl.style.color = '#555'
 
     const signaturePng = canvas.toDataURL('image/png')
-
-    // Capture all Stimulsoft report page canvases (skip our own signature canvas)
-    function captureReportCanvas(): string | null {
-      try {
-        const reportCanvases = Array.from(document.querySelectorAll<HTMLCanvasElement>('canvas'))
-          .filter(c => c !== canvas && c.width > 300 && c.height > 300)
-        if (reportCanvases.length === 0) return null
-        reportCanvases.sort((a, b) => b.width * b.height - a.width * a.height)
-        if (reportCanvases.length === 1) return reportCanvases[0].toDataURL('image/png')
-        // Multiple pages — combine vertically into one image
-        const maxW   = Math.max(...reportCanvases.map(c => c.width))
-        const totalH = reportCanvases.reduce((s, c) => s + c.height, 0)
-        const combined = document.createElement('canvas')
-        combined.width = maxW; combined.height = totalH
-        const cx = combined.getContext('2d')
-        if (!cx) return null
-        let y = 0
-        for (const rc of reportCanvases) { cx.drawImage(rc, 0, y); y += rc.height }
-        return combined.toDataURL('image/png')
-      } catch { return null }
-    }
-
-    // Try to export the real PDF via Stimulsoft's JS API
-    function tryStimulsoftPdf(): Promise<string | null> {
-      return new Promise<string | null>((resolve) => {
-        try {
-          const win = window as { Stimulsoft?: Record<string, unknown>; stimulsoft?: Record<string, unknown> }
-          const S = win.Stimulsoft ?? win.stimulsoft
-          if (!S) { resolve(null); return }
-          const instances = ((S['Viewer'] as Record<string, unknown>)?.['StiViewer'] as Record<string, unknown[]>)?.['instances'] ?? []
-          let report: Record<string, unknown> | null = null
-          for (const inst of instances) {
-            const r = (inst as Record<string, unknown>)?.['report']
-            if (r) { report = r as Record<string, unknown>; break }
-          }
-          if (!report) { resolve(null); return }
-          const exportFn = report['exportDocumentAsync']
-          if (typeof exportFn !== 'function') { resolve(null); return }
-          const fmtObj = (S['Report'] as Record<string, Record<string, unknown>>)?.['StiExportFormat']
-          const pdfFmt = fmtObj?.['Pdf'] ?? fmtObj?.['PDF'] ?? 'Pdf'
-          ;(exportFn as (cb: (d: unknown) => void, fmt: unknown) => void).call(report, (data: unknown) => {
-            try {
-              const bytes = data as Uint8Array
-              let bin = ''
-              for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
-              resolve(btoa(bin))
-            } catch { resolve(null) }
-          }, pdfFmt)
-          setTimeout(() => resolve(null), 15_000)
-        } catch { resolve(null) }
-      })
-    }
+    overlay.style.display = 'none'
 
     void (async () => {
-      // Best case: real PDF from Stimulsoft JS API
-      let cardPdfBase64: string | null = await tryStimulsoftPdf()
-      let cardImageBase64: string | null = null
-
-      // Fallback: capture rendered canvas elements
-      if (!cardPdfBase64) {
-        cardImageBase64 = captureReportCanvas()
-        console.log('[FDN eZee] Card capture:', cardImageBase64 ? 'canvas PNG ✓' : 'none — text fallback')
-      } else {
-        console.log('[FDN eZee] Card capture: Stimulsoft PDF ✓')
-      }
-
-      overlay.style.display = 'none'
-      await new Promise<void>(r => setTimeout(r, 200))
-
       try {
         const res = await (chrome.runtime.sendMessage({
           type: 'EZEE_SAVE_SIGNATURE',
           signaturePng,
           confirmation: conf,
-          cardPdfBase64: cardPdfBase64 ?? null,
-          cardImageBase64: cardImageBase64 ?? null,
+          cardPdfBase64:   preCapturePdf ?? null,
+          cardImageBase64: null,
         }) as Promise<{ ok: boolean; error?: string }>)
 
         if (!res?.ok) {
@@ -1535,6 +1543,15 @@ async function handleMessage(
       // 135% zoom — larger text makes the card easier to read and sign on the 2nd display
       try { await chrome.tabs.setZoom(tabId, 1.35) } catch { /* ignore */ }
       await new Promise(r => setTimeout(r, 300))
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: eZeeMainWorldCapture,
+          world: 'MAIN',
+        })
+      } catch (e) {
+        console.warn('[FDN SW] MAIN world PDF capture injection failed:', e)
+      }
       try {
         await chrome.scripting.executeScript({
           target: { tabId },
