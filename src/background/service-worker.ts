@@ -1033,6 +1033,7 @@ function eZeeSignOverlayFunc(conf: string): void {
   canvas.height = 100
   canvas.style.cssText = 'width:100%;border:2px solid #1565c0;border-radius:4px;cursor:crosshair;touch-action:none;background:#f8f9ff'
 
+  
   const statusEl = document.createElement('p')
   statusEl.style.cssText = 'margin:0;font:12px sans-serif;color:#555'
 
