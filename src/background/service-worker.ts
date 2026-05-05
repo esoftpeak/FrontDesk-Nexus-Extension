@@ -973,11 +973,13 @@ async function createEzeeSignaturePdf(
     })
   }
 
-  // Overlay signature PNG — position matches the "Guest Signature:" line in the eZee card.
-  // The card screenshot fills the full page; the signature field is ~62% down the page.
+  // Overlay the signature PNG on top of the card screenshot.
+  // The "Guest Signature:" box in the eZee card sits at ~76% from the top of the page,
+  // i.e. ~24% from the bottom → sigY ≈ pageH * 0.24 ≈ 190 pts from bottom.
+  // sigX ≈ 80 pts matches the left edge of the signature box in the card.
   const sigImage = await pdfDoc.embedPng(signaturePng)
-  const sigY = screenshotDataUrl ? pageH * 0.33 : pageH - 270  // ~254 pts from bottom
-  page.drawImage(sigImage, { x: 100, y: sigY, width: 300, height: 70 })
+  const sigY = screenshotDataUrl ? Math.round(pageH * 0.24) : pageH - 270
+  page.drawImage(sigImage, { x: 80, y: sigY, width: 250, height: 55 })
 
   return pdfDoc.save()
 }
@@ -1425,6 +1427,9 @@ async function handleMessage(
         chrome.tabs.onUpdated.addListener(onUpdated)
         setTimeout(() => resolve(), 20_000) // fallback
       })
+      // 135% zoom — larger text makes the card easier to read and sign on the 2nd display
+      try { await chrome.tabs.setZoom(tabId, 1.35) } catch { /* ignore */ }
+      await new Promise(r => setTimeout(r, 300))
       try {
         await chrome.scripting.executeScript({
           target: { tabId },
@@ -1439,12 +1444,20 @@ async function handleMessage(
   }
 
   if (msg.type === 'EZEE_SAVE_SIGNATURE') {
+    const senderTabId    = _sender.tab?.id
     const senderWindowId = _sender.tab?.windowId
     try {
-      // Capture the Stimulsoft popup (overlay is already hidden by the injected script)
+      // Capture the Stimulsoft popup (overlay is already hidden by the injected script).
+      // Must: (1) reset zoom so the full card fits, (2) focus the window — both required for captureVisibleTab.
       let screenshotDataUrl: string | null = null
-      if (senderWindowId != null) {
+      if (senderTabId != null && senderWindowId != null) {
         try {
+          // Reset to 90% so the full card is visible in the 1200×900 viewport
+          await chrome.tabs.setZoom(senderTabId, 0.9)
+          await new Promise(r => setTimeout(r, 400))
+          // Focus the window — captureVisibleTab fails on non-focused windows
+          await chrome.windows.update(senderWindowId, { focused: true })
+          await new Promise(r => setTimeout(r, 300))
           screenshotDataUrl = await chrome.tabs.captureVisibleTab(senderWindowId, { format: 'png' })
           console.log('[FDN SW] eZee reg card screenshot captured ✓')
         } catch (capErr) {
