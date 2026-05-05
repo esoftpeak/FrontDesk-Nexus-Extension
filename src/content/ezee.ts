@@ -690,20 +690,16 @@ document.addEventListener(
       confirmation: conf,
     }).catch(() => { /* extension may not be listening */ })
 
-    void waitForReportIframe().then(async (iframeUrl) => {
+    void waitForReportIframe().then((iframeUrl) => {
       if (!iframeUrl) return
       console.log('[FDN eZee] Report iframe URL:', iframeUrl)
 
-      await chrome.storage.local.set({
-        regCardData: { ezeeReportUrl: iframeUrl, confirmation: conf },
-      })
-
-      void chrome.windows.create({
-        url: chrome.runtime.getURL('registration-card.html'),
-        type: 'popup',
-        width: 1200,
-        height: 900,
-      })
+      // chrome.windows is not available in content scripts — delegate to service worker
+      void chrome.runtime.sendMessage({
+        type: 'EZEE_OPEN_REG_CARD',
+        ezeeReportUrl: iframeUrl,
+        confirmation: conf,
+      }).catch(() => { /* extension may not be listening */ })
     })
   },
   true,

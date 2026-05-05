@@ -1220,6 +1220,19 @@ async function handleMessage(
     return { ok: true }
   }
 
+  if (msg.type === 'EZEE_OPEN_REG_CARD') {
+    await chrome.storage.local.set({
+      regCardData: { ezeeReportUrl: msg.ezeeReportUrl, confirmation: msg.confirmation },
+    })
+    await chrome.windows.create({
+      url: chrome.runtime.getURL('registration-card.html'),
+      type: 'popup',
+      width: 1200,
+      height: 900,
+    })
+    return { ok: true }
+  }
+
   if (msg.type === 'AUTH_DEV_LOGIN') {
     lastError = null
     const { error } = await client.auth.signInWithPassword({
