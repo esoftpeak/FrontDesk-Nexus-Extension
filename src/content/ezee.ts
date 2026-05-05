@@ -627,16 +627,34 @@ document.addEventListener('click', (e) => {
 // ── Print Guest Registration Card detection ───────────────────────────────────
 // eZee renders the dropdown at body level via Ant Design portal.
 // Capture phase fires before any component stopPropagation.
+
+function waitForReportIframe(timeoutMs = 8000): Promise<string | null> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs
+    const id = window.setInterval(() => {
+      const iframe = document.querySelector<HTMLIFrameElement>(
+        'iframe[name="reportFrame"], iframe[id="reportFrame"]',
+      )
+      if (iframe?.src && iframe.src.includes('stimulsoftJSON')) {
+        window.clearInterval(id)
+        resolve(iframe.src)
+      } else if (Date.now() > deadline) {
+        window.clearInterval(id)
+        console.warn('[FDN eZee] Report iframe not found within timeout')
+        resolve(null)
+      }
+    }, 200)
+  })
+}
+
 document.addEventListener(
   'click',
   (event) => {
     const el = event.target as HTMLElement
-    // Walk up in case the click lands on a child <span> inside the <li>
     const menuItem = el.closest('li[role="menuitem"]') as HTMLElement | null
     if (!menuItem) return
     if (menuItem.textContent?.trim() !== 'Print Guest Registration Card') return
 
-    // lastDedupeKey is "confNumber|roomHint" — split to get just the confirmation
     const conf = lastDedupeKey ? lastDedupeKey.split('|')[0]! : ''
     console.log('[FDN eZee] Print Guest Registration Card clicked | confirmation:', conf || '(unknown)')
 
@@ -644,8 +662,14 @@ document.addEventListener(
       type: 'EZEE_PRINT_BASIC_CARD_CLICKED',
       confirmation: conf,
     }).catch(() => { /* extension may not be listening */ })
+
+    void waitForReportIframe().then((iframeSrc) => {
+      if (!iframeSrc) return
+      console.log('[FDN eZee] Report iframe URL:', iframeSrc)
+      window.open(iframeSrc, '_blank', 'popup,left=200,top=50,width=950,height=900')
+    })
   },
-  true, // capture phase
+  true,
 )
 
 export {}
