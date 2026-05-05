@@ -37,6 +37,8 @@ export type ExtensionMessage =
   | { type: 'EZEE_PRINT_BASIC_CARD_CLICKED'; confirmation: string }
   /** Content script captured the Stimulsoft report URL — service worker opens the reg-card popup. */
   | { type: 'EZEE_OPEN_REG_CARD'; ezeeReportUrl: string; confirmation: string }
+  /** Injected sign overlay on Stimulsoft popup — save PNG signature as PDF to Supabase. */
+  | { type: 'EZEE_SAVE_SIGNATURE'; signaturePng: string; confirmation: string }
   | { type: 'AUTH_DEV_LOGIN'; email: string; password: string }
   | { type: 'AUTH_LOGOUT' }
   | {

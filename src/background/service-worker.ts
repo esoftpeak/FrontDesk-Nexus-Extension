@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 import type {
   ExtensionMessage,
   ExtensionResponse,
@@ -915,6 +916,166 @@ async function saveSignature(args: {
   return { ok: true, signaturePath: storagePath }
 }
 
+// ── eZee sign overlay helpers ─────────────────────────────────────────────────
+
+/** Moves a Chrome window to the secondary display (mirrors registration-card logic). */
+async function moveWindowToSecondDisplay(windowId: number): Promise<void> {
+  try {
+    const displays = await chrome.system.display.getInfo()
+    const second = displays.find(d => !d.isPrimary) ?? displays[1]
+    if (!second) return
+    await chrome.windows.update(windowId, {
+      left: second.workArea.left,
+      top: second.workArea.top,
+      width: second.workArea.width,
+      height: second.workArea.height,
+      state: 'normal',
+    })
+  } catch (e) {
+    console.warn('[FDN SW] moveWindowToSecondDisplay failed:', e)
+  }
+}
+
+/** Creates a signature-record PDF from a PNG data URL using pdf-lib. */
+async function createEzeeSignaturePdf(signaturePng: string, conf: string): Promise<Uint8Array> {
+  const pdfDoc = await PDFDocument.create()
+  const font   = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const bold   = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const page   = pdfDoc.addPage([612, 792])
+  const { height } = page.getSize()
+
+  page.drawText('Guest Registration Card — Signature Record', {
+    x: 50, y: height - 60, size: 14, font: bold, color: rgb(0.08, 0.28, 0.56),
+  })
+  page.drawText(`Confirmation: ${conf}`, {
+    x: 50, y: height - 86, size: 11, font, color: rgb(0.2, 0.2, 0.2),
+  })
+  page.drawText(`Signed: ${new Date().toLocaleString()}`, {
+    x: 50, y: height - 106, size: 10, font, color: rgb(0.45, 0.45, 0.45),
+  })
+  page.drawLine({
+    start: { x: 50, y: height - 124 }, end: { x: 562, y: height - 124 },
+    thickness: 0.5, color: rgb(0.75, 0.75, 0.75),
+  })
+  page.drawText('Guest Signature:', {
+    x: 50, y: height - 152, size: 11, font, color: rgb(0.2, 0.2, 0.2),
+  })
+  const pngImage = await pdfDoc.embedPng(signaturePng)
+  page.drawImage(pngImage, { x: 50, y: height - 270, width: 350, height: 90 })
+  page.drawLine({
+    start: { x: 50, y: height - 276 }, end: { x: 400, y: height - 276 },
+    thickness: 0.5, color: rgb(0.3, 0.3, 0.3),
+  })
+  return pdfDoc.save()
+}
+
+/**
+ * Self-contained sign overlay injected into the Stimulsoft popup tab.
+ * Must not close over any module-level variables — all inputs come via args[].
+ */
+function eZeeSignOverlayFunc(conf: string): void {
+  if (document.getElementById('fdn-sign-overlay')) return
+
+  const overlay = document.createElement('div')
+  overlay.id = 'fdn-sign-overlay'
+  overlay.style.cssText = [
+    'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2147483647',
+    'display:flex;align-items:flex-end;justify-content:center;padding-bottom:40px',
+  ].join(';')
+
+  const box = document.createElement('div')
+  box.style.cssText = [
+    'background:#fff;border-radius:8px;padding:16px 24px;width:700px',
+    'box-shadow:0 8px 32px rgba(0,0,0,0.4);display:flex;flex-direction:column;gap:8px',
+  ].join(';')
+
+  const title = document.createElement('p')
+  title.textContent = 'Guest Signature — Confirmation ' + conf
+  title.style.cssText = 'margin:0;font:600 14px/1.4 sans-serif;color:#1565c0'
+
+  const canvas = document.createElement('canvas')
+  canvas.width = 650
+  canvas.height = 100
+  canvas.style.cssText = 'width:100%;border:2px solid #1565c0;border-radius:4px;cursor:crosshair;touch-action:none;background:#f8f9ff'
+
+  const statusEl = document.createElement('p')
+  statusEl.style.cssText = 'margin:0;font:12px sans-serif;color:#555'
+
+  const btnRow = document.createElement('div')
+  btnRow.style.cssText = 'display:flex;gap:10px;justify-content:flex-end'
+
+  function mkBtn(text: string, bg: string, color: string): HTMLButtonElement {
+    const b = document.createElement('button')
+    b.textContent = text
+    b.style.cssText = `padding:8px 22px;border-radius:4px;border:none;font-weight:600;cursor:pointer;font-size:14px;background:${bg};color:${color}`
+    return b
+  }
+
+  const btnClear  = mkBtn('Clear',          '#f0f0f0', '#333')
+  const btnCancel = mkBtn('Cancel',         '#f0f0f0', '#333')
+  const btnSave   = mkBtn('Save Signature', '#1565c0', '#fff')
+
+  btnRow.append(btnClear, btnCancel, btnSave)
+  box.append(title, canvas, statusEl, btnRow)
+  overlay.appendChild(box)
+  document.body.appendChild(overlay)
+
+  const ctx = canvas.getContext('2d')!
+  ctx.strokeStyle = '#1a237e'
+  ctx.lineWidth   = 2
+  ctx.lineCap     = 'round'
+  ctx.lineJoin    = 'round'
+
+  let drawing = false
+  function getPos(e: MouseEvent | TouchEvent): { x: number; y: number } {
+    const r   = canvas.getBoundingClientRect()
+    const src = 'touches' in e ? (e as TouchEvent).touches[0]! : (e as MouseEvent)
+    return {
+      x: (src.clientX - r.left) * (canvas.width  / r.width),
+      y: (src.clientY - r.top)  * (canvas.height / r.height),
+    }
+  }
+
+  canvas.addEventListener('mousedown',  e => { drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y) })
+  canvas.addEventListener('mousemove',  e => { if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke() })
+  canvas.addEventListener('mouseup',    () => { drawing = false })
+  canvas.addEventListener('mouseleave', () => { drawing = false })
+  canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y) }, { passive: false })
+  canvas.addEventListener('touchmove',  e => { e.preventDefault(); if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke() }, { passive: false })
+  canvas.addEventListener('touchend',   () => { drawing = false })
+
+  btnClear.onclick  = () => ctx.clearRect(0, 0, canvas.width, canvas.height)
+  btnCancel.onclick = () => overlay.remove()
+
+  btnSave.onclick = () => {
+    btnSave.disabled = true
+    btnSave.textContent = 'Saving…'
+    statusEl.textContent = 'Saving to cloud…'
+
+    void (chrome.runtime.sendMessage({
+      type: 'EZEE_SAVE_SIGNATURE',
+      signaturePng: canvas.toDataURL('image/png'),
+      confirmation: conf,
+    }) as Promise<{ ok: boolean; error?: string }>).then((res) => {
+      if (res?.ok) {
+        statusEl.textContent = '✓ Signature saved to cloud'
+        statusEl.style.color = '#2e7d32'
+        setTimeout(() => window.close(), 2000)
+      } else {
+        statusEl.textContent = '✗ Save failed: ' + (res?.error ?? 'unknown')
+        statusEl.style.color = '#c62828'
+        btnSave.disabled = false
+        btnSave.textContent = 'Save Signature'
+      }
+    }).catch(() => {
+      statusEl.textContent = '✗ Could not reach extension'
+      statusEl.style.color = '#c62828'
+      btnSave.disabled = false
+      btnSave.textContent = 'Save Signature'
+    })
+  }
+}
+
 function forwardNativeHostRxToPanel(payload: NativeHostRxDebugBroadcast) {
   void chrome.runtime.sendMessage(payload).catch(() => {
     /* side panel may not be open */
@@ -1221,16 +1382,63 @@ async function handleMessage(
   }
 
   if (msg.type === 'EZEE_OPEN_REG_CARD') {
-    await chrome.storage.local.set({
-      regCardData: { ezeeReportUrl: msg.ezeeReportUrl, confirmation: msg.confirmation },
-    })
-    await chrome.windows.create({
-      url: chrome.runtime.getURL('registration-card.html'),
+    // Open the Stimulsoft URL as a real popup so session cookies load correctly.
+    // (Embedding it in an extension-page iframe is blocked by X-Frame-Options.)
+    const win = await chrome.windows.create({
+      url: msg.ezeeReportUrl,
       type: 'popup',
       width: 1200,
       height: 900,
     })
+    if (!win) return { ok: true }
+    if (win.id != null) await moveWindowToSecondDisplay(win.id)
+
+    const tabId = win.tabs?.[0]?.id
+    if (tabId != null) {
+      // Wait for the tab to finish loading before injecting the sign overlay.
+      await new Promise<void>((resolve) => {
+        function onUpdated(tid: number, info: { status?: string }): void {
+          if (tid !== tabId || info.status !== 'complete') return
+          chrome.tabs.onUpdated.removeListener(onUpdated)
+          resolve()
+        }
+        chrome.tabs.onUpdated.addListener(onUpdated)
+        setTimeout(() => resolve(), 20_000) // fallback
+      })
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: eZeeSignOverlayFunc,
+          args: [msg.confirmation],
+        })
+      } catch (e) {
+        console.warn('[FDN SW] Sign overlay injection failed:', e)
+      }
+    }
     return { ok: true }
+  }
+
+  if (msg.type === 'EZEE_SAVE_SIGNATURE') {
+    try {
+      const pdfBytes = await createEzeeSignaturePdf(msg.signaturePng, msg.confirmation)
+      let binary = ''
+      for (let i = 0; i < pdfBytes.length; i++) binary += String.fromCharCode(pdfBytes[i])
+      const result = await saveSignature({
+        pdfBase64: btoa(binary),
+        confirmationNumber: msg.confirmation,
+      })
+      void notifyUser(
+        'Guest Signature Complete',
+        msg.confirmation
+          ? `Confirmation ${msg.confirmation} — guest has signed.`
+          : 'Guest has signed the registration card.',
+      )
+      return result
+    } catch (e) {
+      const err = e instanceof Error ? e.message : 'Signature save failed'
+      console.error('[FDN SW] EZEE_SAVE_SIGNATURE failed:', e)
+      return { ok: false, error: err }
+    }
   }
 
   if (msg.type === 'AUTH_DEV_LOGIN') {
