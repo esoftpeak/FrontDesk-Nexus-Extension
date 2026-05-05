@@ -936,36 +936,49 @@ async function moveWindowToSecondDisplay(windowId: number): Promise<void> {
   }
 }
 
-/** Creates a signature-record PDF from a PNG data URL using pdf-lib. */
-async function createEzeeSignaturePdf(signaturePng: string, conf: string): Promise<Uint8Array> {
+/**
+ * Creates a PDF that includes the registration card screenshot as the background
+ * with the signature PNG overlaid at the "Guest Signature:" line position.
+ * Falls back to a text-only record if no screenshot is available.
+ */
+async function createEzeeSignaturePdf(
+  screenshotDataUrl: string | null,
+  signaturePng: string,
+  conf: string,
+): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
-  const font   = await pdfDoc.embedFont(StandardFonts.Helvetica)
-  const bold   = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
-  const page   = pdfDoc.addPage([612, 792])
-  const { height } = page.getSize()
+  const pageW = 612
+  const pageH = 792
+  const page  = pdfDoc.addPage([pageW, pageH])
 
-  page.drawText('Guest Registration Card — Signature Record', {
-    x: 50, y: height - 60, size: 14, font: bold, color: rgb(0.08, 0.28, 0.56),
-  })
-  page.drawText(`Confirmation: ${conf}`, {
-    x: 50, y: height - 86, size: 11, font, color: rgb(0.2, 0.2, 0.2),
-  })
-  page.drawText(`Signed: ${new Date().toLocaleString()}`, {
-    x: 50, y: height - 106, size: 10, font, color: rgb(0.45, 0.45, 0.45),
-  })
-  page.drawLine({
-    start: { x: 50, y: height - 124 }, end: { x: 562, y: height - 124 },
-    thickness: 0.5, color: rgb(0.75, 0.75, 0.75),
-  })
-  page.drawText('Guest Signature:', {
-    x: 50, y: height - 152, size: 11, font, color: rgb(0.2, 0.2, 0.2),
-  })
-  const pngImage = await pdfDoc.embedPng(signaturePng)
-  page.drawImage(pngImage, { x: 50, y: height - 270, width: 350, height: 90 })
-  page.drawLine({
-    start: { x: 50, y: height - 276 }, end: { x: 400, y: height - 276 },
-    thickness: 0.5, color: rgb(0.3, 0.3, 0.3),
-  })
+  if (screenshotDataUrl) {
+    // Embed the captured registration card screenshot as the full-page background
+    const screenshot = await pdfDoc.embedPng(screenshotDataUrl)
+    page.drawImage(screenshot, { x: 0, y: 0, width: pageW, height: pageH })
+  } else {
+    // Fallback: plain text header when capture failed
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+    page.drawText('Guest Registration Card — Signature Record', {
+      x: 50, y: pageH - 60, size: 14, font: bold, color: rgb(0.08, 0.28, 0.56),
+    })
+    page.drawText(`Confirmation: ${conf}`, {
+      x: 50, y: pageH - 86, size: 11, font, color: rgb(0.2, 0.2, 0.2),
+    })
+    page.drawText(`Signed: ${new Date().toLocaleString()}`, {
+      x: 50, y: pageH - 106, size: 10, font, color: rgb(0.45, 0.45, 0.45),
+    })
+    page.drawText('Guest Signature:', {
+      x: 50, y: pageH - 152, size: 11, font, color: rgb(0.2, 0.2, 0.2),
+    })
+  }
+
+  // Overlay signature PNG — position matches the "Guest Signature:" line in the eZee card.
+  // The card screenshot fills the full page; the signature field is ~62% down the page.
+  const sigImage = await pdfDoc.embedPng(signaturePng)
+  const sigY = screenshotDataUrl ? pageH * 0.33 : pageH - 270  // ~254 pts from bottom
+  page.drawImage(sigImage, { x: 100, y: sigY, width: 300, height: 70 })
+
   return pdfDoc.save()
 }
 
@@ -1050,29 +1063,36 @@ function eZeeSignOverlayFunc(conf: string): void {
   btnSave.onclick = () => {
     btnSave.disabled = true
     btnSave.textContent = 'Saving…'
-    statusEl.textContent = 'Saving to cloud…'
+    statusEl.textContent = 'Capturing registration card…'
 
-    void (chrome.runtime.sendMessage({
-      type: 'EZEE_SAVE_SIGNATURE',
-      signaturePng: canvas.toDataURL('image/png'),
-      confirmation: conf,
-    }) as Promise<{ ok: boolean; error?: string }>).then((res) => {
-      if (res?.ok) {
-        statusEl.textContent = '✓ Signature saved to cloud'
-        statusEl.style.color = '#2e7d32'
-        setTimeout(() => window.close(), 2000)
-      } else {
-        statusEl.textContent = '✗ Save failed: ' + (res?.error ?? 'unknown')
+    const signaturePng = canvas.toDataURL('image/png')
+
+    // Hide the overlay so the service worker captures a clean screenshot
+    overlay.style.display = 'none'
+
+    setTimeout(() => {
+      void (chrome.runtime.sendMessage({
+        type: 'EZEE_SAVE_SIGNATURE',
+        signaturePng,
+        confirmation: conf,
+      }) as Promise<{ ok: boolean; error?: string }>).then((res) => {
+        if (res?.ok) {
+          // Window is closed by the service worker after save
+        } else {
+          overlay.style.display = 'flex'
+          statusEl.textContent = '✗ Save failed: ' + (res?.error ?? 'unknown')
+          statusEl.style.color = '#c62828'
+          btnSave.disabled = false
+          btnSave.textContent = 'Save Signature'
+        }
+      }).catch(() => {
+        overlay.style.display = 'flex'
+        statusEl.textContent = '✗ Could not reach extension'
         statusEl.style.color = '#c62828'
         btnSave.disabled = false
         btnSave.textContent = 'Save Signature'
-      }
-    }).catch(() => {
-      statusEl.textContent = '✗ Could not reach extension'
-      statusEl.style.color = '#c62828'
-      btnSave.disabled = false
-      btnSave.textContent = 'Save Signature'
-    })
+      })
+    }, 200) // wait 200ms for overlay to disappear before screenshot
   }
 }
 
@@ -1419,8 +1439,20 @@ async function handleMessage(
   }
 
   if (msg.type === 'EZEE_SAVE_SIGNATURE') {
+    const senderWindowId = _sender.tab?.windowId
     try {
-      const pdfBytes = await createEzeeSignaturePdf(msg.signaturePng, msg.confirmation)
+      // Capture the Stimulsoft popup (overlay is already hidden by the injected script)
+      let screenshotDataUrl: string | null = null
+      if (senderWindowId != null) {
+        try {
+          screenshotDataUrl = await chrome.tabs.captureVisibleTab(senderWindowId, { format: 'png' })
+          console.log('[FDN SW] eZee reg card screenshot captured ✓')
+        } catch (capErr) {
+          console.warn('[FDN SW] Tab capture failed — saving signature only:', capErr)
+        }
+      }
+
+      const pdfBytes = await createEzeeSignaturePdf(screenshotDataUrl, msg.signaturePng, msg.confirmation)
       let binary = ''
       for (let i = 0; i < pdfBytes.length; i++) binary += String.fromCharCode(pdfBytes[i])
       const result = await saveSignature({
@@ -1433,6 +1465,10 @@ async function handleMessage(
           ? `Confirmation ${msg.confirmation} — guest has signed.`
           : 'Guest has signed the registration card.',
       )
+      // Close the Stimulsoft popup
+      if (senderWindowId != null) {
+        try { await chrome.windows.remove(senderWindowId) } catch { /* already closed */ }
+      }
       return result
     } catch (e) {
       const err = e instanceof Error ? e.message : 'Signature save failed'
