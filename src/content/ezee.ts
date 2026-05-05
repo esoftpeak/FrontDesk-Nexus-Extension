@@ -631,40 +631,44 @@ document.addEventListener('click', (e) => {
 function waitForReportIframe(timeoutMs = 10_000): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false
+    let pollTimer = 0
 
     function done(src: string | null): void {
       if (settled) return
       settled = true
       obs.disconnect()
+      window.clearInterval(pollTimer)
       window.clearTimeout(timer)
       resolve(src)
     }
 
-    // Check all iframes in the document right now
+    // eZee loads the report via JS navigation — iframe.src stays "".
+    // Read contentWindow.location.href (same-origin) to get the real URL.
     function check(): void {
       const iframes = Array.from(document.querySelectorAll<HTMLIFrameElement>('iframe'))
-      console.log('[FDN eZee] iframe scan —', iframes.length, 'iframe(s):', iframes.map(f => ({
-        id: f.id, name: f.name, title: f.title, src: (f.src || f.getAttribute('src') || '').slice(0, 120),
-      })))
       for (const f of iframes) {
-        const src = f.src || f.getAttribute('src') || ''
-        if (src.includes('stimulsoftJSON')) { done(src); return }
+        if (f.id !== 'reportFrame' && f.name !== 'reportFrame') continue
+        try {
+          const href = f.contentWindow?.location?.href ?? ''
+          console.log('[FDN eZee] reportFrame href:', href.slice(0, 150))
+          if (href && href !== 'about:blank' && href.includes('stimulsoftJSON')) {
+            done(href)
+            return
+          }
+        } catch {
+          // cross-origin guard — should not happen on live.ipms247.com
+        }
       }
     }
 
-    // MutationObserver: fires on new elements AND src attribute changes
     const obs = new MutationObserver(check)
-    obs.observe(document.documentElement, {
-      childList:      true,
-      subtree:        true,
-      attributes:     true,
-      attributeFilter: ['src'],
-    })
+    obs.observe(document.documentElement, { childList: true, subtree: true })
 
-    check() // run immediately in case iframe is already present
+    check()
+    pollTimer = window.setInterval(check, 300)
 
     const timer = window.setTimeout(() => {
-      console.warn('[FDN eZee] Report iframe not found within timeout')
+      console.warn('[FDN eZee] reportFrame URL not found within timeout')
       done(null)
     }, timeoutMs)
   })
