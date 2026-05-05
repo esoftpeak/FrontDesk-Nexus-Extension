@@ -628,22 +628,45 @@ document.addEventListener('click', (e) => {
 // eZee renders the dropdown at body level via Ant Design portal.
 // Capture phase fires before any component stopPropagation.
 
-function waitForReportIframe(timeoutMs = 8000): Promise<string | null> {
+function waitForReportIframe(timeoutMs = 10_000): Promise<string | null> {
   return new Promise((resolve) => {
-    const deadline = Date.now() + timeoutMs
-    const id = window.setInterval(() => {
-      const iframe = document.querySelector<HTMLIFrameElement>(
-        'iframe[name="reportFrame"], iframe[id="reportFrame"]',
-      )
-      if (iframe?.src && iframe.src.includes('stimulsoftJSON')) {
-        window.clearInterval(id)
-        resolve(iframe.src)
-      } else if (Date.now() > deadline) {
-        window.clearInterval(id)
-        console.warn('[FDN eZee] Report iframe not found within timeout')
-        resolve(null)
+    let settled = false
+
+    function done(src: string | null): void {
+      if (settled) return
+      settled = true
+      obs.disconnect()
+      window.clearTimeout(timer)
+      resolve(src)
+    }
+
+    // Check all iframes in the document right now
+    function check(): void {
+      const iframes = Array.from(document.querySelectorAll<HTMLIFrameElement>('iframe'))
+      console.log('[FDN eZee] iframe scan —', iframes.length, 'iframe(s):', iframes.map(f => ({
+        id: f.id, name: f.name, title: f.title, src: (f.src || f.getAttribute('src') || '').slice(0, 120),
+      })))
+      for (const f of iframes) {
+        const src = f.src || f.getAttribute('src') || ''
+        if (src.includes('stimulsoftJSON')) { done(src); return }
       }
-    }, 200)
+    }
+
+    // MutationObserver: fires on new elements AND src attribute changes
+    const obs = new MutationObserver(check)
+    obs.observe(document.documentElement, {
+      childList:      true,
+      subtree:        true,
+      attributes:     true,
+      attributeFilter: ['src'],
+    })
+
+    check() // run immediately in case iframe is already present
+
+    const timer = window.setTimeout(() => {
+      console.warn('[FDN eZee] Report iframe not found within timeout')
+      done(null)
+    }, timeoutMs)
   })
 }
 
