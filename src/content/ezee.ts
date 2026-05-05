@@ -690,10 +690,20 @@ document.addEventListener(
       confirmation: conf,
     }).catch(() => { /* extension may not be listening */ })
 
-    void waitForReportIframe().then((iframeSrc) => {
-      if (!iframeSrc) return
-      console.log('[FDN eZee] Report iframe URL:', iframeSrc)
-      window.open(iframeSrc, '_blank', 'popup,left=200,top=50,width=950,height=900')
+    void waitForReportIframe().then(async (iframeUrl) => {
+      if (!iframeUrl) return
+      console.log('[FDN eZee] Report iframe URL:', iframeUrl)
+
+      await chrome.storage.local.set({
+        regCardData: { ezeeReportUrl: iframeUrl, confirmation: conf },
+      })
+
+      void chrome.windows.create({
+        url: chrome.runtime.getURL('registration-card.html'),
+        type: 'popup',
+        width: 1200,
+        height: 900,
+      })
     })
   },
   true,

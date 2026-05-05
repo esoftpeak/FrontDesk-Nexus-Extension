@@ -1,31 +1,43 @@
-import { PDFDocument } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
-// ── Signature position on PDF page (points, origin = bottom-left corner) ────────
-// US Letter page = 612 × 792 pts. Y increases upward from the page bottom.
-// "Guest Signature:" underline sits at ~258 pts from bottom (~33% up the page).
-// The image bottom-left corner is placed at (SIG_X, SIG_Y); image extends upward by SIG_H.
-// Tweak SIG_Y up/down if the overlay drifts — each ~14 pts ≈ one text line.
-const SIG_X = 140   // points from left edge  (just after "Guest Signature:" label text)
-const SIG_Y = 310   // points from bottom edge — each ~14 pts = 1 text line
-const SIG_W = 200   // width  (spans the underline)
-const SIG_H = 40    // height (extends upward above the line)
+// Signature overlay position for Synxis PDF (points, origin = bottom-left)
+const SIG_X = 140
+const SIG_Y = 310
+const SIG_W = 200
+const SIG_H = 40
 
-type RegCardData = { pdfBase64: string; confirmation: string }
+type RegCardData =
+  | { pdfBase64: string; confirmation: string }
+  | { ezeeReportUrl: string; confirmation: string }
 
 let currentPdfBytes: Uint8Array | null = null
 let currentPdfUrl: string | null = null
+let isEzeeMode = false
 
 async function init() {
   const result = await chrome.storage.local.get('regCardData') as { regCardData?: RegCardData }
   const data = result.regCardData
   if (!data) {
-    document.body.innerHTML = '<p style="padding:2rem;color:red;font-family:sans-serif">No PDF data found. Please close this window and try again.</p>'
+    document.body.innerHTML = '<p style="padding:2rem;color:red;font-family:sans-serif">No registration card data found. Please close this window and try again.</p>'
     return
   }
 
   document.getElementById('confLabel')!.textContent = data.confirmation
 
-  // Parse base64 → bytes
+  if ('ezeeReportUrl' in data) {
+    // eZee mode: load Stimulsoft report URL directly in the iframe
+    isEzeeMode = true
+    ;(document.getElementById('pdfEmbed') as HTMLIFrameElement).src = data.ezeeReportUrl
+    setupSignatureCanvas()
+    window.setTimeout(() => {
+      document.getElementById('signModal')!.classList.add('open')
+    }, 2000)
+    await moveToSecondScreen()
+    return
+  }
+
+  // Synxis mode: decode base64 PDF and display
+  isEzeeMode = false
   const raw = data.pdfBase64.includes(',') ? data.pdfBase64.split(',')[1]! : data.pdfBase64
   const binary = atob(raw)
   currentPdfBytes = new Uint8Array(binary.length)
@@ -46,8 +58,6 @@ function showPdf(bytes: Uint8Array) {
   ;(document.getElementById('pdfEmbed') as HTMLIFrameElement).src = currentPdfUrl + '#zoom=140'
 }
 
-// ── Window Management: move popup to second monitor ──────────────────────────────
-// Uses chrome.system.display.getInfo() — no user gesture or extra permission needed.
 async function moveToSecondScreen() {
   try {
     const displays = await chrome.system.display.getInfo()
@@ -74,12 +84,11 @@ async function moveToSecondScreen() {
   }
 }
 
-// ── Signature canvas ──────────────────────────────────────────────────────────────
 function setupSignatureCanvas() {
-  const canvas  = document.getElementById('sigCanvas')  as HTMLCanvasElement
-  const modal   = document.getElementById('signModal')  as HTMLDivElement
-  const status  = document.getElementById('sigStatus')  as HTMLParagraphElement
-  const ctx     = canvas.getContext('2d')!
+  const canvas = document.getElementById('sigCanvas')  as HTMLCanvasElement
+  const modal  = document.getElementById('signModal')  as HTMLDivElement
+  const status = document.getElementById('sigStatus')  as HTMLParagraphElement
+  const ctx    = canvas.getContext('2d')!
 
   ctx.strokeStyle = '#1a237e'
   ctx.lineWidth   = 2
@@ -89,8 +98,8 @@ function setupSignatureCanvas() {
   let drawing = false
 
   function getPos(e: MouseEvent | TouchEvent) {
-    const r     = canvas.getBoundingClientRect()
-    const src   = 'touches' in e ? e.touches[0] : e
+    const r      = canvas.getBoundingClientRect()
+    const src    = 'touches' in e ? e.touches[0] : e
     const scaleX = canvas.width  / r.width
     const scaleY = canvas.height / r.height
     return { x: (src.clientX - r.left) * scaleX, y: (src.clientY - r.top) * scaleY }
@@ -106,43 +115,75 @@ function setupSignatureCanvas() {
 
   document.getElementById('btnClear')!.onclick  = () => ctx.clearRect(0, 0, canvas.width, canvas.height)
   document.getElementById('btnCancel')!.onclick = () => modal.classList.remove('open')
-
-  document.getElementById('btnSave')!.onclick = () => void embedSignature(canvas, modal, status)
+  document.getElementById('btnSave')!.onclick   = () => void embedSignature(canvas, modal, status)
 }
 
-// ── Safe base64 encode for large Uint8Arrays (avoids spread stack overflow) ───────
 function uint8ToBase64(bytes: Uint8Array): string {
   let binary = ''
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
   return btoa(binary)
 }
 
-// ── Embed signature into PDF and save to Supabase ─────────────────────────────────
 async function embedSignature(canvas: HTMLCanvasElement, modal: HTMLElement, status: HTMLElement) {
-  if (!currentPdfBytes) return
-
   const btn = document.getElementById('btnSave') as HTMLButtonElement
   btn.disabled = true
   btn.textContent = 'Saving…'
 
   try {
-    const pngDataUrl  = canvas.toDataURL('image/png')
-    const pdfDoc      = await PDFDocument.load(currentPdfBytes)
-    const pngImage    = await pdfDoc.embedPng(pngDataUrl)
-    const page        = pdfDoc.getPages()[0]
+    const pngDataUrl = canvas.toDataURL('image/png')
+    let savedBytes: Uint8Array
 
-    page.drawImage(pngImage, { x: SIG_X, y: SIG_Y, width: SIG_W, height: SIG_H })
+    if (isEzeeMode) {
+      // eZee mode: build a signature-record PDF from scratch
+      const pdfDoc = await PDFDocument.create()
+      const font   = await pdfDoc.embedFont(StandardFonts.Helvetica)
+      const bold   = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+      const page   = pdfDoc.addPage([612, 792])
+      const { height } = page.getSize()
+      const conf   = document.getElementById('confLabel')?.textContent?.trim() ?? ''
 
-    const savedBytes = await pdfDoc.save()
-    currentPdfBytes = savedBytes
-    showPdf(savedBytes)
+      page.drawText('Guest Registration Card — Signature Record', {
+        x: 50, y: height - 60, size: 14, font: bold, color: rgb(0.08, 0.28, 0.56),
+      })
+      page.drawText(`Confirmation: ${conf}`, {
+        x: 50, y: height - 86, size: 11, font, color: rgb(0.2, 0.2, 0.2),
+      })
+      page.drawText(`Signed: ${new Date().toLocaleString()}`, {
+        x: 50, y: height - 106, size: 10, font, color: rgb(0.45, 0.45, 0.45),
+      })
+      page.drawLine({
+        start: { x: 50, y: height - 124 }, end: { x: 562, y: height - 124 },
+        thickness: 0.5, color: rgb(0.75, 0.75, 0.75),
+      })
+      page.drawText('Guest Signature:', {
+        x: 50, y: height - 152, size: 11, font, color: rgb(0.2, 0.2, 0.2),
+      })
+      const pngImage = await pdfDoc.embedPng(pngDataUrl)
+      page.drawImage(pngImage, { x: 50, y: height - 270, width: 350, height: 90 })
+      page.drawLine({
+        start: { x: 50, y: height - 276 }, end: { x: 400, y: height - 276 },
+        thickness: 0.5, color: rgb(0.3, 0.3, 0.3),
+      })
+
+      savedBytes = await pdfDoc.save()
+    } else {
+      // Synxis mode: overlay signature PNG on the existing registration card PDF
+      if (!currentPdfBytes) return
+      const pdfDoc   = await PDFDocument.load(currentPdfBytes)
+      const pngImage = await pdfDoc.embedPng(pngDataUrl)
+      const page     = pdfDoc.getPages()[0]
+      page.drawImage(pngImage, { x: SIG_X, y: SIG_Y, width: SIG_W, height: SIG_H })
+      savedBytes = await pdfDoc.save()
+      currentPdfBytes = savedBytes
+      showPdf(savedBytes)
+      console.log('[FDN RegCard] Signature embedded into PDF ✓ (x=%d y=%d w=%d h=%d)', SIG_X, SIG_Y, SIG_W, SIG_H)
+    }
+
     modal.classList.remove('open')
 
-    console.log('[FDN RegCard] Signature embedded into PDF ✓ (x=%d y=%d w=%d h=%d)', SIG_X, SIG_Y, SIG_W, SIG_H)
-
     const confirmation = document.getElementById('confLabel')?.textContent?.trim() ?? ''
+    console.log('[FDN RegCard] Signature captured ✓ | mode:', isEzeeMode ? 'eZee' : 'Synxis')
 
-    // ── Upload encrypted PDF to Supabase via service worker ───────────────────
     status.textContent = 'Saving to cloud…'
     status.className = 'status'
 
@@ -154,9 +195,7 @@ async function embedSignature(canvas: HTMLCanvasElement, modal: HTMLElement, sta
         confirmationNumber: confirmation,
       })
       cloudOk = result?.ok === true
-      if (!cloudOk) {
-        console.warn('[FDN RegCard] Cloud save failed:', result?.error)
-      }
+      if (!cloudOk) console.warn('[FDN RegCard] Cloud save failed:', result?.error)
     } catch (msgErr) {
       console.warn('[FDN RegCard] Could not reach service worker:', msgErr)
     }
@@ -164,7 +203,6 @@ async function embedSignature(canvas: HTMLCanvasElement, modal: HTMLElement, sta
     status.textContent = cloudOk ? '✓ Signature saved to cloud' : '✓ Signed — cloud save failed (check console)'
     status.className   = cloudOk ? 'status ok' : 'status warn'
 
-    // ── Chrome notification ────────────────────────────────────────────────────
     try {
       await chrome.notifications.create({
         type: 'basic',
