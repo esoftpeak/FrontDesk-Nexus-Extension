@@ -65,6 +65,9 @@ const ezeeAutoDedupeByTab = new Map<
 const ezeeAutoInFlight = new Set<string>()
 const EZEE_AUTO_DEDUPE_MS = 30_000
 
+/** Currently open eZee reg-card popup windows — prevents reopening on duplicate events. */
+const ezeeRegCardWindowByConf = new Map<string, number>()
+
 function synxisAutoFlightKey(tabId: number, confirmation: string, roomHint: string): string {
   return `${tabId}|${confirmation}|${roomHint}`
 }
@@ -985,6 +988,27 @@ async function createEzeeSignaturePdf(
 }
 
 /**
+ * Embeds the guest signature PNG into the real Stimulsoft registration card PDF.
+ * The "Guest Signature:" box in the eZee card sits at ~20% from the bottom.
+ */
+async function embedSignatureIntoEzeePdf(
+  cardPdfBytes: Uint8Array,
+  signaturePng: string,
+): Promise<Uint8Array> {
+  const pdfDoc = await PDFDocument.load(cardPdfBytes, { ignoreEncryption: true })
+  const page   = pdfDoc.getPages().at(-1)!
+  const { width, height } = page.getSize()
+  const sigImage = await pdfDoc.embedPng(signaturePng)
+  page.drawImage(sigImage, {
+    x:      Math.round(width  * 0.12),
+    y:      Math.round(height * 0.18),
+    width:  Math.round(width  * 0.35),
+    height: Math.round(height * 0.06),
+  })
+  return pdfDoc.save()
+}
+
+/**
  * Self-contained sign overlay injected into the Stimulsoft popup tab.
  * Must not close over any module-level variables — all inputs come via args[].
  */
@@ -995,7 +1019,7 @@ function eZeeSignOverlayFunc(conf: string): void {
   overlay.id = 'fdn-sign-overlay'
   overlay.style.cssText = [
     'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2147483647',
-    'display:flex;align-items:flex-end;justify-content:center;padding-bottom:40px',
+    'display:flex;align-items:flex-end;justify-content:center;padding-bottom:150px',
   ].join(';')
 
   const box = document.createElement('div')
@@ -1003,10 +1027,6 @@ function eZeeSignOverlayFunc(conf: string): void {
     'background:#fff;border-radius:8px;padding:16px 24px;width:700px',
     'box-shadow:0 8px 32px rgba(0,0,0,0.4);display:flex;flex-direction:column;gap:8px',
   ].join(';')
-
-  const title = document.createElement('p')
-  title.textContent = 'Guest Signature — Confirmation ' + conf
-  title.style.cssText = 'margin:0;font:600 14px/1.4 sans-serif;color:#1565c0'
 
   const canvas = document.createElement('canvas')
   canvas.width = 650
@@ -1031,7 +1051,7 @@ function eZeeSignOverlayFunc(conf: string): void {
   const btnSave   = mkBtn('Save Signature', '#1565c0', '#fff')
 
   btnRow.append(btnClear, btnCancel, btnSave)
-  box.append(title, canvas, statusEl, btnRow)
+  box.append(canvas, statusEl, btnRow)
   overlay.appendChild(box)
   document.body.appendChild(overlay)
 
@@ -1066,35 +1086,103 @@ function eZeeSignOverlayFunc(conf: string): void {
     btnSave.disabled = true
     btnSave.textContent = 'Saving…'
     statusEl.textContent = 'Capturing registration card…'
+    statusEl.style.color = '#555'
 
     const signaturePng = canvas.toDataURL('image/png')
 
-    // Hide the overlay so the service worker captures a clean screenshot
-    overlay.style.display = 'none'
+    // Capture all Stimulsoft report page canvases (skip our own signature canvas)
+    function captureReportCanvas(): string | null {
+      try {
+        const reportCanvases = Array.from(document.querySelectorAll<HTMLCanvasElement>('canvas'))
+          .filter(c => c !== canvas && c.width > 300 && c.height > 300)
+        if (reportCanvases.length === 0) return null
+        reportCanvases.sort((a, b) => b.width * b.height - a.width * a.height)
+        if (reportCanvases.length === 1) return reportCanvases[0].toDataURL('image/png')
+        // Multiple pages — combine vertically into one image
+        const maxW   = Math.max(...reportCanvases.map(c => c.width))
+        const totalH = reportCanvases.reduce((s, c) => s + c.height, 0)
+        const combined = document.createElement('canvas')
+        combined.width = maxW; combined.height = totalH
+        const cx = combined.getContext('2d')
+        if (!cx) return null
+        let y = 0
+        for (const rc of reportCanvases) { cx.drawImage(rc, 0, y); y += rc.height }
+        return combined.toDataURL('image/png')
+      } catch { return null }
+    }
 
-    setTimeout(() => {
-      void (chrome.runtime.sendMessage({
-        type: 'EZEE_SAVE_SIGNATURE',
-        signaturePng,
-        confirmation: conf,
-      }) as Promise<{ ok: boolean; error?: string }>).then((res) => {
-        if (res?.ok) {
-          // Window is closed by the service worker after save
-        } else {
+    // Try to export the real PDF via Stimulsoft's JS API
+    function tryStimulsoftPdf(): Promise<string | null> {
+      return new Promise<string | null>((resolve) => {
+        try {
+          const win = window as { Stimulsoft?: Record<string, unknown>; stimulsoft?: Record<string, unknown> }
+          const S = win.Stimulsoft ?? win.stimulsoft
+          if (!S) { resolve(null); return }
+          const instances = ((S['Viewer'] as Record<string, unknown>)?.['StiViewer'] as Record<string, unknown[]>)?.['instances'] ?? []
+          let report: Record<string, unknown> | null = null
+          for (const inst of instances) {
+            const r = (inst as Record<string, unknown>)?.['report']
+            if (r) { report = r as Record<string, unknown>; break }
+          }
+          if (!report) { resolve(null); return }
+          const exportFn = report['exportDocumentAsync']
+          if (typeof exportFn !== 'function') { resolve(null); return }
+          const fmtObj = (S['Report'] as Record<string, Record<string, unknown>>)?.['StiExportFormat']
+          const pdfFmt = fmtObj?.['Pdf'] ?? fmtObj?.['PDF'] ?? 'Pdf'
+          ;(exportFn as (cb: (d: unknown) => void, fmt: unknown) => void).call(report, (data: unknown) => {
+            try {
+              const bytes = data as Uint8Array
+              let bin = ''
+              for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+              resolve(btoa(bin))
+            } catch { resolve(null) }
+          }, pdfFmt)
+          setTimeout(() => resolve(null), 15_000)
+        } catch { resolve(null) }
+      })
+    }
+
+    void (async () => {
+      // Best case: real PDF from Stimulsoft JS API
+      let cardPdfBase64: string | null = await tryStimulsoftPdf()
+      let cardImageBase64: string | null = null
+
+      // Fallback: capture rendered canvas elements
+      if (!cardPdfBase64) {
+        cardImageBase64 = captureReportCanvas()
+        console.log('[FDN eZee] Card capture:', cardImageBase64 ? 'canvas PNG ✓' : 'none — text fallback')
+      } else {
+        console.log('[FDN eZee] Card capture: Stimulsoft PDF ✓')
+      }
+
+      overlay.style.display = 'none'
+      await new Promise<void>(r => setTimeout(r, 200))
+
+      try {
+        const res = await (chrome.runtime.sendMessage({
+          type: 'EZEE_SAVE_SIGNATURE',
+          signaturePng,
+          confirmation: conf,
+          cardPdfBase64: cardPdfBase64 ?? null,
+          cardImageBase64: cardImageBase64 ?? null,
+        }) as Promise<{ ok: boolean; error?: string }>)
+
+        if (!res?.ok) {
           overlay.style.display = 'flex'
           statusEl.textContent = '✗ Save failed: ' + (res?.error ?? 'unknown')
           statusEl.style.color = '#c62828'
           btnSave.disabled = false
           btnSave.textContent = 'Save Signature'
         }
-      }).catch(() => {
+        // On success the service worker closes this window
+      } catch {
         overlay.style.display = 'flex'
         statusEl.textContent = '✗ Could not reach extension'
         statusEl.style.color = '#c62828'
         btnSave.disabled = false
         btnSave.textContent = 'Save Signature'
-      })
-    }, 200) // wait 200ms for overlay to disappear before screenshot
+      }
+    })()
   }
 }
 
@@ -1404,6 +1492,19 @@ async function handleMessage(
   }
 
   if (msg.type === 'EZEE_OPEN_REG_CARD') {
+    // Prevent reopening if a window is already open for this confirmation.
+    const existingWinId = ezeeRegCardWindowByConf.get(msg.confirmation)
+    if (existingWinId != null) {
+      try {
+        await chrome.windows.update(existingWinId, { focused: true })
+        console.log('[FDN SW] EZEE_OPEN_REG_CARD: reusing existing window', existingWinId)
+        return { ok: true }
+      } catch {
+        // Window was closed externally — fall through to open a new one
+        ezeeRegCardWindowByConf.delete(msg.confirmation)
+      }
+    }
+
     // Open the Stimulsoft URL as a real popup so session cookies load correctly.
     // (Embedding it in an extension-page iframe is blocked by X-Frame-Options.)
     const win = await chrome.windows.create({
@@ -1413,7 +1514,10 @@ async function handleMessage(
       height: 900,
     })
     if (!win) return { ok: true }
-    if (win.id != null) await moveWindowToSecondDisplay(win.id)
+    if (win.id != null) {
+      ezeeRegCardWindowByConf.set(msg.confirmation, win.id)
+      await moveWindowToSecondDisplay(win.id)
+    }
 
     const tabId = win.tabs?.[0]?.id
     if (tabId != null) {
@@ -1444,44 +1548,47 @@ async function handleMessage(
   }
 
   if (msg.type === 'EZEE_SAVE_SIGNATURE') {
-    const senderTabId    = _sender.tab?.id
     const senderWindowId = _sender.tab?.windowId
     try {
-      // Capture the Stimulsoft popup (overlay is already hidden by the injected script).
-      // Must: (1) reset zoom so the full card fits, (2) focus the window — both required for captureVisibleTab.
-      let screenshotDataUrl: string | null = null
-      if (senderTabId != null && senderWindowId != null) {
-        try {
-          // Reset to 90% so the full card is visible in the 1200×900 viewport
-          await chrome.tabs.setZoom(senderTabId, 0.9)
-          await new Promise(r => setTimeout(r, 400))
-          // Focus the window — captureVisibleTab fails on non-focused windows
-          await chrome.windows.update(senderWindowId, { focused: true })
-          await new Promise(r => setTimeout(r, 300))
-          screenshotDataUrl = await chrome.tabs.captureVisibleTab(senderWindowId, { format: 'png' })
-          console.log('[FDN SW] eZee reg card screenshot captured ✓')
-        } catch (capErr) {
-          console.warn('[FDN SW] Tab capture failed — saving signature only:', capErr)
-        }
+      let pdfBytes: Uint8Array
+
+      if (msg.cardPdfBase64) {
+        // Best case: real Stimulsoft PDF — embed signature directly into it
+        console.log('[FDN SW] eZee signature: embedding into Stimulsoft PDF ✓')
+        const bin = atob(msg.cardPdfBase64)
+        const cardBytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) cardBytes[i] = bin.charCodeAt(i)
+        pdfBytes = await embedSignatureIntoEzeePdf(cardBytes, msg.signaturePng)
+      } else {
+        // Canvas PNG background or plain text fallback
+        console.log('[FDN SW] eZee signature:', msg.cardImageBase64 ? 'canvas PNG background' : 'text fallback')
+        pdfBytes = await createEzeeSignaturePdf(msg.cardImageBase64 ?? null, msg.signaturePng, msg.confirmation)
       }
 
-      const pdfBytes = await createEzeeSignaturePdf(screenshotDataUrl, msg.signaturePng, msg.confirmation)
       let binary = ''
       for (let i = 0; i < pdfBytes.length; i++) binary += String.fromCharCode(pdfBytes[i])
       const result = await saveSignature({
         pdfBase64: btoa(binary),
         confirmationNumber: msg.confirmation,
       })
+
+      // Clean up dedup tracking
+      ezeeRegCardWindowByConf.delete(msg.confirmation)
+
+      // Defer window close so the response reaches the injected script first,
+      // preventing it from showing an error and potentially re-triggering the flow.
+      if (senderWindowId != null) {
+        setTimeout(() => {
+          void chrome.windows.remove(senderWindowId).catch(() => { /* already closed */ })
+        }, 500)
+      }
+
       void notifyUser(
         'Guest Signature Complete',
         msg.confirmation
           ? `Confirmation ${msg.confirmation} — guest has signed.`
           : 'Guest has signed the registration card.',
       )
-      // Close the Stimulsoft popup
-      if (senderWindowId != null) {
-        try { await chrome.windows.remove(senderWindowId) } catch { /* already closed */ }
-      }
       return result
     } catch (e) {
       const err = e instanceof Error ? e.message : 'Signature save failed'
