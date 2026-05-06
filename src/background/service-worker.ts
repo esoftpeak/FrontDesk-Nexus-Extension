@@ -1003,7 +1003,7 @@ async function embedSignatureIntoEzeePdf(
   const sigImage = await pdfDoc.embedPng(signaturePng)
   page.drawImage(sigImage, {
     x:      Math.round(width  * 0.12),
-    y:      Math.round(height * 0.18),
+    y:      Math.round(height * 0.07),
     width:  Math.round(width  * 0.35),
     height: Math.round(height * 0.06),
   })
@@ -1530,6 +1530,14 @@ async function handleMessage(
       })
       // 135% zoom — larger text makes the card easier to read and sign on the 2nd display
       try { await chrome.tabs.setZoom(tabId, 1.35) } catch { /* ignore */ }
+
+      // Hide the Stimulsoft viewer toolbar so the card is shown without viewer chrome.
+      try {
+        await chrome.scripting.insertCSS({
+          target: { tabId },
+          css: '[id*="Toolbar"],[id*="ToolBar"],[class*="Toolbar"],[class*="toolbar"],[class*="StatusBar"],[id*="StatusBar"] { display:none!important }',
+        })
+      } catch { /* ignore */ }
 
       // Wait for Stimulsoft to fetch and render the report (JS-driven, happens after load).
       await new Promise(r => setTimeout(r, 4000))
