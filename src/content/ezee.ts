@@ -78,6 +78,9 @@ function buildExtractPayload():
 }
 
 async function runDetection(): Promise<void> {
+  // Only auto-detect guests on the reservations list page, not other eZee pages.
+  if (!location.pathname.startsWith('/unity/reservations')) return
+
   const openNow = isEzeeGuestDrawerOpen(document)
 
   if (openNow && !wasDrawerOpen) {

@@ -1413,7 +1413,7 @@ async function handleMessage(
         tabUrl,
         msg.snapshot,
         msg.guestDisplay,
-        { chromeNotify: true, panelToast: true },
+        { chromeNotify: false, panelToast: true },
       )
       if (result && typeof result === 'object' && 'ok' in result && result.ok === true) {
         ezeeAutoDedupeByTab.set(tabId, { confirmation: c, roomHint, at: Date.now() })
@@ -1479,12 +1479,6 @@ async function handleMessage(
 
   if (msg.type === 'EZEE_PRINT_BASIC_CARD_CLICKED') {
     console.log('[FDN eZee] Print Guest Registration Card clicked | confirmation:', msg.confirmation)
-    void notifyUser(
-      'FrontDesk Nexus — Print Card',
-      msg.confirmation
-        ? `Registration card for ${msg.confirmation} requested`
-        : 'Guest registration card print requested',
-    )
     return { ok: true }
   }
 
