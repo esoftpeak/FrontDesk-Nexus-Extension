@@ -1003,7 +1003,7 @@ async function embedSignatureIntoEzeePdf(
   const sigImage = await pdfDoc.embedPng(signaturePng)
   page.drawImage(sigImage, {
     x:      Math.round(width  * 0.12),
-    y:      Math.round(height * 0.07),
+    y:      Math.round(height * 0.12),
     width:  Math.round(width  * 0.35),
     height: Math.round(height * 0.06),
   })
