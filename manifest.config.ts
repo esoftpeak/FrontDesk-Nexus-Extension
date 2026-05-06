@@ -25,6 +25,7 @@ export default defineManifest({
     'windowManagement',
     'windows',
     'system.display',
+    'debugger',
   ],
   web_accessible_resources: [
     {

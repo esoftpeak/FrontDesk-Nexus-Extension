@@ -67,6 +67,8 @@ const EZEE_AUTO_DEDUPE_MS = 30_000
 
 /** Currently open eZee reg-card popup windows — prevents reopening on duplicate events. */
 const ezeeRegCardWindowByConf = new Map<string, number>()
+/** Pre-captured Stimulsoft PDF (via CDP Page.printToPDF), keyed by confirmation. */
+const ezeePreCapturedPdf = new Map<string, string>()
 
 function synxisAutoFlightKey(tabId: number, confirmation: string, roomHint: string): string {
   return `${tabId}|${confirmation}|${roomHint}`
@@ -1009,70 +1011,63 @@ async function embedSignatureIntoEzeePdf(
 }
 
 /**
- * Injected into the Stimulsoft popup in the MAIN world — patches URL.createObjectURL to
- * intercept the client-side PDF blob Stimulsoft generates, then fires a 'fdn-pdf-ready'
- * CustomEvent so the ISOLATED world overlay receives the bytes without any network I/O.
+ * Attaches the Chrome DevTools debugger to the Stimulsoft popup tab, captures the
+ * full registration card as a PDF via Page.printToPDF (equivalent to "Print → Save as
+ * PDF"), then detaches.  Returns base64-encoded PDF bytes, or null on failure.
  */
-function eZeeMainWorldCapture(): void {
-  const win0 = window as unknown as Record<string, unknown>
-  if (win0['__fdnPdfCapture']) return
-  win0['__fdnPdfCapture'] = true
+async function captureStimulsoftAsPdf(tabId: number): Promise<string | null> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      chrome.debugger.attach({ tabId }, '1.3', () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message))
+        else resolve()
+      })
+    })
 
-  const origCreateObjectURL = URL.createObjectURL.bind(URL)
-  const origAnchorClick     = HTMLAnchorElement.prototype.click
-  let   suppressNextClick   = false
+    // Inject print CSS to hide Stimulsoft toolbar/navigation so it doesn't appear in PDF.
+    await new Promise<void>(resolve => {
+      chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+        expression: `(() => {
+          const s = document.createElement('style');
+          s.textContent = '@media print { [id*="Toolbar"],[class*="Toolbar"],[class*="toolbar"],[class*="StatusBar"],[id*="StatusBar"] { display:none!important } }';
+          document.head.appendChild(s);
+        })()`,
+      }, () => resolve())
+    })
 
-  // Prevent auto-download of the intercepted PDF blob.
-  HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
-    if (suppressNextClick && this.href.startsWith('blob:')) {
-      suppressNextClick = false
-      return
-    }
-    return origAnchorClick.call(this)
-  }
+    await new Promise(r => setTimeout(r, 300))
 
-  URL.createObjectURL = function (obj: Blob | MediaSource | File): string {
-    const url = origCreateObjectURL(obj as Blob)
-    if (obj instanceof Blob && obj.size > 1000) {
-      obj.slice(0, 5).text().then(header => {
-        if (!header.startsWith('%PDF-')) return
-        suppressNextClick = true
-        const reader = new FileReader()
-        reader.onload = () => {
-          const dataUrl = reader.result as string
-          const b64     = dataUrl.split(',')[1] ?? ''
-          document.dispatchEvent(new CustomEvent('fdn-pdf-ready', { detail: b64 }))
-          console.log('[FDN MAIN] PDF blob intercepted:', b64.length, 'b64 chars')
+    const result = await new Promise<{ data: string }>((resolve, reject) => {
+      chrome.debugger.sendCommand(
+        { tabId },
+        'Page.printToPDF',
+        {
+          printBackground:    true,
+          displayHeaderFooter: false,
+          landscape:           false,
+          paperWidth:          8.27,   // A4
+          paperHeight:         11.69,
+          marginTop:           0,
+          marginBottom:        0,
+          marginLeft:          0,
+          marginRight:         0,
+          preferCSSPageSize:   true,
+        },
+        (res) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message))
+          else resolve(res as { data: string })
         }
-        reader.readAsDataURL(obj)
-      }).catch(() => { /* ignore */ })
-    }
-    return url
-  }
+      )
+    })
 
-  // Wait for the viewer to initialise, then trigger a silent PDF export.
-  setTimeout(() => {
-    try {
-      const win = window as unknown as Record<string, unknown>
-      const S   = (win['Stimulsoft'] ?? win['stimulsoft']) as Record<string, unknown> | undefined
-      if (!S) { console.warn('[FDN MAIN] Stimulsoft not found on window'); return }
-      const instances = (
-        (S['Viewer'] as Record<string, unknown>)?.['StiViewer'] as Record<string, unknown[]>
-      )?.['instances'] ?? []
-      for (const inst of instances as Record<string, unknown>[]) {
-        const downloadFile = inst['downloadFile']
-        if (typeof downloadFile !== 'function') continue
-        const fmtObj = (S['Report'] as Record<string, Record<string, unknown>>)?.['StiExportFormat']
-        const pdfFmt = fmtObj?.['Pdf'] ?? fmtObj?.['PDF'] ?? 'Pdf'
-        ;(downloadFile as (fmt: unknown, x: null, y: boolean) => void).call(inst, pdfFmt, null, false)
-        console.log('[FDN MAIN] viewer.downloadFile triggered, format:', pdfFmt)
-        return
-      }
-      console.warn('[FDN MAIN] No viewer instance with downloadFile found')
-    } catch (err) {
-      console.warn('[FDN MAIN] PDF trigger error:', err)
-    }
-  }, 1500)
+    await new Promise<void>(resolve => chrome.debugger.detach({ tabId }, () => resolve()))
+    console.log('[FDN SW] CDP printToPDF captured:', result.data?.length, 'b64 chars')
+    return result.data ?? null
+  } catch (err) {
+    console.warn('[FDN SW] CDP printToPDF failed:', err)
+    try { await new Promise<void>(r => chrome.debugger.detach({ tabId }, () => r())) } catch { /* already detached */ }
+    return null
+  }
 }
 
 /**
@@ -1081,13 +1076,6 @@ function eZeeMainWorldCapture(): void {
  */
 function eZeeSignOverlayFunc(conf: string): void {
   if (document.getElementById('fdn-sign-overlay')) return
-
-  // Receives the PDF base64 dispatched by eZeeMainWorldCapture (MAIN world).
-  let preCapturePdf: string | null = null
-  document.addEventListener('fdn-pdf-ready', (e) => {
-    preCapturePdf = (e as CustomEvent<string>).detail
-    console.log('[FDN eZee overlay] PDF ready:', preCapturePdf?.length, 'b64 chars')
-  }, { once: true })
 
   const overlay = document.createElement('div')
   overlay.id = 'fdn-sign-overlay'
@@ -1172,7 +1160,7 @@ function eZeeSignOverlayFunc(conf: string): void {
           type: 'EZEE_SAVE_SIGNATURE',
           signaturePng,
           confirmation: conf,
-          cardPdfBase64:   preCapturePdf ?? null,
+          cardPdfBase64:   null,
           cardImageBase64: null,
         }) as Promise<{ ok: boolean; error?: string }>)
 
@@ -1542,16 +1530,20 @@ async function handleMessage(
       })
       // 135% zoom — larger text makes the card easier to read and sign on the 2nd display
       try { await chrome.tabs.setZoom(tabId, 1.35) } catch { /* ignore */ }
-      await new Promise(r => setTimeout(r, 300))
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          func: eZeeMainWorldCapture,
-          world: 'MAIN',
-        })
-      } catch (e) {
-        console.warn('[FDN SW] MAIN world PDF capture injection failed:', e)
+
+      // Wait for Stimulsoft to fetch and render the report (JS-driven, happens after load).
+      await new Promise(r => setTimeout(r, 4000))
+
+      // Capture the fully-rendered registration card via CDP before showing the overlay,
+      // so the PDF contains no overlay elements.
+      const capturedPdf = await captureStimulsoftAsPdf(tabId)
+      if (capturedPdf) {
+        ezeePreCapturedPdf.set(msg.confirmation, capturedPdf)
+      } else {
+        console.warn('[FDN SW] CDP PDF capture failed — will use text fallback')
       }
+
+      await new Promise(r => setTimeout(r, 300))
       try {
         await chrome.scripting.executeScript({
           target: { tabId },
@@ -1570,17 +1562,20 @@ async function handleMessage(
     try {
       let pdfBytes: Uint8Array
 
-      if (msg.cardPdfBase64) {
-        // Best case: real Stimulsoft PDF — embed signature directly into it
-        console.log('[FDN SW] eZee signature: embedding into Stimulsoft PDF ✓')
-        const bin = atob(msg.cardPdfBase64)
+      // Prefer the CDP-captured real Stimulsoft PDF stored by EZEE_OPEN_REG_CARD.
+      const preCapturePdfB64 = ezeePreCapturedPdf.get(msg.confirmation)
+      ezeePreCapturedPdf.delete(msg.confirmation)
+
+      const cardPdfB64 = preCapturePdfB64 ?? msg.cardPdfBase64 ?? null
+      if (cardPdfB64) {
+        console.log('[FDN SW] eZee signature: embedding into Stimulsoft PDF ✓', preCapturePdfB64 ? '(CDP)' : '(overlay)')
+        const bin = atob(cardPdfB64)
         const cardBytes = new Uint8Array(bin.length)
         for (let i = 0; i < bin.length; i++) cardBytes[i] = bin.charCodeAt(i)
         pdfBytes = await embedSignatureIntoEzeePdf(cardBytes, msg.signaturePng)
       } else {
-        // Canvas PNG background or plain text fallback
-        console.log('[FDN SW] eZee signature:', msg.cardImageBase64 ? 'canvas PNG background' : 'text fallback')
-        pdfBytes = await createEzeeSignaturePdf(msg.cardImageBase64 ?? null, msg.signaturePng, msg.confirmation)
+        console.log('[FDN SW] eZee signature: text fallback (no PDF captured)')
+        pdfBytes = await createEzeeSignaturePdf(null, msg.signaturePng, msg.confirmation)
       }
 
       let binary = ''
