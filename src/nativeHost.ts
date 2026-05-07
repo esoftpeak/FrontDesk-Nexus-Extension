@@ -61,6 +61,71 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 const MIN_BACKOFF_MS = 1000
 const MAX_BACKOFF_MS = 60_000
 
+// ── Request-response correlation ─────────────────────────────────────────────
+// Tracks pending sendNativeRequest() calls. Each entry is keyed by the requestId
+// that was embedded in the outbound message. Python forwards the same requestId
+// back in the response so we can resolve the matching promise.
+
+type PendingRequest = {
+  resolve: (value: Record<string, unknown>) => void
+  reject: (reason: Error) => void
+  timeoutId: ReturnType<typeof setTimeout>
+}
+
+const pendingRequests = new Map<string, PendingRequest>()
+
+function rejectAllPending(reason: string): void {
+  for (const [id, pending] of pendingRequests) {
+    clearTimeout(pending.timeoutId)
+    pending.reject(new Error(reason))
+    pendingRequests.delete(id)
+  }
+}
+
+/**
+ * Fire-and-forget: post a message to the persistent native port without waiting for a response.
+ * Returns false if the port is not connected.
+ */
+export function sendNativeMessage(msg: Record<string, unknown>): boolean {
+  if (nativePort == null) return false
+  try {
+    nativePort.postMessage(msg)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Request-response: post a message with a unique requestId and return a Promise
+ * that resolves when Python echoes the same requestId back in its response.
+ * Rejects after timeoutMs (default 8 s) or if the port disconnects.
+ */
+export function sendNativeRequest(
+  msg: Record<string, unknown>,
+  timeoutMs = 8_000,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    if (nativePort == null) {
+      reject(new Error('Native host not connected'))
+      return
+    }
+    const requestId = crypto.randomUUID()
+    const timeoutId = setTimeout(() => {
+      pendingRequests.delete(requestId)
+      reject(new Error(`RFID request timed out after ${timeoutMs} ms`))
+    }, timeoutMs)
+    pendingRequests.set(requestId, { resolve, reject, timeoutId })
+    try {
+      nativePort.postMessage({ ...msg, requestId })
+    } catch (e) {
+      clearTimeout(timeoutId)
+      pendingRequests.delete(requestId)
+      reject(e instanceof Error ? e : new Error(String(e)))
+    }
+  })
+}
+
 function summarizeBase64ForConsole(b64: string): { characterLength: number; approxDecodedBytes: number } {
   const len = b64.length
   const approxDecoded = Math.floor((len * 3) / 4)
@@ -412,6 +477,7 @@ function scheduleReconnect(connectFn: () => void) {
 export function initNativeHost(
   onScan: NativeHostScanCallback,
   onPanelDebug?: NativeHostPanelDebugFn,
+  onRfidStatus?: (connected: boolean) => void,
 ): void {
   const connect = () => {
     if (nativePort != null) {
@@ -475,6 +541,25 @@ export function initNativeHost(
         type: raw.type,
         keys: Object.keys(raw),
       })
+
+      // Resolve a pending sendNativeRequest() promise if this message carries a requestId.
+      if (typeof raw.requestId === 'string') {
+        const pending = pendingRequests.get(raw.requestId)
+        if (pending) {
+          clearTimeout(pending.timeoutId)
+          pendingRequests.delete(raw.requestId)
+          pending.resolve(raw)
+          return
+        }
+      }
+
+      // RFID encoder status — pushed by Python in response to RFID_HANDSHAKE (no requestId).
+      if (raw.type === 'RFID_HANDSHAKE_RESULT') {
+        const connected = raw.connected === true
+        console.log(`${LOG} RFID_HANDSHAKE_RESULT connected=${connected}`)
+        onRfidStatus?.(connected)
+        return
+      }
 
       if (raw.type === 'ERROR' && typeof raw.message === 'string') {
         logInboundFromPython('ERROR', raw)
@@ -598,6 +683,7 @@ export function initNativeHost(
     port.onDisconnect.addListener(() => {
       const lastErr = runtimeLastErrorDetail()
       nativePort = null
+      rejectAllPending('Native port disconnected')
       const reason =
         lastErr.message ||
         (lastErr.raw && lastErr.raw !== '{}' ? lastErr.raw : null) ||

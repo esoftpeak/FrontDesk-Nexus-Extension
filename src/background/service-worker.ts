@@ -21,7 +21,7 @@ import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
 import { pingNativeHost } from '../lib/native-scan'
 import type { NativeScanSuccessPayload } from '../nativeMessaging/types'
-import { initNativeHost } from '../nativeHost'
+import { initNativeHost, sendNativeMessage, sendNativeRequest } from '../nativeHost'
 import { checkMinExtensionVersion } from '../lib/version-check'
 import { logSynxisGuestSpecConsole, parseSynxisReservationSummaryResponse } from '../lib/synxis-guest-summary'
 import { isSynxisConfirmationToken } from '../lib/synxis-confirmation-dom'
@@ -39,6 +39,21 @@ import {
 } from '../lib/parse-money'
 
 let supabase: SupabaseClient | null = null
+
+// ── RFID encoder hardware status ─────────────────────────────────────────────
+// Updated via the onRfidStatus callback in initNativeHost whenever Python
+// responds to an RFID_HANDSHAKE command. buildHardwareStatus() triggers a fresh
+// check when the cache is older than RFID_STATUS_TTL_MS.
+let rfidConnected: 'connected' | 'disconnected' = 'disconnected'
+let rfidStatusCheckedAt = 0
+const RFID_STATUS_TTL_MS = 30_000
+
+function handleRfidStatus(connected: boolean): void {
+  rfidConnected = connected ? 'connected' : 'disconnected'
+  rfidStatusCheckedAt = Date.now()
+  console.log('[FDN SW] RFID encoder status:', rfidConnected)
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 let reservation: ReservationSnapshot | null = null
 let synxisGuestDisplay: SynxisGuestDisplay | null = null
@@ -565,10 +580,18 @@ async function buildHardwareStatus(): Promise<ExtensionState['hardware']> {
   } catch {
     idScanner = 'disconnected'
   }
+
+  // Refresh RFID status when the cache is stale. Fire-and-forget: the response
+  // comes back asynchronously via handleRfidStatus → next GET_STATE reflects it.
+  if (Date.now() - rfidStatusCheckedAt > RFID_STATUS_TTL_MS) {
+    rfidStatusCheckedAt = Date.now() // mark checked now to prevent concurrent pings
+    sendNativeMessage({ type: 'RFID_HANDSHAKE' })
+  }
+
   return {
     id_scanner: idScanner,
     spectral_payout: 'disconnected',
-    rfid_encoder: 'disconnected',
+    rfid_encoder: rfidConnected,
   }
 }
 
@@ -1684,6 +1707,58 @@ async function handleMessage(
     }
   }
 
+  if (msg.type === 'RFID_MAKE_KEY') {
+    try {
+      const raw = await sendNativeRequest({
+        type: 'RFID_MAKE_KEY',
+        room_number: msg.roomNumber,
+        checkin_time: msg.checkinTime,
+        checkout_time: msg.checkoutTime,
+        card_serial: msg.cardSerial ?? 1,
+      })
+
+      if (!raw.success) {
+        return { ok: false, error: String(raw.error ?? 'Key encoding failed') }
+      }
+
+      // Write permanent key_history record
+      const { data: sess } = await client.auth.getSession()
+      const user = sess.session?.user ?? null
+      const terminalId = await ensureTerminal(client)
+      const conf = reservation?.confirmationNumber ?? null
+
+      if (user && conf) {
+        const { error: khErr } = await client.from('key_history').insert({
+          confirmation_number: conf,
+          room_number: msg.roomNumber,
+          card_serial: msg.cardSerial ?? 1,
+          checkin_time: msg.checkinTime,
+          checkout_time: msg.checkoutTime,
+          encoded_by: user.id,
+          encoded_by_username: user.email,
+          terminal_id: terminalId,
+        })
+        if (khErr) console.warn('[FDN SW] key_history insert', khErr.message)
+
+        await client.from('audit_log').insert({
+          user_id: user.id,
+          username: user.email,
+          user_role: cachedRole,
+          terminal_id: terminalId,
+          action_type: 'KEY_ENCODED',
+          confirmation_number: conf,
+          description: `Room key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`,
+          new_value: { room_number: msg.roomNumber, card_serial: msg.cardSerial ?? 1, return_msg: raw.return_msg },
+        }).then(({ error }) => { if (error) console.warn('[FDN SW] audit_log (key_encoded)', error.message) })
+      }
+
+      return { ok: true, state: await getState() }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'RFID command failed'
+      return { ok: false, error: message }
+    }
+  }
+
   return { ok: false, error: 'Unknown message type' }
 }
 
@@ -1733,6 +1808,6 @@ void chrome.storage.onChanged.addListener((changes, area) => {
   }
 })
 
-void initNativeHost(handleThalesNativeScan, forwardNativeHostRxToPanel)
+void initNativeHost(handleThalesNativeScan, forwardNativeHostRxToPanel, handleRfidStatus)
 
 export {}

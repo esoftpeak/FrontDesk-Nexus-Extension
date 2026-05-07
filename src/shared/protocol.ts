@@ -79,6 +79,16 @@ export type ExtensionMessage =
       pdfBase64: string
       confirmationNumber: string
     }
+  | {
+      type: 'RFID_MAKE_KEY'
+      /** Room number as displayed in PMS (e.g. "101", "600"). Python formats it to SDK 8-char. */
+      roomNumber: string
+      /** ISO datetime or SDK format (yyyyMMddHHmm). */
+      checkinTime: string
+      checkoutTime: string
+      /** 1 = primary key card, 2–8 = duplicate copies. Defaults to 1. */
+      cardSerial?: number
+    }
 
 export type ExtensionResponse =
   | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[]; signaturePath?: string }

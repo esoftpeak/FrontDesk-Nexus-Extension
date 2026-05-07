@@ -41,3 +41,61 @@ export type NativeScanSuccessPayload = {
   /** Optional raw snapshot from Python (AUTO_SCAN_RESULT). */
   documentData?: Record<string, unknown> | null
 }
+
+// ── RFID Key Card Encoder ─────────────────────────────────────────────────────
+
+/** Outbound to Python: encode a guest key card. */
+export type RfidMakeKeyRequest = {
+  type: 'RFID_MAKE_KEY'
+  room_number: string
+  checkin_time: string
+  checkout_time: string
+  card_serial?: number
+  requestId?: string
+}
+
+/** Python response: result of HandShake() ping. */
+export type RfidHandshakeResult = {
+  type: 'RFID_HANDSHAKE_RESULT'
+  success: boolean
+  connected: boolean
+  return_msg: string
+  error: string | null
+  requestId?: string
+}
+
+/** Python response: result of MakeCard() / re-enable. */
+export type RfidKeyResult = {
+  type: 'RFID_KEY_RESULT'
+  success: boolean
+  return_msg: string
+  error: string | null
+  room_number?: string
+  card_serial?: number
+  requestId?: string
+}
+
+/** Python response: result of ReadCardCK(). */
+export type RfidReadResult = {
+  type: 'RFID_READ_RESULT'
+  success: boolean
+  return_msg: string
+  error: string | null
+  card_data?: string
+  requestId?: string
+}
+
+/** Python response: result of disable (cancel card). */
+export type RfidDisableResult = {
+  type: 'RFID_DISABLE_RESULT'
+  success: boolean
+  return_msg: string
+  error: string | null
+  requestId?: string
+}
+
+export type RfidNativeResult =
+  | RfidHandshakeResult
+  | RfidKeyResult
+  | RfidReadResult
+  | RfidDisableResult
