@@ -1765,6 +1765,7 @@ async function handleMessage(
       const user = sess.session?.user ?? null
       const terminalId = await ensureTerminal(client)
       const conf = reservation?.confirmationNumber ?? null
+      let dbWarning: string | null = null
 
       if (user && conf) {
         const { error: khErr } = await client.from('key_history').insert({
@@ -1777,7 +1778,10 @@ async function handleMessage(
           encoded_by_username: user.email,
           terminal_id: terminalId,
         })
-        if (khErr) console.warn('[FDN SW] key_history insert', khErr.message)
+        if (khErr) {
+          console.error('[FDN SW] key_history insert failed:', khErr.message)
+          dbWarning = `Card encoded but DB record failed: ${khErr.message}`
+        }
 
         await client.from('audit_log').insert({
           user_id: user.id,
@@ -1788,19 +1792,31 @@ async function handleMessage(
           confirmation_number: conf,
           description: `Room key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`,
           new_value: { room_number: msg.roomNumber, card_serial: msg.cardSerial ?? 1, return_msg: raw.return_msg },
-        }).then(({ error }) => { if (error) console.warn('[FDN SW] audit_log (key_encoded)', error.message) })
+        }).then(({ error }) => { if (error) console.error('[FDN SW] audit_log (key_encoded) failed:', error.message) })
+      } else if (!conf) {
+        dbWarning = 'Card encoded but no reservation loaded — key_history not saved.'
       }
 
       const serialLabel = (msg.cardSerial ?? 1) === 1 ? 'Primary key' : `Duplicate key (serial ${msg.cardSerial})`
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icon.png',
-        title: 'Key Card Encoded',
-        message: `${serialLabel} — Room ${msg.roomNumber}\nConf: ${reservation?.confirmationNumber ?? '—'}`,
-        priority: 1,
-      })
+      if (dbWarning) {
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon.png',
+          title: 'Key Encoded — DB Warning',
+          message: `${serialLabel} — Room ${msg.roomNumber}\n${dbWarning}`,
+          priority: 2,
+        })
+      } else {
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon.png',
+          title: 'Key Card Encoded',
+          message: `${serialLabel} — Room ${msg.roomNumber}\nConf: ${conf ?? '—'}`,
+          priority: 1,
+        })
+      }
 
-      return { ok: true, state: await getState() }
+      return { ok: true, dbWarning: dbWarning ?? undefined, state: await getState() }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'RFID command failed'
       return { ok: false, error: message }

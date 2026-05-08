@@ -389,12 +389,16 @@ function App() {
         checkinTime: res.checkInDate,
         checkoutTime: res.checkOutDate,
         cardSerial: keyCardSerial,
-      })) as { ok: boolean; error?: string; state?: ExtensionState }
+      })) as { ok: boolean; error?: string; dbWarning?: string; state?: ExtensionState }
       if (!result.ok) {
         setKeyNotice(result.error ?? 'Key encoding failed')
         return
       }
-      setKeyNotice(`Key encoded — room ${res.roomNumber}, serial ${keyCardSerial}.`)
+      if (result.dbWarning) {
+        setKeyNotice(`Card encoded — room ${res.roomNumber}, serial ${keyCardSerial}. Warning: ${result.dbWarning}`)
+      } else {
+        setKeyNotice(`Key encoded — room ${res.roomNumber}, serial ${keyCardSerial}.`)
+      }
       if (result.state) setState(result.state)
       void refreshKeyHistory()
     } finally {
