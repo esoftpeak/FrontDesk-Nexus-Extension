@@ -47,7 +47,7 @@ let supabase: SupabaseClient | null = null
 // check when the cache is older than RFID_STATUS_TTL_MS.
 let rfidConnected: 'connected' | 'disconnected' = 'disconnected'
 let rfidStatusCheckedAt = 0
-const RFID_STATUS_TTL_MS = 30_000
+const RFID_STATUS_TTL_MS = 5_000
 
 function handleRfidStatus(connected: boolean): void {
   rfidConnected = connected ? 'connected' : 'disconnected'
