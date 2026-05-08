@@ -17,9 +17,22 @@ export type IdScanHistoryRow = {
   manualEntry: boolean
 }
 
+/** Key card encoding records for the current reservation (Supabase `key_history`). */
+export type KeyHistoryRow = {
+  id: string
+  confirmation_number: string
+  room_number: string
+  card_serial: number
+  checkin_time: string
+  checkout_time: string
+  encoded_by_username: string | null
+  created_at: string
+}
+
 export type ExtensionMessage =
   | { type: 'GET_STATE' }
   | { type: 'GET_ID_SCAN_HISTORY' }
+  | { type: 'GET_KEY_HISTORY' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
   /** Manual scrape: eZee tab with Arrivals drawer open (same payload as auto). */
   | { type: 'LOAD_EZEE_RESERVATION' }
@@ -91,7 +104,7 @@ export type ExtensionMessage =
     }
 
 export type ExtensionResponse =
-  | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[]; signaturePath?: string }
+  | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[]; keyHistory?: KeyHistoryRow[]; signaturePath?: string }
   | { ok: false; error: string }
 
 /** Service worker → side panel: log native inbound (opens in side panel DevTools). */

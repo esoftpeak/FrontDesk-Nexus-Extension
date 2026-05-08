@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ExtensionState,
   IdScanHistoryRow,
+  KeyHistoryRow,
   NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
   PanelToastBroadcast,
@@ -74,6 +75,10 @@ function App() {
   const [flipH, setFlipH] = useState(false)
   const [idScanHistory, setIdScanHistory] = useState<IdScanHistoryRow[]>([])
   const [lastScanReceivedAt, setLastScanReceivedAt] = useState<string | null>(null)
+  const [keyHistory, setKeyHistory] = useState<KeyHistoryRow[]>([])
+  const [keyBusy, setKeyBusy] = useState(false)
+  const [keyNotice, setKeyNotice] = useState<string | null>(null)
+  const [keyCardSerial, setKeyCardSerial] = useState<1 | 2>(1)
   /** From native host `document_data` — passed through on Save (not SynXis/eZee). */
   const [lastDocumentData, setLastDocumentData] = useState<Record<string, unknown> | null>(null)
 
@@ -83,6 +88,14 @@ function App() {
       idScanHistory?: IdScanHistoryRow[]
     }
     if (res.ok && res.idScanHistory) setIdScanHistory(res.idScanHistory)
+  }, [])
+
+  const refreshKeyHistory = useCallback(async () => {
+    const res = (await chrome.runtime.sendMessage({ type: 'GET_KEY_HISTORY' })) as {
+      ok?: boolean
+      keyHistory?: KeyHistoryRow[]
+    }
+    if (res.ok && res.keyHistory) setKeyHistory(res.keyHistory)
   }, [])
 
   const refresh = useCallback(async () => {
@@ -105,6 +118,10 @@ function App() {
   useEffect(() => {
     void refreshIdScanHistory()
   }, [refreshIdScanHistory, state?.reservation?.confirmationNumber])
+
+  useEffect(() => {
+    void refreshKeyHistory()
+  }, [refreshKeyHistory, state?.reservation?.confirmationNumber])
 
   const applyNativeIdScan = useCallback(
     (m: NativeIdScanBroadcast) => {
@@ -361,6 +378,30 @@ function App() {
     }
   }
 
+  async function onMakeKey() {
+    if (!res?.roomNumber || !res?.checkInDate || !res?.checkOutDate) return
+    setKeyBusy(true)
+    setKeyNotice(null)
+    try {
+      const result = (await chrome.runtime.sendMessage({
+        type: 'RFID_MAKE_KEY',
+        roomNumber: res.roomNumber,
+        checkinTime: res.checkInDate,
+        checkoutTime: res.checkOutDate,
+        cardSerial: keyCardSerial,
+      })) as { ok: boolean; error?: string; state?: ExtensionState }
+      if (!result.ok) {
+        setKeyNotice(result.error ?? 'Key encoding failed')
+        return
+      }
+      setKeyNotice(`Key encoded — room ${res.roomNumber}, serial ${keyCardSerial}.`)
+      if (result.state) setState(result.state)
+      void refreshKeyHistory()
+    } finally {
+      setKeyBusy(false)
+    }
+  }
+
   const toastBanner =
     panelToast != null ? (
       <div
@@ -612,7 +653,123 @@ function App() {
           <span className="fdn-mod">ID · in progress</span>
           <span className="fdn-mod fdn-mod--off">Payment</span>
           <span className="fdn-mod fdn-mod--off">Signature</span>
-          <span className="fdn-mod fdn-mod--off">Key</span>
+          {hw.rfid_encoder !== 'connected' ? (
+            <span className="fdn-mod fdn-mod--off">Key · offline</span>
+          ) : keyHistory.length > 0 ? (
+            <span className="fdn-mod">Key · {keyHistory.length} encoded</span>
+          ) : (
+            <span className="fdn-mod fdn-mod--off">Key · ready</span>
+          )}
+        </div>
+      </section>
+
+      <section className="fdn-card">
+        <h2 className="fdn-h2">Key Card Encoder</h2>
+        <ul className="fdn-hw">
+          <li>
+            RFID encoder{' '}
+            <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
+            {hw.rfid_encoder}
+          </li>
+        </ul>
+
+        {hw.rfid_encoder !== 'connected' && (
+          <p className="fdn-note">
+            Encoder offline — check USB cable and close INNGuru GMS if running, then reload the extension.
+          </p>
+        )}
+
+        {!res?.roomNumber ? (
+          <p className="fdn-muted">Load a reservation first to enable key encoding.</p>
+        ) : (
+          <>
+            <dl className="fdn-dl">
+              <dt>Room</dt>
+              <dd>{res.roomNumber}</dd>
+              <dt>Check-in</dt>
+              <dd>{res.checkInDate ?? '—'}</dd>
+              <dt>Check-out</dt>
+              <dd>{res.checkOutDate ?? '—'}</dd>
+            </dl>
+
+            <div style={{ marginTop: 10 }}>
+              <span className="fdn-field__label" style={{ fontSize: 12, color: '#c9d1d9' }}>Card type</span>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <label className="fdn-check" style={{ marginBottom: 0 }}>
+                  <input
+                    type="radio"
+                    name="keySerial"
+                    checked={keyCardSerial === 1}
+                    onChange={() => setKeyCardSerial(1)}
+                  />
+                  Primary (1st key)
+                </label>
+                <label className="fdn-check" style={{ marginBottom: 0 }}>
+                  <input
+                    type="radio"
+                    name="keySerial"
+                    checked={keyCardSerial === 2}
+                    onChange={() => setKeyCardSerial(2)}
+                  />
+                  Duplicate (2nd key)
+                </label>
+              </div>
+            </div>
+
+            <div className="fdn-actions">
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--primary"
+                disabled={keyBusy || hw.rfid_encoder !== 'connected' || !state.auth.signedIn}
+                onClick={() => void onMakeKey()}
+              >
+                {keyBusy ? 'Encoding…' : 'Encode Key'}
+              </button>
+            </div>
+
+            {keyNotice && (
+              <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
+                {keyNotice}
+              </div>
+            )}
+          </>
+        )}
+
+        <div style={{ marginTop: 16 }}>
+          <h3 className="fdn-h3" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: '#8b949e', margin: '0 0 6px' }}>
+            Key history (this reservation)
+          </h3>
+          {keyHistory.length === 0 ? (
+            <p className="fdn-muted">No keys encoded for this reservation yet.</p>
+          ) : (
+            <table className="fdn-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Room</th>
+                  <th>Serial</th>
+                  <th>Encoded by</th>
+                </tr>
+              </thead>
+              <tbody>
+                {keyHistory.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      {row.created_at
+                        ? new Date(row.created_at).toLocaleString(undefined, {
+                            dateStyle: 'short',
+                            timeStyle: 'short',
+                          })
+                        : '—'}
+                    </td>
+                    <td>{row.room_number}</td>
+                    <td>{row.card_serial}</td>
+                    <td className="fdn-mono">{row.encoded_by_username ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </section>
 

@@ -5,6 +5,7 @@ import type {
   ExtensionResponse,
   ExtensionState,
   IdScanHistoryRow,
+  KeyHistoryRow,
   NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
   PanelToastBroadcast,
@@ -1317,6 +1318,40 @@ async function fetchIdScanHistoryForCurrentReservation(): Promise<ExtensionRespo
   return { ok: true, idScanHistory: rows }
 }
 
+async function fetchKeyHistoryForCurrentReservation(): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+  const snap = reservation
+  if (!snap?.confirmationNumber) return { ok: true, keyHistory: [] }
+
+  const conf = snap.confirmationNumber
+  const { data, error } = await client
+    .from('key_history')
+    .select('id, confirmation_number, room_number, card_serial, checkin_time, checkout_time, encoded_by_username, created_at')
+    .eq('confirmation_number', conf)
+    .order('created_at', { ascending: false })
+    .limit(25)
+
+  if (error) {
+    console.warn('[FDN] key_history query', error.message)
+    return { ok: false, error: error.message }
+  }
+
+  const rows: KeyHistoryRow[] = (data ?? []).map((r: Record<string, unknown>) => ({
+    id: String(r.id),
+    confirmation_number: String(r.confirmation_number ?? ''),
+    room_number: String(r.room_number ?? ''),
+    card_serial: typeof r.card_serial === 'number' ? r.card_serial : Number(r.card_serial ?? 1),
+    checkin_time: typeof r.checkin_time === 'string' ? r.checkin_time : '',
+    checkout_time: typeof r.checkout_time === 'string' ? r.checkout_time : '',
+    encoded_by_username: typeof r.encoded_by_username === 'string' ? r.encoded_by_username : null,
+    created_at: typeof r.created_at === 'string' ? r.created_at : '',
+  }))
+  return { ok: true, keyHistory: rows }
+}
+
 function base64ToBlob(b64: string, type: string): Blob {
   const bin = atob(b64)
   const bytes = new Uint8Array(bin.length)
@@ -1336,6 +1371,10 @@ async function handleMessage(
 
   if (msg.type === 'GET_ID_SCAN_HISTORY') {
     return fetchIdScanHistoryForCurrentReservation()
+  }
+
+  if (msg.type === 'GET_KEY_HISTORY') {
+    return fetchKeyHistoryForCurrentReservation()
   }
 
   if (msg.type === 'LOAD_EZEE_RESERVATION') {
