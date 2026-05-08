@@ -1791,6 +1791,15 @@ async function handleMessage(
         }).then(({ error }) => { if (error) console.warn('[FDN SW] audit_log (key_encoded)', error.message) })
       }
 
+      const serialLabel = (msg.cardSerial ?? 1) === 1 ? 'Primary key' : `Duplicate key (serial ${msg.cardSerial})`
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon.png',
+        title: 'Key Card Encoded',
+        message: `${serialLabel} — Room ${msg.roomNumber}\nConf: ${reservation?.confirmationNumber ?? '—'}`,
+        priority: 1,
+      })
+
       return { ok: true, state: await getState() }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'RFID command failed'
