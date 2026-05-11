@@ -1826,6 +1826,19 @@ async function handleMessage(
     }
   }
 
+  if (msg.type === 'RFID_READ_CARD') {
+    try {
+      const raw = await sendNativeRequest({ type: 'RFID_READ_CARD' })
+      if (!raw.success) {
+        return { ok: false, error: String(raw.error ?? 'Card read failed') }
+      }
+      return { ok: true, cardData: raw.card_data ?? raw.return_msg ?? '' }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Card read failed'
+      return { ok: false, error: message }
+    }
+  }
+
   return { ok: false, error: 'Unknown message type' }
 }
 

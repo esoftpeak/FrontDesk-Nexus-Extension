@@ -102,6 +102,7 @@ export type ExtensionMessage =
       /** 1 = primary key card, 2–8 = duplicate copies. Defaults to 1. */
       cardSerial?: number
     }
+  | { type: 'RFID_READ_CARD' }
 
 export type ExtensionResponse =
   | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[]; keyHistory?: KeyHistoryRow[]; signaturePath?: string }

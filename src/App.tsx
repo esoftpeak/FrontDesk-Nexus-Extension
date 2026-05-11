@@ -79,6 +79,8 @@ function App() {
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyNotice, setKeyNotice] = useState<string | null>(null)
   const [keyCardSerial, setKeyCardSerial] = useState<1 | 2>(1)
+  const [readCardBusy, setReadCardBusy] = useState(false)
+  const [readCardResult, setReadCardResult] = useState<{ ok: boolean; cardData?: string; error?: string } | null>(null)
   /** From native host `document_data` — passed through on Save (not SynXis/eZee). */
   const [lastDocumentData, setLastDocumentData] = useState<Record<string, unknown> | null>(null)
 
@@ -412,6 +414,25 @@ function App() {
     }
   }
 
+  async function onReadCard() {
+    setReadCardBusy(true)
+    setReadCardResult(null)
+    try {
+      const result = (await chrome.runtime.sendMessage({ type: 'RFID_READ_CARD' })) as
+        | { ok: boolean; cardData?: string; error?: string }
+        | undefined
+      if (!result) {
+        setReadCardResult({ ok: false, error: 'No response from native host' })
+        return
+      }
+      setReadCardResult(result)
+    } catch (e) {
+      setReadCardResult({ ok: false, error: e instanceof Error ? e.message : 'Read failed' })
+    } finally {
+      setReadCardBusy(false)
+    }
+  }
+
   const toastBanner =
     panelToast != null ? (
       <div
@@ -737,11 +758,34 @@ function App() {
               >
                 {keyBusy ? 'Encoding…' : 'Encode Key'}
               </button>
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--secondary"
+                disabled={readCardBusy || hw.rfid_encoder !== 'connected'}
+                onClick={() => void onReadCard()}
+              >
+                {readCardBusy ? 'Reading…' : 'Read Card'}
+              </button>
             </div>
 
             {keyNotice && (
               <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
                 {keyNotice}
+              </div>
+            )}
+
+            {readCardResult && (
+              <div className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
+                {readCardResult.ok ? (
+                  <>
+                    <strong>Card read OK</strong>
+                    <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: '0.78rem', wordBreak: 'break-all' }}>
+                      {readCardResult.cardData || '(no data)'}
+                    </div>
+                  </>
+                ) : (
+                  `Read failed — ${readCardResult.error}`
+                )}
               </div>
             )}
           </>
