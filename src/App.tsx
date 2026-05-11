@@ -389,7 +389,11 @@ function App() {
         checkinTime: res.checkInDate,
         checkoutTime: res.checkOutDate,
         cardSerial: keyCardSerial,
-      })) as { ok: boolean; error?: string; dbWarning?: string; state?: ExtensionState }
+      })) as { ok: boolean; error?: string; dbWarning?: string; state?: ExtensionState } | undefined
+      if (!result) {
+        setKeyNotice('No response from native host — reload the extension and try again.')
+        return
+      }
       if (!result.ok) {
         setKeyNotice(result.error ?? 'Key encoding failed')
         return
@@ -401,6 +405,8 @@ function App() {
       }
       if (result.state) setState(result.state)
       void refreshKeyHistory()
+    } catch (e) {
+      setKeyNotice(e instanceof Error ? e.message : 'Key encoding failed — check device connection.')
     } finally {
       setKeyBusy(false)
     }
