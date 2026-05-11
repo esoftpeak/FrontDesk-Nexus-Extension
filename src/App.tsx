@@ -758,14 +758,6 @@ function App() {
               >
                 {keyBusy ? 'Encoding…' : 'Encode Key'}
               </button>
-              <button
-                type="button"
-                className="fdn-btn fdn-btn--secondary"
-                disabled={readCardBusy || hw.rfid_encoder !== 'connected'}
-                onClick={() => void onReadCard()}
-              >
-                {readCardBusy ? 'Reading…' : 'Read Card'}
-              </button>
             </div>
 
             {keyNotice && (
@@ -773,22 +765,33 @@ function App() {
                 {keyNotice}
               </div>
             )}
-
-            {readCardResult && (
-              <div className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
-                {readCardResult.ok ? (
-                  <>
-                    <strong>Card read OK</strong>
-                    <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: '0.78rem', wordBreak: 'break-all' }}>
-                      {readCardResult.cardData || '(no data)'}
-                    </div>
-                  </>
-                ) : (
-                  `Read failed — ${readCardResult.error}`
-                )}
-              </div>
-            )}
           </>
+        )}
+
+        <div className="fdn-actions" style={{ marginTop: 10 }}>
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--secondary"
+            disabled={readCardBusy || hw.rfid_encoder !== 'connected'}
+            onClick={() => void onReadCard()}
+          >
+            {readCardBusy ? 'Reading…' : 'Read Card'}
+          </button>
+        </div>
+
+        {readCardResult && (
+          <div className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
+            {readCardResult.ok ? (
+              <>
+                <strong>Card read OK</strong>
+                <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: '0.78rem', wordBreak: 'break-all' }}>
+                  {readCardResult.cardData || '(no data)'}
+                </div>
+              </>
+            ) : (
+              `Read failed — ${readCardResult.error}`
+            )}
+          </div>
         )}
 
         <div style={{ marginTop: 16 }}>
