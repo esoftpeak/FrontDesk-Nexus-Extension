@@ -477,7 +477,7 @@ function scheduleReconnect(connectFn: () => void) {
 export function initNativeHost(
   onScan: NativeHostScanCallback,
   onPanelDebug?: NativeHostPanelDebugFn,
-  onRfidStatus?: (connected: boolean) => void,
+  onRfidStatus?: (connected: boolean, error: string | null) => void,
 ): void {
   const connect = () => {
     if (nativePort != null) {
@@ -556,8 +556,9 @@ export function initNativeHost(
       // RFID encoder status — pushed by Python in response to RFID_HANDSHAKE (no requestId).
       if (raw.type === 'RFID_HANDSHAKE_RESULT') {
         const connected = raw.connected === true
-        console.log(`${LOG} RFID_HANDSHAKE_RESULT connected=${connected}`)
-        onRfidStatus?.(connected)
+        const error = typeof raw.error === 'string' && raw.error ? raw.error : null
+        console.log(`${LOG} RFID_HANDSHAKE_RESULT connected=${connected} error=${error}`)
+        onRfidStatus?.(connected, error)
         return
       }
 

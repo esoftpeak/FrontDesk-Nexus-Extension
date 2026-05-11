@@ -46,13 +46,15 @@ let supabase: SupabaseClient | null = null
 // responds to an RFID_HANDSHAKE command. buildHardwareStatus() triggers a fresh
 // check when the cache is older than RFID_STATUS_TTL_MS.
 let rfidConnected: 'connected' | 'disconnected' = 'disconnected'
+let rfidError: string | null = null
 let rfidStatusCheckedAt = 0
 const RFID_STATUS_TTL_MS = 5_000
 
-function handleRfidStatus(connected: boolean): void {
+function handleRfidStatus(connected: boolean, error: string | null): void {
   rfidConnected = connected ? 'connected' : 'disconnected'
+  rfidError = connected ? null : (error ?? null)
   rfidStatusCheckedAt = Date.now()
-  console.log('[FDN SW] RFID encoder status:', rfidConnected)
+  console.log('[FDN SW] RFID encoder status:', rfidConnected, rfidError ? `— ${rfidError}` : '')
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -620,6 +622,7 @@ async function getState(): Promise<ExtensionState> {
     synxisGuestDisplay,
     ezeeGuestDisplay,
     hardware,
+    rfidError,
     terminalId: typeof terminalId === 'string' ? terminalId : null,
     dnrHit,
     lastError,

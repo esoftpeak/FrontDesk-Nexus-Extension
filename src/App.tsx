@@ -685,7 +685,9 @@ function App() {
 
         {hw.rfid_encoder !== 'connected' && (
           <p className="fdn-note">
-            Encoder offline — check USB cable and close INNGuru GMS if running, then reload the extension.
+            {state.rfidError
+              ? `Encoder offline — ${state.rfidError}`
+              : 'Encoder offline — check USB cable and close INNGuru GMS if running, then reload the extension.'}
           </p>
         )}
 

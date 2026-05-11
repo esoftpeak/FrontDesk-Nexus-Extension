@@ -160,6 +160,7 @@ export type ExtensionState = {
   /** eZee Arrivals drawer scrape. */
   ezeeGuestDisplay: EzeeGuestDisplay | null
   hardware: HardwareStatus
+  rfidError: string | null
   terminalId: string | null
   dnrHit: boolean
   lastError: string | null
