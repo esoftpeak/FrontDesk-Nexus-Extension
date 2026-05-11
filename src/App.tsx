@@ -80,7 +80,13 @@ function App() {
   const [keyNotice, setKeyNotice] = useState<string | null>(null)
   const [keyCardSerial, setKeyCardSerial] = useState<1 | 2>(1)
   const [readCardBusy, setReadCardBusy] = useState(false)
-  const [readCardResult, setReadCardResult] = useState<{ ok: boolean; cardData?: string; error?: string } | null>(null)
+  const [readCardResult, setReadCardResult] = useState<{
+    ok: boolean
+    cardData?: string
+    roomNumber?: string | null
+    cardSerial?: number | null
+    error?: string
+  } | null>(null)
   /** From native host `document_data` — passed through on Save (not SynXis/eZee). */
   const [lastDocumentData, setLastDocumentData] = useState<Record<string, unknown> | null>(null)
 
@@ -419,7 +425,7 @@ function App() {
     setReadCardResult(null)
     try {
       const result = (await chrome.runtime.sendMessage({ type: 'RFID_READ_CARD' })) as
-        | { ok: boolean; cardData?: string; error?: string }
+        | { ok: boolean; cardData?: string; roomNumber?: string | null; cardSerial?: number | null; error?: string }
         | undefined
       if (!result) {
         setReadCardResult({ ok: false, error: 'No response from native host' })
@@ -782,12 +788,21 @@ function App() {
         {readCardResult && (
           <div className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
             {readCardResult.ok ? (
-              <>
-                <strong>Card read OK</strong>
-                <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: '0.78rem', wordBreak: 'break-all' }}>
-                  {readCardResult.cardData || '(no data)'}
-                </div>
-              </>
+              readCardResult.roomNumber ? (
+                <>
+                  <strong>Room {readCardResult.roomNumber}</strong>
+                  {readCardResult.cardSerial && readCardResult.cardSerial > 1 && (
+                    <span style={{ marginLeft: 8, opacity: 0.7 }}>Serial {readCardResult.cardSerial}</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <strong>Card detected</strong>
+                  <div style={{ marginTop: 4, fontSize: '0.75rem', opacity: 0.7 }}>
+                    Encoded by another system — room number unavailable
+                  </div>
+                </>
+              )
             ) : (
               `Read failed — ${readCardResult.error}`
             )}

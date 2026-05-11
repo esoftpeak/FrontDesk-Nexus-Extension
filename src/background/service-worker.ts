@@ -1819,6 +1819,12 @@ async function handleMessage(
         })
       }
 
+      // Persist encoded_data fingerprint so Read Card can identify this card later.
+      if (typeof raw.encoded_data === 'string' && raw.encoded_data) {
+        const entry = { roomNumber: msg.roomNumber, cardSerial: msg.cardSerial ?? 1 }
+        void chrome.storage.local.set({ [`fdn_card_${raw.encoded_data}`]: entry })
+      }
+
       return { ok: true, dbWarning: dbWarning ?? undefined, state: await getState() }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'RFID command failed'
@@ -1832,7 +1838,16 @@ async function handleMessage(
       if (!raw.success) {
         return { ok: false, error: String(raw.error ?? 'Card read failed') }
       }
-      return { ok: true, cardData: raw.card_data ?? raw.return_msg ?? '' }
+      const cardData = String(raw.card_data ?? raw.return_msg ?? '')
+      // Look up stored fingerprint to recover room number
+      const stored = await chrome.storage.local.get(`fdn_card_${cardData}`)
+      const known = stored[`fdn_card_${cardData}`] as { roomNumber: string; cardSerial: number } | undefined
+      return {
+        ok: true,
+        cardData,
+        roomNumber: known?.roomNumber ?? null,
+        cardSerial: known?.cardSerial ?? null,
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Card read failed'
       return { ok: false, error: message }
