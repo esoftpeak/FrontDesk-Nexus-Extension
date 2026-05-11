@@ -1839,7 +1839,15 @@ async function handleMessage(
         return { ok: false, error: String(raw.error ?? 'Card read failed') }
       }
       const cardData = String(raw.card_data ?? raw.return_msg ?? '')
-      // Look up stored fingerprint to recover room number
+
+      // Primary: use room number decoded by Python from raw card string (works for all SDK-encoded cards)
+      const pythonRoomNumber = typeof raw.room_number === 'string' && raw.room_number ? raw.room_number : null
+      const pythonSerial = typeof raw.card_serial === 'number' ? raw.card_serial : null
+      if (pythonRoomNumber) {
+        return { ok: true, cardData, roomNumber: pythonRoomNumber, cardSerial: pythonSerial }
+      }
+
+      // Fallback: chrome.storage.local fingerprint (cards encoded via this extension)
       const stored = await chrome.storage.local.get(`fdn_card_${cardData}`)
       const known = stored[`fdn_card_${cardData}`] as { roomNumber: string; cardSerial: number } | undefined
       return {
