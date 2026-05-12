@@ -171,8 +171,6 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
         encoded_by_username: encodedByUsername,
         terminal_id: terminalId,
       }
-      const gn = typeof msg.guestName === 'string' ? msg.guestName.trim() : ''
-      if (gn) insertRow.guest_name = gn
 
       const { error: khErr } = await client.from('key_history').insert(insertRow)
       if (khErr) {

@@ -106,6 +106,7 @@ export type ExtensionMessage =
        * instead of the scraped PMS reservation. Requires signed-in extension session.
        */
       confirmationNumber?: string
+      /** Reserved for future use; not persisted on `key_history` unless the table has a matching column. */
       guestName?: string | null
       /**
        * Admin-only: log `encoded_by_username` as **Admin** (PMS-style) and require `cachedRole === 'admin'`.
