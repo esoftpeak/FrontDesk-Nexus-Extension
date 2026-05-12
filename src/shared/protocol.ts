@@ -101,6 +101,16 @@ export type ExtensionMessage =
       checkoutTime: string
       /** 1 = primary key card, 2–8 = duplicate copies. Defaults to 1. */
       cardSerial?: number
+      /**
+       * When set (portal admin walk-in / manual encode), `key_history` uses this confirmation
+       * instead of the scraped PMS reservation. Requires signed-in extension session.
+       */
+      confirmationNumber?: string
+      guestName?: string | null
+      /**
+       * Admin-only: log `encoded_by_username` as **Admin** (PMS-style) and require `cachedRole === 'admin'`.
+       */
+      portalAdminEncode?: boolean
     }
   | { type: 'RFID_READ_CARD' }
 

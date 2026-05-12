@@ -1,5 +1,20 @@
 import { defineManifest } from '@crxjs/vite-plugin'
 
+/** `https://host/*` required by Chrome; normalizes `https://host` or `https://host/`. */
+function normalizeExternMatch(entry: string): string {
+  const s = entry.trim()
+  if (!s) return ''
+  if (s.endsWith('/*')) return s
+  const base = s.replace(/\/+$/, '')
+  return `${base}/*`
+}
+
+/** Comma-separated patterns (build-time). See extension `.env.example`. */
+const extraPortalMatches = (process.env.VITE_PORTAL_EXTERN_MATCHES ?? '')
+  .split(',')
+  .map((s) => normalizeExternMatch(s))
+  .filter(Boolean)
+
 export default defineManifest({
   manifest_version: 3,
   name: 'FrontDesk Nexus',
@@ -43,6 +58,13 @@ export default defineManifest({
     'https://live.ipms247.com/*',
     'https://*.ipms247.com/*',
   ],
+  externally_connectable: {
+    matches: [
+      'http://localhost:5173/*',
+      'http://127.0.0.1:5173/*',
+      ...extraPortalMatches,
+    ],
+  },
   content_scripts: [
     {
       matches: ['https://sph.synxis.com/*'],

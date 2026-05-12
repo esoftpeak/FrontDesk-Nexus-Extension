@@ -123,6 +123,124 @@ function sdkToDbDatetime(sdk: string): string {
   return `${sdk.slice(0, 4)}-${sdk.slice(4, 6)}-${sdk.slice(6, 8)}-${sdk.slice(8, 10)}-${sdk.slice(10, 12)}`
 }
 
+type RfidMakeKeyMessage = Extract<ExtensionMessage, { type: 'RFID_MAKE_KEY' }>
+
+async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionResponse | Record<string, unknown>> {
+  const client = getClient()
+  try {
+    const raw = await sendNativeRequest({
+      type: 'RFID_MAKE_KEY',
+      room_number: msg.roomNumber,
+      checkin_time: toSdkDatetime(msg.checkinTime, 14),
+      checkout_time: toSdkDatetime(msg.checkoutTime, 12),
+      card_serial: msg.cardSerial ?? 1,
+    })
+
+    if (!raw.success) {
+      return { ok: false, error: String(raw.error ?? 'Key encoding failed') }
+    }
+
+    const { data: sess } = await client.auth.getSession()
+    const user = sess.session?.user ?? null
+    const terminalId = await ensureTerminal(client)
+    const confFromMsg = msg.confirmationNumber?.trim() || null
+    const confFromPms = reservation?.confirmationNumber ?? null
+    const conf = confFromMsg || confFromPms
+    let dbWarning: string | null = null
+
+    const dbCheckinTime =
+      typeof raw.checkin_time === 'string' && raw.checkin_time
+        ? sdkToDbDatetime(raw.checkin_time)
+        : msg.checkinTime
+    const dbCheckoutTime =
+      typeof raw.checkout_time === 'string' && raw.checkout_time
+        ? sdkToDbDatetime(raw.checkout_time)
+        : msg.checkoutTime
+
+    if (user && conf) {
+      const adminPortal = Boolean(msg.portalAdminEncode)
+      const encodedByUsername = adminPortal ? 'Admin' : (user.email ?? null)
+
+      const insertRow: Record<string, unknown> = {
+        confirmation_number: conf,
+        room_number: msg.roomNumber,
+        card_serial: msg.cardSerial ?? 1,
+        checkin_time: dbCheckinTime,
+        checkout_time: dbCheckoutTime,
+        encoded_by: user.id,
+        encoded_by_username: encodedByUsername,
+        terminal_id: terminalId,
+      }
+      const gn = typeof msg.guestName === 'string' ? msg.guestName.trim() : ''
+      if (gn) insertRow.guest_name = gn
+
+      const { error: khErr } = await client.from('key_history').insert(insertRow)
+      if (khErr) {
+        console.error('[FDN SW] key_history insert failed:', khErr.message)
+        dbWarning = `Card encoded but DB record failed: ${khErr.message}`
+      }
+
+      const auditDescription = adminPortal
+        ? `Portal admin room key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`
+        : `Room key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`
+
+      await client
+        .from('audit_log')
+        .insert({
+          user_id: user.id,
+          username: user.email,
+          user_role: cachedRole,
+          terminal_id: terminalId,
+          action_type: 'KEY_ENCODED',
+          confirmation_number: conf,
+          description: auditDescription,
+          new_value: {
+            room_number: msg.roomNumber,
+            card_serial: msg.cardSerial ?? 1,
+            return_msg: raw.return_msg,
+            portal_admin: adminPortal,
+          },
+        })
+        .then(({ error }) => {
+          if (error) console.error('[FDN SW] audit_log (key_encoded) failed:', error.message)
+        })
+    } else if (!user) {
+      dbWarning = 'Card encoded but extension is not signed in — key_history not saved.'
+    } else if (!conf) {
+      dbWarning = 'Card encoded but no confirmation — key_history not saved.'
+    }
+
+    const serialLabel = (msg.cardSerial ?? 1) === 1 ? 'Primary key' : `Duplicate key (serial ${msg.cardSerial})`
+    if (dbWarning) {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon.png',
+        title: 'Key Encoded — DB Warning',
+        message: `${serialLabel} — Room ${msg.roomNumber}\n${dbWarning}`,
+        priority: 2,
+      })
+    } else {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon.png',
+        title: 'Key Card Encoded',
+        message: `${serialLabel} — Room ${msg.roomNumber}\nConf: ${conf ?? '—'}`,
+        priority: 1,
+      })
+    }
+
+    if (typeof raw.encoded_data === 'string' && raw.encoded_data) {
+      const entry = { roomNumber: msg.roomNumber, cardSerial: msg.cardSerial ?? 1 }
+      void chrome.storage.local.set({ [`fdn_card_${raw.encoded_data}`]: entry })
+    }
+
+    return { ok: true, dbWarning: dbWarning ?? undefined, state: await getState() }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'RFID command failed'
+    return { ok: false, error: message }
+  }
+}
+
 const SYNXIS_RESERVATION_SUMMARY_URL =
   'https://sph.synxis.com/pms-web-ui/service/v2/guest-mgt/guest-stay-record/reservation-summary'
 
@@ -1775,94 +1893,13 @@ async function handleMessage(
   }
 
   if (msg.type === 'RFID_MAKE_KEY') {
-    try {
-      const raw = await sendNativeRequest({
-        type: 'RFID_MAKE_KEY',
-        room_number: msg.roomNumber,
-        checkin_time: toSdkDatetime(msg.checkinTime, 14),   // hotel check-in default 14:00
-        checkout_time: toSdkDatetime(msg.checkoutTime, 12), // hotel check-out default 12:00
-        card_serial: msg.cardSerial ?? 1,
-      })
-
-      if (!raw.success) {
-        return { ok: false, error: String(raw.error ?? 'Key encoding failed') }
+    if (msg.portalAdminEncode && cachedRole !== 'admin') {
+      return {
+        ok: false,
+        error: 'Portal admin key encode requires an admin session in the extension (session bridge from the portal).',
       }
-
-      // Write permanent key_history record
-      const { data: sess } = await client.auth.getSession()
-      const user = sess.session?.user ?? null
-      const terminalId = await ensureTerminal(client)
-      const conf = reservation?.confirmationNumber ?? null
-      let dbWarning: string | null = null
-
-      // Python returns SDK format (yyyyMMddHHmm). Convert to YYYY-MM-DD-HH-mm for DB storage.
-      const dbCheckinTime = typeof raw.checkin_time === 'string' && raw.checkin_time
-        ? sdkToDbDatetime(raw.checkin_time)
-        : msg.checkinTime
-      const dbCheckoutTime = typeof raw.checkout_time === 'string' && raw.checkout_time
-        ? sdkToDbDatetime(raw.checkout_time)
-        : msg.checkoutTime
-
-      if (user && conf) {
-        const { error: khErr } = await client.from('key_history').insert({
-          confirmation_number: conf,
-          room_number: msg.roomNumber,
-          card_serial: msg.cardSerial ?? 1,
-          checkin_time: dbCheckinTime,
-          checkout_time: dbCheckoutTime,
-          encoded_by: user.id,
-          encoded_by_username: user.email,
-          terminal_id: terminalId,
-        })
-        if (khErr) {
-          console.error('[FDN SW] key_history insert failed:', khErr.message)
-          dbWarning = `Card encoded but DB record failed: ${khErr.message}`
-        }
-
-        await client.from('audit_log').insert({
-          user_id: user.id,
-          username: user.email,
-          user_role: cachedRole,
-          terminal_id: terminalId,
-          action_type: 'KEY_ENCODED',
-          confirmation_number: conf,
-          description: `Room key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`,
-          new_value: { room_number: msg.roomNumber, card_serial: msg.cardSerial ?? 1, return_msg: raw.return_msg },
-        }).then(({ error }) => { if (error) console.error('[FDN SW] audit_log (key_encoded) failed:', error.message) })
-      } else if (!conf) {
-        dbWarning = 'Card encoded but no reservation loaded — key_history not saved.'
-      }
-
-      const serialLabel = (msg.cardSerial ?? 1) === 1 ? 'Primary key' : `Duplicate key (serial ${msg.cardSerial})`
-      if (dbWarning) {
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'icon.png',
-          title: 'Key Encoded — DB Warning',
-          message: `${serialLabel} — Room ${msg.roomNumber}\n${dbWarning}`,
-          priority: 2,
-        })
-      } else {
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'icon.png',
-          title: 'Key Card Encoded',
-          message: `${serialLabel} — Room ${msg.roomNumber}\nConf: ${conf ?? '—'}`,
-          priority: 1,
-        })
-      }
-
-      // Persist encoded_data fingerprint so Read Card can identify this card later.
-      if (typeof raw.encoded_data === 'string' && raw.encoded_data) {
-        const entry = { roomNumber: msg.roomNumber, cardSerial: msg.cardSerial ?? 1 }
-        void chrome.storage.local.set({ [`fdn_card_${raw.encoded_data}`]: entry })
-      }
-
-      return { ok: true, dbWarning: dbWarning ?? undefined, state: await getState() }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'RFID command failed'
-      return { ok: false, error: message }
     }
+    return runRfidMakeKey(msg)
   }
 
   if (msg.type === 'RFID_READ_CARD') {
@@ -1946,6 +1983,108 @@ void chrome.storage.onChanged.addListener((changes, area) => {
     void getClient().auth.signOut()
     cachedRole = null
   }
+})
+
+const SESSION_BRIDGE_CHANNEL = 'FDN_SESSION_V1' as const
+const PORTAL_BRIDGE_CHANNEL = 'FDN_PORTAL_V1' as const
+const SESSION_SCHEMA_VERSION = 1 as const
+
+/** Matches `Web/src/lib/sessionBridge.ts` — external session publish from the portal. */
+type ExternalSessionBridgePayload =
+  | {
+      kind: 'session'
+      schemaVersion: typeof SESSION_SCHEMA_VERSION
+      issuedAtMs: number
+      accessExpiresAtMs?: number
+      userId: string
+      email: string | null
+      role: string
+      supabaseUrl: string
+      accessToken: string
+      refreshToken: string
+    }
+  | {
+      kind: 'invalidated'
+      schemaVersion: typeof SESSION_SCHEMA_VERSION
+      issuedAtMs: number
+      reason: string
+    }
+
+const noopSender = null as unknown as chrome.runtime.MessageSender
+
+chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) => {
+  void (async () => {
+    try {
+      if (!message || typeof message !== 'object') {
+        sendResponse({ ok: false, error: 'Invalid message' })
+        return
+      }
+      const m = message as Record<string, unknown>
+
+      if (m.channel === SESSION_BRIDGE_CHANNEL) {
+        const payload = m.payload as ExternalSessionBridgePayload | undefined
+        if (!payload || payload.schemaVersion !== SESSION_SCHEMA_VERSION) {
+          sendResponse({ ok: false, error: 'Invalid session bridge envelope' })
+          return
+        }
+        if (payload.kind === 'invalidated') {
+          sendResponse(await handleMessage({ type: 'AUTH_LOGOUT' }, noopSender))
+          return
+        }
+        if (payload.kind === 'session') {
+          sendResponse(
+            await handleMessage(
+              {
+                type: 'BRIDGE_SET_SESSION',
+                accessToken: payload.accessToken,
+                refreshToken: payload.refreshToken,
+              },
+              noopSender,
+            ),
+          )
+          return
+        }
+      }
+
+      if (m.channel === PORTAL_BRIDGE_CHANNEL && m.type === 'RFID_MAKE_KEY') {
+        const roomNumber = String(m.roomNumber ?? '').trim()
+        const checkinTime = String(m.checkinTime ?? '')
+        const checkoutTime = String(m.checkoutTime ?? '')
+        if (!roomNumber || !checkinTime || !checkoutTime) {
+          sendResponse({ ok: false, error: 'roomNumber, checkinTime, and checkoutTime are required.' })
+          return
+        }
+        const cardSerialRaw = m.cardSerial
+        const cardSerial =
+          typeof cardSerialRaw === 'number' && Number.isFinite(cardSerialRaw)
+            ? Math.max(1, Math.min(8, Math.floor(cardSerialRaw)))
+            : 1
+        sendResponse(
+          await handleMessage(
+            {
+              type: 'RFID_MAKE_KEY',
+              roomNumber,
+              checkinTime,
+              checkoutTime,
+              cardSerial,
+              confirmationNumber:
+                typeof m.confirmationNumber === 'string' ? m.confirmationNumber.trim() : undefined,
+              guestName: typeof m.guestName === 'string' ? m.guestName : null,
+              portalAdminEncode: Boolean(m.portalAdminEncode),
+            },
+            noopSender,
+          ),
+        )
+        return
+      }
+
+      sendResponse({ ok: false, error: 'Unknown external message' })
+    } catch (e) {
+      console.error('[FDN SW] onMessageExternal', e)
+      sendResponse({ ok: false, error: e instanceof Error ? e.message : 'External handler error' })
+    }
+  })()
+  return true
 })
 
 void initNativeHost(handleThalesNativeScan, forwardNativeHostRxToPanel, handleRfidStatus)
