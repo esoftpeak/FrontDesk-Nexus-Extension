@@ -837,10 +837,12 @@ function App() {
             <table className="fdn-table">
               <thead>
                 <tr>
-                  <th>Time</th>
+                  <th>Encoded at</th>
                   <th>Room</th>
+                  <th>Check-in</th>
+                  <th>Check-out</th>
                   <th>Serial</th>
-                  <th>Encoded by</th>
+                  <th>By</th>
                 </tr>
               </thead>
               <tbody>
@@ -855,6 +857,8 @@ function App() {
                         : '—'}
                     </td>
                     <td>{row.room_number}</td>
+                    <td>{formatSdkDateTime(row.checkin_time)}</td>
+                    <td>{formatSdkDateTime(row.checkout_time)}</td>
                     <td>{row.card_serial}</td>
                     <td className="fdn-mono">{row.encoded_by_username ?? '—'}</td>
                   </tr>

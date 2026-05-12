@@ -1770,13 +1770,18 @@ async function handleMessage(
       const conf = reservation?.confirmationNumber ?? null
       let dbWarning: string | null = null
 
+      // Prefer SDK-formatted times returned by Python (guaranteed yyyyMMddHHmm, includes time).
+      // Fall back to raw message values (may be date-only from PMS e.g. "2026-05-12").
+      const dbCheckinTime = typeof raw.checkin_time === 'string' && raw.checkin_time ? raw.checkin_time : msg.checkinTime
+      const dbCheckoutTime = typeof raw.checkout_time === 'string' && raw.checkout_time ? raw.checkout_time : msg.checkoutTime
+
       if (user && conf) {
         const { error: khErr } = await client.from('key_history').insert({
           confirmation_number: conf,
           room_number: msg.roomNumber,
           card_serial: msg.cardSerial ?? 1,
-          checkin_time: msg.checkinTime,
-          checkout_time: msg.checkoutTime,
+          checkin_time: dbCheckinTime,
+          checkout_time: dbCheckoutTime,
           encoded_by: user.id,
           encoded_by_username: user.email,
           terminal_id: terminalId,
