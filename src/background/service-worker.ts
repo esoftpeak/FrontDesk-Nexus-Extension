@@ -117,10 +117,16 @@ function toSdkDatetime(s: string, defaultHour: number): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}`
 }
 
-/** Convert SDK datetime yyyyMMddHHmm → YYYY-MM-DD-HH-mm for DB storage. */
-function sdkToDbDatetime(sdk: string): string {
-  if (!sdk || sdk.length < 12) return sdk
-  return `${sdk.slice(0, 4)}-${sdk.slice(4, 6)}-${sdk.slice(6, 8)}-${sdk.slice(8, 10)}-${sdk.slice(10, 12)}`
+/**
+ * `key_history` text times: keep the same 12-char SDK form as the encoder (`YYYYMMDDHHmm`),
+ * matching legacy PMS-synced rows. Falls back to `toSdkDatetime` when Python omits a value.
+ */
+function keyHistoryTimeForDb(rawSdk: unknown, fallbackMsg: string, defaultHour: number): string {
+  if (typeof rawSdk === 'string') {
+    const t = rawSdk.trim()
+    if (/^\d{12}$/.test(t)) return t
+  }
+  return toSdkDatetime(fallbackMsg, defaultHour)
 }
 
 type RfidMakeKeyMessage = Extract<ExtensionMessage, { type: 'RFID_MAKE_KEY' }>
@@ -148,14 +154,8 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
     const conf = confFromMsg || confFromPms
     let dbWarning: string | null = null
 
-    const dbCheckinTime =
-      typeof raw.checkin_time === 'string' && raw.checkin_time
-        ? sdkToDbDatetime(raw.checkin_time)
-        : msg.checkinTime
-    const dbCheckoutTime =
-      typeof raw.checkout_time === 'string' && raw.checkout_time
-        ? sdkToDbDatetime(raw.checkout_time)
-        : msg.checkoutTime
+    const dbCheckinTime = keyHistoryTimeForDb(raw.checkin_time, msg.checkinTime, 14)
+    const dbCheckoutTime = keyHistoryTimeForDb(raw.checkout_time, msg.checkoutTime, 12)
 
     if (user && conf) {
       const adminPortal = Boolean(msg.portalAdminEncode)
