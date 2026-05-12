@@ -117,6 +117,12 @@ function toSdkDatetime(s: string, defaultHour: number): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}`
 }
 
+/** Convert SDK datetime yyyyMMddHHmm → YYYY-MM-DD-HH-mm for DB storage. */
+function sdkToDbDatetime(sdk: string): string {
+  if (!sdk || sdk.length < 12) return sdk
+  return `${sdk.slice(0, 4)}-${sdk.slice(4, 6)}-${sdk.slice(6, 8)}-${sdk.slice(8, 10)}-${sdk.slice(10, 12)}`
+}
+
 const SYNXIS_RESERVATION_SUMMARY_URL =
   'https://sph.synxis.com/pms-web-ui/service/v2/guest-mgt/guest-stay-record/reservation-summary'
 
@@ -1789,10 +1795,13 @@ async function handleMessage(
       const conf = reservation?.confirmationNumber ?? null
       let dbWarning: string | null = null
 
-      // Prefer SDK-formatted times returned by Python (guaranteed yyyyMMddHHmm, includes time).
-      // Fall back to raw message values (may be date-only from PMS e.g. "2026-05-12").
-      const dbCheckinTime = typeof raw.checkin_time === 'string' && raw.checkin_time ? raw.checkin_time : msg.checkinTime
-      const dbCheckoutTime = typeof raw.checkout_time === 'string' && raw.checkout_time ? raw.checkout_time : msg.checkoutTime
+      // Python returns SDK format (yyyyMMddHHmm). Convert to YYYY-MM-DD-HH-mm for DB storage.
+      const dbCheckinTime = typeof raw.checkin_time === 'string' && raw.checkin_time
+        ? sdkToDbDatetime(raw.checkin_time)
+        : msg.checkinTime
+      const dbCheckoutTime = typeof raw.checkout_time === 'string' && raw.checkout_time
+        ? sdkToDbDatetime(raw.checkout_time)
+        : msg.checkoutTime
 
       if (user && conf) {
         const { error: khErr } = await client.from('key_history').insert({
