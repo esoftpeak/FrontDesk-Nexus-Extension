@@ -98,6 +98,25 @@ function ezeeAutoFlightKey(tabId: number, confirmation: string, roomHint: string
 
 const SYNXIS_DEFAULT_GUEST_ID = 100
 
+/**
+ * Normalise a check-in/out string to SDK format (yyyyMMddHHmm).
+ * If the input is a date-only string (YYYY-MM-DD), `defaultHour` is applied
+ * so the encoded card and DB record always contain a time component.
+ * Hotel convention: check-in 14:00, check-out 12:00.
+ */
+function toSdkDatetime(s: string, defaultHour: number): string {
+  const t = s.trim()
+  if (!t) return t
+  if (/^\d{12}$/.test(t)) return t                        // already yyyyMMddHHmm
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(t)
+    ? `${t}T${String(defaultHour).padStart(2, '0')}:00:00` // date-only → add default hour
+    : t
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return t
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}`
+}
+
 const SYNXIS_RESERVATION_SUMMARY_URL =
   'https://sph.synxis.com/pms-web-ui/service/v2/guest-mgt/guest-stay-record/reservation-summary'
 
@@ -1754,8 +1773,8 @@ async function handleMessage(
       const raw = await sendNativeRequest({
         type: 'RFID_MAKE_KEY',
         room_number: msg.roomNumber,
-        checkin_time: msg.checkinTime,
-        checkout_time: msg.checkoutTime,
+        checkin_time: toSdkDatetime(msg.checkinTime, 14),   // hotel check-in default 14:00
+        checkout_time: toSdkDatetime(msg.checkoutTime, 12), // hotel check-out default 12:00
         card_serial: msg.cardSerial ?? 1,
       })
 
