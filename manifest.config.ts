@@ -9,11 +9,23 @@ function normalizeExternMatch(entry: string): string {
   return `${base}/*`
 }
 
-/** Comma-separated patterns (build-time). See extension `.env.example`. */
+/** Production portal(s) always allowed — avoids empty `externally_connectable` when CI omits extension `.env`. */
+const DEFAULT_PORTAL_EXTERN_MATCHES = ['https://front-desk-nexus.vercel.app/*'] as const
+
+/** Comma-separated patterns (build-time). Merged with defaults. See extension `.env.example`. */
 const extraPortalMatches = (process.env.VITE_PORTAL_EXTERN_MATCHES ?? '')
   .split(',')
   .map((s) => normalizeExternMatch(s))
   .filter(Boolean)
+
+const externallyConnectableMatches = [
+  ...new Set<string>([
+    'http://localhost:5173/*',
+    'http://127.0.0.1:5173/*',
+    ...DEFAULT_PORTAL_EXTERN_MATCHES,
+    ...extraPortalMatches,
+  ]),
+]
 
 export default defineManifest({
   manifest_version: 3,
@@ -59,11 +71,7 @@ export default defineManifest({
     'https://*.ipms247.com/*',
   ],
   externally_connectable: {
-    matches: [
-      'http://localhost:5173/*',
-      'http://127.0.0.1:5173/*',
-      ...extraPortalMatches,
-    ],
+    matches: externallyConnectableMatches,
   },
   content_scripts: [
     {
