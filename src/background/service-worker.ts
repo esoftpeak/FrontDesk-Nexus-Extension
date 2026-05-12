@@ -1843,8 +1843,10 @@ async function handleMessage(
       // Primary: use room number decoded by Python from raw card string (works for all SDK-encoded cards)
       const pythonRoomNumber = typeof raw.room_number === 'string' && raw.room_number ? raw.room_number : null
       const pythonSerial = typeof raw.card_serial === 'number' ? raw.card_serial : null
+      const pythonCheckin = typeof raw.checkin_time === 'string' ? raw.checkin_time : null
+      const pythonCheckout = typeof raw.checkout_time === 'string' ? raw.checkout_time : null
       if (pythonRoomNumber) {
-        return { ok: true, cardData, roomNumber: pythonRoomNumber, cardSerial: pythonSerial }
+        return { ok: true, cardData, roomNumber: pythonRoomNumber, cardSerial: pythonSerial, checkinTime: pythonCheckin, checkoutTime: pythonCheckout }
       }
 
       // Fallback: chrome.storage.local fingerprint (cards encoded via this extension)
@@ -1855,6 +1857,8 @@ async function handleMessage(
         cardData,
         roomNumber: known?.roomNumber ?? null,
         cardSerial: known?.cardSerial ?? null,
+        checkinTime: null,
+        checkoutTime: null,
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Card read failed'

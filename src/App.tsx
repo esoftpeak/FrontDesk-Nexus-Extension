@@ -29,6 +29,15 @@ function formatLocalFromIso(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
+function formatSdkDateTime(s: string | null | undefined): string {
+  if (!s?.trim()) return '—'
+  if (s.length >= 12) {
+    const d = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}T${s.slice(8,10)}:${s.slice(10,12)}:00`)
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  }
+  return s
+}
+
 const emptyIdDetail: IdScanDetailGuru = {
   firstName: null,
   middleName: null,
@@ -85,6 +94,8 @@ function App() {
     cardData?: string
     roomNumber?: string | null
     cardSerial?: number | null
+    checkinTime?: string | null
+    checkoutTime?: string | null
     error?: string
   } | null>(null)
   /** From native host `document_data` — passed through on Save (not SynXis/eZee). */
@@ -425,7 +436,7 @@ function App() {
     setReadCardResult(null)
     try {
       const result = (await chrome.runtime.sendMessage({ type: 'RFID_READ_CARD' })) as
-        | { ok: boolean; cardData?: string; roomNumber?: string | null; cardSerial?: number | null; error?: string }
+        | { ok: boolean; cardData?: string; roomNumber?: string | null; cardSerial?: number | null; checkinTime?: string | null; checkoutTime?: string | null; error?: string }
         | undefined
       if (!result) {
         setReadCardResult({ ok: false, error: 'No response from native host' })
@@ -789,12 +800,19 @@ function App() {
           <div className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
             {readCardResult.ok ? (
               readCardResult.roomNumber ? (
-                <>
-                  <strong>Room {readCardResult.roomNumber}</strong>
-                  {readCardResult.cardSerial && readCardResult.cardSerial > 1 && (
-                    <span style={{ marginLeft: 8, opacity: 0.7 }}>Serial {readCardResult.cardSerial}</span>
-                  )}
-                </>
+                <dl className="fdn-dl" style={{ margin: 0 }}>
+                  <dt>Room</dt>
+                  <dd>
+                    <strong>{readCardResult.roomNumber}</strong>
+                    {readCardResult.cardSerial && readCardResult.cardSerial > 1 && (
+                      <span style={{ marginLeft: 8, opacity: 0.7 }}>Serial {readCardResult.cardSerial}</span>
+                    )}
+                  </dd>
+                  <dt>Check-in</dt>
+                  <dd>{formatSdkDateTime(readCardResult.checkinTime)}</dd>
+                  <dt>Check-out</dt>
+                  <dd>{formatSdkDateTime(readCardResult.checkoutTime)}</dd>
+                </dl>
               ) : (
                 <>
                   <strong>Card detected</strong>
