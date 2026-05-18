@@ -57,6 +57,7 @@ export function describeUnknownError(e: unknown): { name?: string; message: stri
 let nativePort: chrome.runtime.Port | null = null
 let reconnectAttempt = 0
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let _lastRfidConnected: boolean | null = null
 
 const MIN_BACKOFF_MS = 1000
 const MAX_BACKOFF_MS = 60_000
@@ -557,7 +558,10 @@ export function initNativeHost(
       if (raw.type === 'RFID_HANDSHAKE_RESULT') {
         const connected = raw.connected === true
         const error = typeof raw.error === 'string' && raw.error ? raw.error : null
-        console.log(`${LOG} RFID_HANDSHAKE_RESULT connected=${connected} error=${error}`)
+        if (connected !== _lastRfidConnected) {
+          console.log(`${LOG} RFID encoder status changed: connected=${connected}`, error ? `— ${error}` : '')
+          _lastRfidConnected = connected
+        }
         onRfidStatus?.(connected, error)
         return
       }

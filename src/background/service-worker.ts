@@ -51,10 +51,13 @@ let rfidStatusCheckedAt = 0
 const RFID_STATUS_TTL_MS = 5_000
 
 function handleRfidStatus(connected: boolean, error: string | null): void {
-  rfidConnected = connected ? 'connected' : 'disconnected'
+  const next = connected ? 'connected' : 'disconnected'
+  if (next !== rfidConnected) {
+    console.log('[FDN SW] RFID encoder status changed:', next, error ? `— ${error}` : '')
+  }
+  rfidConnected = next
   rfidError = connected ? null : (error ?? null)
   rfidStatusCheckedAt = Date.now()
-  console.log('[FDN SW] RFID encoder status:', rfidConnected, rfidError ? `— ${rfidError}` : '')
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
