@@ -71,3 +71,21 @@ export async function encryptJson(payload: unknown): Promise<EncryptedPayload> {
     ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertext))),
   }
 }
+
+export async function decryptJson<T = unknown>(payload: EncryptedPayload): Promise<T> {
+  const key = await getOrCreateAesKey()
+  const iv = Uint8Array.from(atob(payload.iv), (c) => c.charCodeAt(0))
+  const ciphertext = Uint8Array.from(atob(payload.ciphertext), (c) => c.charCodeAt(0))
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
+  return JSON.parse(new TextDecoder().decode(plain)) as T
+}
+
+/** SHA-256 hex of the normalized ID number — used as a privacy-safe lookup key in id_scans. */
+export async function hashIdNumber(idNumber: string): Promise<string> {
+  const norm = idNumber.replace(/\s+/g, '').toUpperCase()
+  const data = new TextEncoder().encode(norm)
+  const buf = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+}

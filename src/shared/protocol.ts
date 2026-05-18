@@ -17,6 +17,17 @@ export type IdScanHistoryRow = {
   manualEntry: boolean
 }
 
+/** A single prior visit found by matching the scanned ID number hash across all reservations. */
+export type ReturningGuestRecord = {
+  id: string
+  confirmationNumber: string
+  scannedAt: string
+  /** Decrypted from phone_encrypted — null if not saved or decryption failed. */
+  phone: string | null
+  /** Decrypted from email_encrypted — null if not saved or decryption failed. */
+  email: string | null
+}
+
 /** Key card encoding records for the current reservation (Supabase `key_history`). */
 export type KeyHistoryRow = {
   id: string
@@ -114,9 +125,11 @@ export type ExtensionMessage =
       portalAdminEncode?: boolean
     }
   | { type: 'RFID_READ_CARD' }
+  /** Look up previous scans by ID number hash to detect returning guests. */
+  | { type: 'GET_RETURNING_GUEST_HISTORY'; idNumber: string }
 
 export type ExtensionResponse =
-  | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[]; keyHistory?: KeyHistoryRow[]; signaturePath?: string }
+  | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[]; keyHistory?: KeyHistoryRow[]; signaturePath?: string; returningGuestHistory?: ReturningGuestRecord[] }
   | { ok: false; error: string }
 
 /** Service worker → side panel: log native inbound (opens in side panel DevTools). */

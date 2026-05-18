@@ -6,6 +6,7 @@ import type {
   NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
   PanelToastBroadcast,
+  ReturningGuestRecord,
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
@@ -100,6 +101,7 @@ function App() {
   } | null>(null)
   /** From native host `document_data` — passed through on Save (not SynXis/eZee). */
   const [lastDocumentData, setLastDocumentData] = useState<Record<string, unknown> | null>(null)
+  const [returningGuest, setReturningGuest] = useState<ReturningGuestRecord[]>([])
 
   const refreshIdScanHistory = useCallback(async () => {
     const res = (await chrome.runtime.sendMessage({ type: 'GET_ID_SCAN_HISTORY' })) as {
@@ -166,6 +168,25 @@ function App() {
       }
       void refresh()
       void refreshIdScanHistory()
+
+      // Returning guest lookup — clear first, then query by ID number hash
+      setReturningGuest([])
+      const idNum = m.parsed.idNumber?.trim()
+      if (idNum) {
+        void (async () => {
+          const res = (await chrome.runtime.sendMessage({
+            type: 'GET_RETURNING_GUEST_HISTORY',
+            idNumber: idNum,
+          })) as { ok?: boolean; returningGuestHistory?: ReturningGuestRecord[] }
+          if (res?.ok && res.returningGuestHistory?.length) {
+            setReturningGuest(res.returningGuestHistory)
+            // Auto-fill contact fields from the most recent prior visit if the scan left them blank
+            const most = res.returningGuestHistory[0]
+            if (!m.detail?.phone?.trim() && most.phone) setPhone(most.phone)
+            if (!m.detail?.email?.trim() && most.email) setEmailGuest(most.email)
+          }
+        })()
+      }
     },
     [refresh, refreshIdScanHistory],
   )
@@ -955,6 +976,41 @@ function App() {
             </div>
           </div>
         ) : null}
+
+        {!manualEntry && returningGuest.length > 0 && (
+          <div className="fdn-returning-guest">
+            <p className="fdn-returning-guest__title">
+              Returning guest — {returningGuest.length} previous visit{returningGuest.length > 1 ? 's' : ''} on record
+            </p>
+            <table className="fdn-table">
+              <thead>
+                <tr>
+                  <th>Last visit</th>
+                  <th>Confirmation</th>
+                  <th>Phone</th>
+                  <th>Email</th>
+                </tr>
+              </thead>
+              <tbody>
+                {returningGuest.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      {row.scannedAt
+                        ? new Date(row.scannedAt).toLocaleString(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          })
+                        : '—'}
+                    </td>
+                    <td className="fdn-mono">{row.confirmationNumber || '—'}</td>
+                    <td>{row.phone || '—'}</td>
+                    <td>{row.email || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="fdn-grid fdn-grid--idguru">
           <div className="fdn-grid--three-names">

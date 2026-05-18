@@ -9,6 +9,7 @@ import type {
   NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
   PanelToastBroadcast,
+  ReturningGuestRecord,
 } from '../shared/protocol'
 import type {
   EzeeGuestDisplay,
@@ -17,7 +18,8 @@ import type {
   ReservationSnapshot,
   SynxisGuestDisplay,
 } from '../shared/pms-types'
-import { encryptBinary, encryptJson } from '../lib/encryption'
+import { decryptJson, encryptBinary, encryptJson, hashIdNumber } from '../lib/encryption'
+import type { EncryptedPayload } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
 import { pingNativeHost } from '../lib/native-scan'
@@ -940,6 +942,7 @@ async function saveIdScan(args: {
     },
   }
   const pii_encrypted = await encryptJson(piiPayload)
+  const id_number_hash = rawId ? await hashIdNumber(rawId) : null
 
   let phone_encrypted: Record<string, unknown> | null = null
   let email_encrypted: Record<string, unknown> | null = null
@@ -965,6 +968,7 @@ async function saveIdScan(args: {
       image_back_path: imageBackPath,
       phone_encrypted,
       email_encrypted,
+      id_number_hash,
     })
     .select('id')
     .single()
@@ -1465,6 +1469,56 @@ async function fetchIdScanHistoryForCurrentReservation(): Promise<ExtensionRespo
   return { ok: true, idScanHistory: rows }
 }
 
+async function fetchReturningGuestHistory(idNumber: string): Promise<ExtensionResponse> {
+  const norm = idNumber.replace(/\s+/g, '').toUpperCase()
+  if (!norm) return { ok: true, returningGuestHistory: [] }
+
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: true, returningGuestHistory: [] }
+
+  const hash = await hashIdNumber(norm)
+  const { data, error } = await client
+    .from('id_scans')
+    .select('id, confirmation_number, created_at, phone_encrypted, email_encrypted')
+    .eq('id_number_hash', hash)
+    .order('created_at', { ascending: false })
+    .limit(5)
+
+  if (error) {
+    console.warn('[FDN] returning guest query', error.message)
+    return { ok: true, returningGuestHistory: [] }
+  }
+
+  const records: ReturningGuestRecord[] = await Promise.all(
+    (data ?? []).map(async (r: Record<string, unknown>) => {
+      let phone: string | null = null
+      let email: string | null = null
+      try {
+        if (r.phone_encrypted) {
+          const dec = await decryptJson<{ value: string }>(r.phone_encrypted as EncryptedPayload)
+          phone = dec.value ?? null
+        }
+      } catch { /* decryption key mismatch — skip */ }
+      try {
+        if (r.email_encrypted) {
+          const dec = await decryptJson<{ value: string }>(r.email_encrypted as EncryptedPayload)
+          email = dec.value ?? null
+        }
+      } catch { /* decryption key mismatch — skip */ }
+      return {
+        id: String(r.id),
+        confirmationNumber: String(r.confirmation_number ?? ''),
+        scannedAt: typeof r.created_at === 'string' ? r.created_at : '',
+        phone,
+        email,
+      }
+    }),
+  )
+
+  return { ok: true, returningGuestHistory: records }
+}
+
 async function fetchKeyHistoryForCurrentReservation(): Promise<ExtensionResponse> {
   lastError = null
   const client = getClient()
@@ -1522,6 +1576,10 @@ async function handleMessage(
 
   if (msg.type === 'GET_KEY_HISTORY') {
     return fetchKeyHistoryForCurrentReservation()
+  }
+
+  if (msg.type === 'GET_RETURNING_GUEST_HISTORY') {
+    return fetchReturningGuestHistory(msg.idNumber)
   }
 
   if (msg.type === 'LOAD_EZEE_RESERVATION') {

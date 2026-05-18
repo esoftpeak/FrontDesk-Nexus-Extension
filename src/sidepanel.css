@@ -590,6 +590,21 @@
   color: #8b949e;
 }
 
+.fdn-returning-guest {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  background: #1a2d1a;
+  border: 1px solid #3fb950;
+  border-radius: 6px;
+}
+
+.fdn-returning-guest__title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #3fb950;
+}
+
 .fdn-id-history {
   margin-top: 14px;
   padding-top: 8px;
