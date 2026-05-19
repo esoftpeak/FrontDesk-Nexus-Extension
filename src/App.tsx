@@ -88,7 +88,7 @@ function App() {
   const [keyHistory, setKeyHistory] = useState<KeyHistoryRow[]>([])
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyNotice, setKeyNotice] = useState<string | null>(null)
-  const [keyCardSerial, setKeyCardSerial] = useState<1 | 2>(1)
+  const [keyCardSerial, setKeyCardSerial] = useState<number>(1)
   const [readCardBusy, setReadCardBusy] = useState(false)
   const [readCardResult, setReadCardResult] = useState<{
     ok: boolean
@@ -143,6 +143,29 @@ function App() {
   useEffect(() => {
     void refreshKeyHistory()
   }, [refreshKeyHistory, state?.reservation?.confirmationNumber])
+
+  // Reset key serial to 1 when a new reservation is loaded
+  useEffect(() => {
+    setKeyCardSerial(1)
+  }, [state?.reservation?.confirmationNumber])
+
+  function clearIdScan() {
+    setParsed(emptyParsed)
+    setIdDetail(emptyIdDetail)
+    setPhone('')
+    setEmailGuest('')
+    setScanImages(null)
+    setLastOcrProvider(null)
+    setLastDocumentData(null)
+    setLastScanReceivedAt(null)
+    setRotationDeg(0)
+    setFlipH(false)
+    setGuestRemark('')
+    setCheckInRemark('')
+    setReturningGuest([])
+    setNotice(null)
+    void chrome.storage.local.remove('fdn_last_native_scan')
+  }
 
   const applyNativeIdScan = useCallback(
     (m: NativeIdScanBroadcast) => {
@@ -763,28 +786,16 @@ function App() {
               <dd>{res.checkOutDate ?? '—'}</dd>
             </dl>
 
-            <div style={{ marginTop: 10 }}>
-              <span className="fdn-field__label" style={{ fontSize: 12, color: '#c9d1d9' }}>Card type</span>
-              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                <label className="fdn-check" style={{ marginBottom: 0 }}>
-                  <input
-                    type="radio"
-                    name="keySerial"
-                    checked={keyCardSerial === 1}
-                    onChange={() => setKeyCardSerial(1)}
-                  />
-                  Primary (1st key)
-                </label>
-                <label className="fdn-check" style={{ marginBottom: 0 }}>
-                  <input
-                    type="radio"
-                    name="keySerial"
-                    checked={keyCardSerial === 2}
-                    onChange={() => setKeyCardSerial(2)}
-                  />
-                  Duplicate (2nd key)
-                </label>
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+              <span style={{ fontSize: 12, color: '#c9d1d9' }}>Key #{keyCardSerial}</span>
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--secondary"
+                style={{ padding: '3px 10px', fontSize: 12 }}
+                onClick={() => setKeyCardSerial((n) => n + 1)}
+              >
+                Next key
+              </button>
             </div>
 
             <div className="fdn-actions">
@@ -796,6 +807,14 @@ function App() {
               >
                 {keyBusy ? 'Encoding…' : 'Encode Key'}
               </button>
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--secondary"
+                disabled={readCardBusy || hw.rfid_encoder !== 'connected'}
+                onClick={() => void onReadCard()}
+              >
+                {readCardBusy ? 'Reading…' : 'Read Card'}
+              </button>
             </div>
 
             {keyNotice && (
@@ -805,17 +824,6 @@ function App() {
             )}
           </>
         )}
-
-        <div className="fdn-actions" style={{ marginTop: 10 }}>
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary"
-            disabled={readCardBusy || hw.rfid_encoder !== 'connected'}
-            onClick={() => void onReadCard()}
-          >
-            {readCardBusy ? 'Reading…' : 'Read Card'}
-          </button>
-        </div>
 
         {readCardResult && (
           <div className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
@@ -1239,6 +1247,14 @@ function App() {
             onClick={() => void onSave(false)}
           >
             Save DB
+          </button>
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--secondary"
+            disabled={busy}
+            onClick={clearIdScan}
+          >
+            Clear
           </button>
         </div>
       </section>
