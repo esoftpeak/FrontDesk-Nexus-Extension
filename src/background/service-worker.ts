@@ -949,29 +949,45 @@ async function saveIdScan(args: {
   if (args.phone?.trim()) phone_encrypted = (await encryptJson({ value: args.phone.trim() })) as unknown as Record<string, unknown>
   if (args.email?.trim()) email_encrypted = (await encryptJson({ value: args.email.trim() })) as unknown as Record<string, unknown>
 
-  const { data: insertRow, error: insErr } = await client
+  const insertBase = {
+    id: scanId,
+    reservation_id: resRow.id,
+    confirmation_number: conf,
+    scanned_by: user.id,
+    terminal_id: terminalId,
+    manual_entry: args.manualEntry,
+    ocr_provider: args.manualEntry
+      ? null
+      : args.ocrProvider && String(args.ocrProvider).trim()
+        ? String(args.ocrProvider).trim()
+        : 'native_host',
+    pii_encrypted: pii_encrypted as unknown as Record<string, unknown>,
+    image_front_path: imageFrontPath,
+    image_back_path: imageBackPath,
+    phone_encrypted,
+    email_encrypted,
+  }
+
+  let scanResult = await client
     .from('id_scans')
-    .insert({
-      id: scanId,
-      reservation_id: resRow.id,
-      confirmation_number: conf,
-      scanned_by: user.id,
-      terminal_id: terminalId,
-      manual_entry: args.manualEntry,
-      ocr_provider: args.manualEntry
-        ? null
-        : args.ocrProvider && String(args.ocrProvider).trim()
-          ? String(args.ocrProvider).trim()
-          : 'native_host',
-      pii_encrypted: pii_encrypted as unknown as Record<string, unknown>,
-      image_front_path: imageFrontPath,
-      image_back_path: imageBackPath,
-      phone_encrypted,
-      email_encrypted,
-      id_number_hash,
-    })
+    .insert({ ...insertBase, id_number_hash })
     .select('id')
     .single()
+
+  // id_number_hash column not yet migrated — retry without it so saves still work.
+  // Run the required SQL migration in the Supabase dashboard to enable returning-guest detection:
+  //   ALTER TABLE id_scans ADD COLUMN IF NOT EXISTS id_number_hash TEXT;
+  //   CREATE INDEX IF NOT EXISTS idx_id_scans_id_number_hash ON id_scans (id_number_hash);
+  if (scanResult.error?.message?.includes('id_number_hash')) {
+    console.warn('[FDN SW] id_number_hash column not found — run the SQL migration. Saving without hash.')
+    scanResult = await client
+      .from('id_scans')
+      .insert(insertBase)
+      .select('id')
+      .single()
+  }
+
+  const { data: insertRow, error: insErr } = scanResult
 
   if (insErr) {
     lastError = insErr.message
