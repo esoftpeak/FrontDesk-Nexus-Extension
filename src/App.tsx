@@ -539,8 +539,32 @@ function App() {
 
       <header className="fdn-header">
         <h1 className="fdn-title">FrontDesk Nexus</h1>
-        <p className="fdn-sub">Side panel · Module 1 (ID)</p>
       </header>
+
+      <section className="fdn-card" style={{ marginBottom: 8 }}>
+        <div className="fdn-modules">
+          <span className="fdn-mod">ID · in progress</span>
+          <span className="fdn-mod fdn-mod--off">Payment</span>
+          <span className="fdn-mod fdn-mod--off">Signature</span>
+          {hw.rfid_encoder !== 'connected' ? (
+            <span className="fdn-mod fdn-mod--off">Key · offline</span>
+          ) : keyHistory.length > 0 ? (
+            <span className="fdn-mod">Key · {keyHistory.length} encoded</span>
+          ) : (
+            <span className="fdn-mod fdn-mod--off">Key · ready</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 11, color: '#8b949e', flexWrap: 'wrap' }}>
+          <span>
+            <span className={hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
+            ID scanner · {hw.id_scanner}
+          </span>
+          <span>
+            <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
+            RFID · {hw.rfid_encoder}
+          </span>
+        </div>
+      </section>
 
       <section className="fdn-card">
         <h2 className="fdn-h2">Session</h2>
@@ -586,32 +610,7 @@ function App() {
       </section>
 
       <section className="fdn-card">
-        <h2 className="fdn-h2">Hardware</h2>
-        <ul className="fdn-hw">
-          <li>
-            ID scanner{' '}
-            <span className={hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
-            {hw.id_scanner}
-          </li>
-          <li>
-            Spectral Payout{' '}
-            <span className={hw.spectral_payout === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
-            {hw.spectral_payout}
-          </li>
-          <li>
-            RFID encoder{' '}
-            <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
-            {hw.rfid_encoder}
-          </li>
-        </ul>
-      </section>
-
-      <section className="fdn-card">
         <h2 className="fdn-h2">Guest Data (SynXis API)</h2>
-        <p className="fdn-help">
-          Uses a fixed sample reservation-summary request. Stay signed into SynXis in this browser so
-          sph.synxis.com can send cookies with the request.
-        </p>
         <div className="fdn-actions">
           <button
             type="button"
@@ -670,10 +669,6 @@ function App() {
 
       <section className="fdn-card">
         <h2 className="fdn-h2">Guest Data (eZee)</h2>
-        <p className="fdn-help">
-          Reads the Ant Design guest drawer on live.ipms247.com (not an iframe). The extension auto-loads
-          within a few seconds when you open a guest; use the button if the drawer is already open.
-        </p>
         <div className="fdn-actions">
           <button
             type="button"
@@ -740,30 +735,7 @@ function App() {
       </section>
 
       <section className="fdn-card">
-        <h2 className="fdn-h2">Module status</h2>
-        <div className="fdn-modules">
-          <span className="fdn-mod">ID · in progress</span>
-          <span className="fdn-mod fdn-mod--off">Payment</span>
-          <span className="fdn-mod fdn-mod--off">Signature</span>
-          {hw.rfid_encoder !== 'connected' ? (
-            <span className="fdn-mod fdn-mod--off">Key · offline</span>
-          ) : keyHistory.length > 0 ? (
-            <span className="fdn-mod">Key · {keyHistory.length} encoded</span>
-          ) : (
-            <span className="fdn-mod fdn-mod--off">Key · ready</span>
-          )}
-        </div>
-      </section>
-
-      <section className="fdn-card">
         <h2 className="fdn-h2">Key Card Encoder</h2>
-        <ul className="fdn-hw">
-          <li>
-            RFID encoder{' '}
-            <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
-            {hw.rfid_encoder}
-          </li>
-        </ul>
 
         {hw.rfid_encoder !== 'connected' && (
           <p className="fdn-note">
@@ -1197,9 +1169,6 @@ function App() {
 
         <div className="fdn-id-history">
           <h3 className="fdn-h3 fdn-id-history__title">History (this reservation)</h3>
-          <p className="fdn-muted fdn-id-history__hint">
-            Same confirmation as the loaded guest; future: match by document number across stays.
-          </p>
           {idScanHistory.length === 0 ? (
             <p className="fdn-muted">No prior scans for this confirmation.</p>
           ) : (
