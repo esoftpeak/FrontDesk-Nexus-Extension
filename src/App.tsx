@@ -532,7 +532,7 @@ function App() {
             <span className="fdn-mod fdn-mod--off">Key · ready</span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 11, color: '#8b949e', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 11, color: '#8b949e', flexWrap: 'wrap', alignItems: 'center' }}>
           <span>
             <span className={hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
             ID scanner · {hw.id_scanner}
@@ -541,26 +541,22 @@ function App() {
             <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
             RFID · {hw.rfid_encoder}
           </span>
+          {state.auth.signedIn && (
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              <strong style={{ color: '#e8eaed', fontSize: 11 }}>{state.auth.email}</strong>
+              <span className="fdn-badge">{state.auth.role ?? 'role?'}</span>
+              <button type="button" className="fdn-btn fdn-btn--ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => void onLogout()}>
+                Sign out
+              </button>
+            </span>
+          )}
         </div>
       </section>
 
-      <section className="fdn-card">
-        <h2 className="fdn-h2">Session</h2>
-        {state.auth.signedIn ? (
-          <>
-            <p className="fdn-line">
-              <strong>{state.auth.email}</strong>
-              <span className="fdn-badge">{state.auth.role ?? 'role?'}</span>
-            </p>
-            <button type="button" className="fdn-btn fdn-btn--ghost" onClick={() => void onLogout()}>
-              Log out
-            </button>
-          </>
-        ) : (
+      {!state.auth.signedIn && (
+        <section className="fdn-card">
+          <h2 className="fdn-h2">Sign in</h2>
           <form className="fdn-form" onSubmit={(e) => void onDevLogin(e)}>
-            <p className="fdn-help">
-              Production uses the portal session bridge. Use this for development only.
-            </p>
             <label className="fdn-label">
               Email
               <input
@@ -584,7 +580,330 @@ function App() {
               Sign in
             </button>
           </form>
+        </section>
+      )}
+
+      <section className="fdn-card fdn-card--idguru">
+        <h2 className="fdn-h2">ID scan (ID Guru–style)</h2>
+        <label className="fdn-check">
+          <input
+            type="checkbox"
+            checked={manualEntry}
+            onChange={(e) => setManualEntry(e.target.checked)}
+          />
+          Manual entry mode (no scanner / OCR)
+        </label>
+        {managerOverride && <p className="fdn-note">Manager override active for DNR gate.</p>}
+        {!manualEntry && lastOcrProvider && (
+          <p className="fdn-muted fdn-line">
+            Last scan source: <strong>{lastOcrProvider}</strong>
+          </p>
         )}
+
+        {!manualEntry && scanPreviewUrls ? (
+          <div className="fdn-id-preview fdn-id-preview--dual">
+            <div className="fdn-id-preview__pair">
+              <div className="fdn-id-preview__cell">
+                <p className="fdn-id-preview__side">Front</p>
+                <div className="fdn-id-preview__main">
+                  <img
+                    className="fdn-id-preview__img"
+                    src={scanPreviewUrls.front}
+                    alt="ID front"
+                    style={{
+                      transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="fdn-id-preview__cell">
+                <p className="fdn-id-preview__side">Back</p>
+                <div className="fdn-id-preview__main">
+                  <img
+                    className="fdn-id-preview__img"
+                    src={scanPreviewUrls.back}
+                    alt="ID back"
+                    style={{
+                      transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="fdn-id-preview__toolbar" aria-label="Adjust image orientation (both sides)">
+              <button
+                type="button"
+                className="fdn-id-preview__tool"
+                title="Rotate clockwise"
+                onClick={() => setRotationDeg((d) => (d + 90) % 360)}
+              >
+                ↻
+              </button>
+              <button
+                type="button"
+                className="fdn-id-preview__tool"
+                title="Rotate counter-clockwise"
+                onClick={() => setRotationDeg((d) => (d - 90 + 360) % 360)}
+              >
+                ↺
+              </button>
+              <button
+                type="button"
+                className="fdn-id-preview__tool"
+                title="Flip horizontal mirror"
+                onClick={() => setFlipH((f) => !f)}
+              >
+                ⇄
+              </button>
+              <button
+                type="button"
+                className="fdn-id-preview__tool"
+                title="Straighten (reset rotation + flip)"
+                onClick={() => {
+                  setRotationDeg(0)
+                  setFlipH(false)
+                }}
+              >
+                ⊡
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="fdn-grid fdn-grid--idguru">
+          <div className="fdn-grid--three-names">
+            <label className="fdn-label">
+              First name
+            <input
+              className="fdn-input"
+              value={idDetail.firstName ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+          <label className="fdn-label">
+            Middle name
+            <input
+              className="fdn-input"
+              value={idDetail.middleName ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+            <label className="fdn-label">
+              Last name
+              <input
+                className="fdn-input"
+                value={idDetail.lastName ?? ''}
+                onChange={(e) =>
+                  setIdDetail((d) => ({ ...d, lastName: e.target.value.trim() || null }))
+                }
+              />
+            </label>
+          </div>
+          <label className="fdn-label fdn-label--full">
+            Street address
+            <input
+              className="fdn-input"
+              value={idDetail.streetAddress ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, streetAddress: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+          <label className="fdn-label">
+            City
+            <input
+              className="fdn-input"
+              value={idDetail.city ?? ''}
+              onChange={(e) => setIdDetail((d) => ({ ...d, city: e.target.value.trim() || null }))}
+            />
+          </label>
+          <label className="fdn-label">
+            State
+            <input
+              className="fdn-input"
+              value={idDetail.state ?? ''}
+              onChange={(e) => setIdDetail((d) => ({ ...d, state: e.target.value.trim() || null }))}
+            />
+          </label>
+          <label className="fdn-label">
+            Zip / postal
+            <input
+              className="fdn-input"
+              value={idDetail.postalCode ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, postalCode: e.target.value.trim() || null }))
+              }
+            />
+          </label>
+          <div className="fdn-field fdn-field--full">
+            <span className="fdn-field__label">Phone &amp; country</span>
+            <div className="fdn-phone-inline">
+              <label className="fdn-check fdn-check--phone-flag">
+                <input
+                  type="checkbox"
+                  checked={idDetail.usaCaPhone === true}
+                  onChange={(e) =>
+                    setIdDetail((d) => ({ ...d, usaCaPhone: e.target.checked ? true : null }))
+                  }
+                />
+                USA/CA
+              </label>
+              <input
+                className="fdn-input fdn-input--country-code"
+                placeholder="+1"
+                value={idDetail.phoneCountryCode ?? ''}
+                onChange={(e) =>
+                  setIdDetail((d) => ({ ...d, phoneCountryCode: e.target.value.trim() || null }))
+                }
+              />
+              <input
+                className="fdn-input"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="(555) 555-5555"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+            </div>
+          </div>
+          <label className="fdn-label">
+            Email (guest)
+            <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
+          </label>
+          <label className="fdn-label">
+            ID type
+            <input
+              className="fdn-input"
+              value={parsed.idType ?? ''}
+              onChange={(e) => setParsed({ ...parsed, idType: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            ID number
+            <input
+              className="fdn-input"
+              value={parsed.idNumber ?? ''}
+              onChange={(e) => setParsed({ ...parsed, idNumber: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            ID issue date
+            <input
+              className="fdn-input"
+              value={parsed.issueDate ?? ''}
+              onChange={(e) => setParsed({ ...parsed, issueDate: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            ID expiration
+            <input
+              className="fdn-input"
+              value={parsed.expiryDate ?? ''}
+              onChange={(e) => setParsed({ ...parsed, expiryDate: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            Date of birth
+            <input
+              className="fdn-input"
+              value={parsed.dateOfBirth ?? ''}
+              onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
+            />
+          </label>
+          <label className="fdn-label">
+            Age (from DOB)
+            <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
+          </label>
+          <div className="fdn-field fdn-field--full fdn-checkin-times">
+            <span className="fdn-field__label">Check-in &amp; timestamps</span>
+            <dl className="fdn-kv">
+              <dt>ID data received (this scan)</dt>
+              <dd title="ISO: local display below">{formatLocalFromIso(lastScanReceivedAt)}</dd>
+            </dl>
+          </div>
+          <label className="fdn-label fdn-label--full">
+            Guest remark
+            <textarea
+              className="fdn-input fdn-textarea"
+              rows={2}
+              value={guestRemark}
+              onChange={(e) => setGuestRemark(e.target.value)}
+            />
+          </label>
+          <label className="fdn-label fdn-label--full">
+            Check-in remark
+            <textarea
+              className="fdn-input fdn-textarea"
+              rows={2}
+              value={checkInRemark}
+              onChange={(e) => setCheckInRemark(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="fdn-id-history">
+          <h3 className="fdn-h3 fdn-id-history__title">History (this reservation)</h3>
+          {idScanHistory.length === 0 ? (
+            <p className="fdn-muted">No prior scans for this confirmation.</p>
+          ) : (
+            <table className="fdn-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Manual</th>
+                  <th>Scan id</th>
+                </tr>
+              </thead>
+              <tbody>
+                {idScanHistory.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      {row.scannedAt
+                        ? new Date(row.scannedAt).toLocaleString(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          })
+                        : '—'}
+                    </td>
+                    <td>{row.manualEntry ? 'Yes' : 'No'}</td>
+                    <td className="fdn-mono">{row.id.slice(0, 8)}…</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="fdn-actions">
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--primary"
+            disabled={busy || !state.auth.signedIn}
+            onClick={() => void onSave(true)}
+          >
+            Save DB &amp; PMS
+          </button>
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--secondary"
+            disabled={busy || !state.auth.signedIn}
+            onClick={() => void onSave(false)}
+          >
+            Save DB
+          </button>
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--secondary"
+            disabled={busy}
+            onClick={clearIdScan}
+          >
+            Clear
+          </button>
+        </div>
       </section>
 
       <section className="fdn-card">
@@ -845,330 +1164,6 @@ function App() {
               </tbody>
             </table>
           )}
-        </div>
-      </section>
-
-      <section className="fdn-card fdn-card--idguru">
-        <h2 className="fdn-h2">ID scan (ID Guru–style)</h2>
-        <label className="fdn-check">
-          <input
-            type="checkbox"
-            checked={manualEntry}
-            onChange={(e) => setManualEntry(e.target.checked)}
-          />
-          Manual entry mode (no scanner / OCR)
-        </label>
-        {managerOverride && <p className="fdn-note">Manager override active for DNR gate.</p>}
-        {!manualEntry && lastOcrProvider && (
-          <p className="fdn-muted fdn-line">
-            Last scan source: <strong>{lastOcrProvider}</strong>
-          </p>
-        )}
-
-        {!manualEntry && scanPreviewUrls ? (
-          <div className="fdn-id-preview fdn-id-preview--dual">
-            <div className="fdn-id-preview__pair">
-              <div className="fdn-id-preview__cell">
-                <p className="fdn-id-preview__side">Front</p>
-                <div className="fdn-id-preview__main">
-                  <img
-                    className="fdn-id-preview__img"
-                    src={scanPreviewUrls.front}
-                    alt="ID front"
-                    style={{
-                      transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="fdn-id-preview__cell">
-                <p className="fdn-id-preview__side">Back</p>
-                <div className="fdn-id-preview__main">
-                  <img
-                    className="fdn-id-preview__img"
-                    src={scanPreviewUrls.back}
-                    alt="ID back"
-                    style={{
-                      transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-            <div className="fdn-id-preview__toolbar" aria-label="Adjust image orientation (both sides)">
-              <button
-                type="button"
-                className="fdn-id-preview__tool"
-                title="Rotate clockwise"
-                onClick={() => setRotationDeg((d) => (d + 90) % 360)}
-              >
-                ↻
-              </button>
-              <button
-                type="button"
-                className="fdn-id-preview__tool"
-                title="Rotate counter-clockwise"
-                onClick={() => setRotationDeg((d) => (d - 90 + 360) % 360)}
-              >
-                ↺
-              </button>
-              <button
-                type="button"
-                className="fdn-id-preview__tool"
-                title="Flip horizontal mirror"
-                onClick={() => setFlipH((f) => !f)}
-              >
-                ⇄
-              </button>
-              <button
-                type="button"
-                className="fdn-id-preview__tool"
-                title="Straighten (reset rotation + flip)"
-                onClick={() => {
-                  setRotationDeg(0)
-                  setFlipH(false)
-                }}
-              >
-                ⊡
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-
-        <div className="fdn-grid fdn-grid--idguru">
-          <div className="fdn-grid--three-names">
-            <label className="fdn-label">
-              First name
-            <input
-              className="fdn-input"
-              value={idDetail.firstName ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
-              }
-            />
-          </label>
-          <label className="fdn-label">
-            Middle name
-            <input
-              className="fdn-input"
-              value={idDetail.middleName ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
-              }
-            />
-          </label>
-            <label className="fdn-label">
-              Last name
-              <input
-                className="fdn-input"
-                value={idDetail.lastName ?? ''}
-                onChange={(e) =>
-                  setIdDetail((d) => ({ ...d, lastName: e.target.value.trim() || null }))
-                }
-              />
-            </label>
-          </div>
-          <label className="fdn-label fdn-label--full">
-            Street address
-            <input
-              className="fdn-input"
-              value={idDetail.streetAddress ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, streetAddress: e.target.value.trim() || null }))
-              }
-            />
-          </label>
-          <label className="fdn-label">
-            City
-            <input
-              className="fdn-input"
-              value={idDetail.city ?? ''}
-              onChange={(e) => setIdDetail((d) => ({ ...d, city: e.target.value.trim() || null }))}
-            />
-          </label>
-          <label className="fdn-label">
-            State
-            <input
-              className="fdn-input"
-              value={idDetail.state ?? ''}
-              onChange={(e) => setIdDetail((d) => ({ ...d, state: e.target.value.trim() || null }))}
-            />
-          </label>
-          <label className="fdn-label">
-            Zip / postal
-            <input
-              className="fdn-input"
-              value={idDetail.postalCode ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, postalCode: e.target.value.trim() || null }))
-              }
-            />
-          </label>
-          <div className="fdn-field fdn-field--full">
-            <span className="fdn-field__label">Phone &amp; country</span>
-            <div className="fdn-phone-inline">
-              <label className="fdn-check fdn-check--phone-flag">
-                <input
-                  type="checkbox"
-                  checked={idDetail.usaCaPhone === true}
-                  onChange={(e) =>
-                    setIdDetail((d) => ({ ...d, usaCaPhone: e.target.checked ? true : null }))
-                  }
-                />
-                USA/CA
-              </label>
-              <input
-                className="fdn-input fdn-input--country-code"
-                placeholder="+1"
-                value={idDetail.phoneCountryCode ?? ''}
-                onChange={(e) =>
-                  setIdDetail((d) => ({ ...d, phoneCountryCode: e.target.value.trim() || null }))
-                }
-              />
-              <input
-                className="fdn-input"
-                inputMode="tel"
-                autoComplete="tel"
-                placeholder="(555) 555-5555"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-              />
-            </div>
-          </div>
-          <label className="fdn-label">
-            Email (guest)
-            <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
-          </label>
-          <label className="fdn-label">
-            ID type
-            <input
-              className="fdn-input"
-              value={parsed.idType ?? ''}
-              onChange={(e) => setParsed({ ...parsed, idType: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            ID number
-            <input
-              className="fdn-input"
-              value={parsed.idNumber ?? ''}
-              onChange={(e) => setParsed({ ...parsed, idNumber: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            ID issue date
-            <input
-              className="fdn-input"
-              value={parsed.issueDate ?? ''}
-              onChange={(e) => setParsed({ ...parsed, issueDate: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            ID expiration
-            <input
-              className="fdn-input"
-              value={parsed.expiryDate ?? ''}
-              onChange={(e) => setParsed({ ...parsed, expiryDate: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            Date of birth
-            <input
-              className="fdn-input"
-              value={parsed.dateOfBirth ?? ''}
-              onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            Age (from DOB)
-            <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
-          </label>
-          <div className="fdn-field fdn-field--full fdn-checkin-times">
-            <span className="fdn-field__label">Check-in &amp; timestamps</span>
-            <dl className="fdn-kv">
-              <dt>ID data received (this scan)</dt>
-              <dd title="ISO: local display below">{formatLocalFromIso(lastScanReceivedAt)}</dd>
-            </dl>
-          </div>
-          <label className="fdn-label fdn-label--full">
-            Guest remark
-            <textarea
-              className="fdn-input fdn-textarea"
-              rows={2}
-              value={guestRemark}
-              onChange={(e) => setGuestRemark(e.target.value)}
-            />
-          </label>
-          <label className="fdn-label fdn-label--full">
-            Check-in remark
-            <textarea
-              className="fdn-input fdn-textarea"
-              rows={2}
-              value={checkInRemark}
-              onChange={(e) => setCheckInRemark(e.target.value)}
-            />
-          </label>
-        </div>
-
-        <div className="fdn-id-history">
-          <h3 className="fdn-h3 fdn-id-history__title">History (this reservation)</h3>
-          {idScanHistory.length === 0 ? (
-            <p className="fdn-muted">No prior scans for this confirmation.</p>
-          ) : (
-            <table className="fdn-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Manual</th>
-                  <th>Scan id</th>
-                </tr>
-              </thead>
-              <tbody>
-                {idScanHistory.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      {row.scannedAt
-                        ? new Date(row.scannedAt).toLocaleString(undefined, {
-                            dateStyle: 'medium',
-                            timeStyle: 'short',
-                          })
-                        : '—'}
-                    </td>
-                    <td>{row.manualEntry ? 'Yes' : 'No'}</td>
-                    <td className="fdn-mono">{row.id.slice(0, 8)}…</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div className="fdn-actions">
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--primary"
-            disabled={busy || !state.auth.signedIn}
-            onClick={() => void onSave(true)}
-          >
-            Save DB &amp; PMS
-          </button>
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary"
-            disabled={busy || !state.auth.signedIn}
-            onClick={() => void onSave(false)}
-          >
-            Save DB
-          </button>
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary"
-            disabled={busy}
-            onClick={clearIdScan}
-          >
-            Clear
-          </button>
         </div>
       </section>
 
