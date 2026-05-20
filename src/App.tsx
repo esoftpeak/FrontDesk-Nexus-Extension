@@ -310,7 +310,12 @@ function App() {
       })) as { ok: boolean; error?: string }
       if (!res.ok) {
         const err = res.error ?? 'Save failed'
-        setNotice(err)
+        void chrome.notifications.create({
+          type: 'basic',
+          title: 'FrontDesk Nexus — Save failed',
+          message: err,
+          iconUrl: chrome.runtime.getURL('icon.png'),
+        })
         if (err.includes('DNR')) setShowManagerModal(true)
         return
       }
@@ -904,6 +909,7 @@ function App() {
             Clear
           </button>
         </div>
+        {notice && <div className="fdn-banner fdn-banner--info" style={{ marginTop: 8 }}>{notice}</div>}
       </section>
 
       <section className="fdn-card">
@@ -1166,9 +1172,6 @@ function App() {
           )}
         </div>
       </section>
-
-      {notice && <div className="fdn-banner fdn-banner--info">{notice}</div>}
-      {state.lastError && <div className="fdn-banner fdn-banner--danger">{state.lastError}</div>}
 
       {showManagerModal && (
         <div className="fdn-modal-backdrop" role="dialog" aria-modal="true">
