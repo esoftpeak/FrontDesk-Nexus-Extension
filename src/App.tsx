@@ -44,12 +44,6 @@ function LabelText({
   )
 }
 
-function guestDisplayName(r: GuestStayHistoryRecord): string {
-  if (r.fullName?.trim()) return r.fullName.trim()
-  const parts = [r.lastName, r.firstName].filter(Boolean)
-  return parts.length ? parts.join(', ') : '—'
-}
-
 function validateRequiredGuestFields(
   idDetail: IdScanDetailGuru,
   phone: string,
@@ -153,10 +147,8 @@ function App() {
   const [zipLookupNote, setZipLookupNote] = useState<string | null>(null)
   const zipLookupAbortRef = useRef<AbortController | null>(null)
   const lastZipLookupRef = useRef<string | null>(null)
-  const [guestStayHistory, setGuestStayHistory] = useState<GuestStayHistoryRecord[]>([])
   const [guestHistoryBusy, setGuestHistoryBusy] = useState(false)
   const [guestHistoryNote, setGuestHistoryNote] = useState<string | null>(null)
-  const [loadedProfileScanId, setLoadedProfileScanId] = useState<string | null>(null)
   const phoneHistoryTimerRef = useRef(0)
   const lastPhoneLookupRef = useRef<string | null>(null)
   const guestFormEmptyRef = useRef(true)
@@ -234,10 +226,8 @@ function App() {
     lastZipLookupRef.current = null
     setZipLookupBusy(false)
     setZipLookupNote(null)
-    setGuestStayHistory([])
     setGuestHistoryBusy(false)
     setGuestHistoryNote(null)
-    setLoadedProfileScanId(null)
     lastPhoneLookupRef.current = null
     void chrome.storage.local.remove('fdn_last_native_scan')
   }
@@ -252,17 +242,15 @@ function App() {
     setParsed(next.parsed)
     setPhone(next.phone)
     setEmailGuest(next.emailGuest)
-    setLoadedProfileScanId(record.id)
     lastZipLookupRef.current = normalizeUsZipInput(next.idDetail.postalCode)
     setGuestHistoryNote(
-      'Loaded prior guest profile. Edit any field, then Save — this stay gets a new record; prior check-ins are not changed.',
+      'Prior guest details loaded. Edit as needed, then Save — prior check-ins are not changed.',
     )
   }, [])
 
   const runPhoneHistoryLookup = useCallback(
     async (phoneInput: string) => {
       if (!isCompletePhoneForLookup(phoneInput)) {
-        setGuestStayHistory([])
         setGuestHistoryNote(null)
         return
       }
@@ -277,22 +265,17 @@ function App() {
           phone: phoneInput.trim(),
         })) as { ok?: boolean; guestStayHistory?: GuestStayHistoryRecord[] }
         const rows = res.ok ? (res.guestStayHistory ?? []) : []
-        setGuestStayHistory(rows)
         if (rows.length === 0) {
-          setGuestHistoryNote('No prior stays found for this phone.')
-          setLoadedProfileScanId(null)
+          setGuestHistoryNote(null)
           return
         }
-        if (rows.length > 0 && guestFormEmptyRef.current) {
+        if (guestFormEmptyRef.current) {
           applyGuestProfile(rows[0])
         } else {
-          setGuestHistoryNote(
-            `${rows.length} prior stay(s) found — click Load to copy a profile into this form.`,
-          )
+          setGuestHistoryNote(null)
         }
       } catch {
-        setGuestStayHistory([])
-        setGuestHistoryNote('Could not load guest history.')
+        setGuestHistoryNote('Could not load prior guest details.')
       } finally {
         setGuestHistoryBusy(false)
       }
@@ -305,13 +288,11 @@ function App() {
       window.clearTimeout(phoneHistoryTimerRef.current)
       lastPhoneLookupRef.current = null
       if (!isCompletePhoneForLookup(phoneInput)) {
-        setGuestStayHistory([])
         setGuestHistoryNote(null)
         return
       }
       if (!state?.auth.signedIn) {
-        setGuestStayHistory([])
-        setGuestHistoryNote('Sign in to load guest stay history.')
+        setGuestHistoryNote('Sign in to look up prior guest by phone.')
         return
       }
       phoneHistoryTimerRef.current = window.setTimeout(() => {
@@ -1032,7 +1013,6 @@ function App() {
                 onChange={(e) => {
                   const v = e.target.value
                   setPhone(v)
-                  setLoadedProfileScanId(null)
                   schedulePhoneHistoryLookup(v)
                 }}
                 onBlur={() => {
@@ -1041,62 +1021,11 @@ function App() {
               />
             </div>
             {guestHistoryBusy ? (
-              <span className="fdn-zip-hint">Loading guest stay history…</span>
+              <span className="fdn-zip-hint">Looking up prior guest…</span>
             ) : guestHistoryNote ? (
               <span className="fdn-zip-hint">{guestHistoryNote}</span>
             ) : null}
-            {loadedProfileScanId ? (
-              <p className="fdn-zip-hint">
-                Profile loaded from prior stay — saving creates a <strong>new</strong> ID record for this
-                check-in.
-              </p>
-            ) : null}
           </div>
-          {guestStayHistory.length > 0 ? (
-            <div className="fdn-id-history fdn-field--full">
-              <h3 className="fdn-h3 fdn-id-history__title">Guest stay history (by phone)</h3>
-              <p className="fdn-muted fdn-line">
-                Prior check-ins are read-only. Load copies details into the form; Save adds a new profile for
-                the current reservation.
-              </p>
-              <table className="fdn-table">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Conf.</th>
-                    <th>Name</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {guestStayHistory.map((row) => (
-                    <tr key={row.id}>
-                      <td>
-                        {row.scannedAt
-                          ? new Date(row.scannedAt).toLocaleString(undefined, {
-                              dateStyle: 'medium',
-                              timeStyle: 'short',
-                            })
-                          : '—'}
-                      </td>
-                      <td className="fdn-mono">{row.confirmationNumber || '—'}</td>
-                      <td>{guestDisplayName(row)}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="fdn-btn fdn-btn--secondary fdn-btn--compact"
-                          disabled={busy}
-                          onClick={() => applyGuestProfile(row)}
-                        >
-                          Load
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
           <label className="fdn-label">
             Email (guest)
             <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
