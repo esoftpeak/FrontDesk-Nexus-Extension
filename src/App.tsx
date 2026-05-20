@@ -177,6 +177,13 @@ function App() {
     void chrome.storage.local.remove('fdn_last_native_scan')
   }
 
+  /** ZIP lookup fills city/state only — never ZIP (state/city edits must not be reversed). */
+  const cancelZipLookup = useCallback(() => {
+    zipLookupAbortRef.current?.abort()
+    zipLookupAbortRef.current = null
+    setZipLookupBusy(false)
+  }, [])
+
   const runZipLookup = useCallback(async (zipInput: string) => {
     const zip = normalizeUsZipInput(zipInput)
     if (!isCompleteUsZip(zip)) {
@@ -185,7 +192,7 @@ function App() {
     }
     if (lastZipLookupRef.current === zip) return
 
-    zipLookupAbortRef.current?.abort()
+    cancelZipLookup()
     const controller = new AbortController()
     zipLookupAbortRef.current = controller
     setZipLookupBusy(true)
@@ -202,7 +209,6 @@ function App() {
       lastZipLookupRef.current = zip
       setIdDetail((d) => ({
         ...d,
-        postalCode: zip,
         city: result.city,
         state: result.stateCode,
       }))
@@ -215,7 +221,7 @@ function App() {
     } finally {
       if (!controller.signal.aborted) setZipLookupBusy(false)
     }
-  }, [])
+  }, [cancelZipLookup])
 
   const applyNativeIdScan = useCallback(
     (m: NativeIdScanBroadcast) => {
@@ -785,7 +791,11 @@ function App() {
             <input
               className="fdn-input"
               value={idDetail.city ?? ''}
-              onChange={(e) => setIdDetail((d) => ({ ...d, city: e.target.value.trim() || null }))}
+              onChange={(e) => {
+                cancelZipLookup()
+                lastZipLookupRef.current = null
+                setIdDetail((d) => ({ ...d, city: e.target.value.trim() || null }))
+              }}
             />
           </label>
           <label className="fdn-label">
@@ -793,9 +803,10 @@ function App() {
             <select
               className="fdn-input fdn-select"
               value={normalizeUsStateCode(idDetail.state) ?? ''}
-              onChange={(e) =>
+              onChange={(e) => {
+                cancelZipLookup()
                 setIdDetail((d) => ({ ...d, state: e.target.value.trim() || null }))
-              }
+              }}
             >
               <option value="">—</option>
               {US_STATE_SELECT_OPTIONS.map(({ code, name }) => (
