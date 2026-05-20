@@ -9,6 +9,7 @@ import type {
   NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
   PanelToastBroadcast,
+  GuestStayHistoryRecord,
   ReturningGuestRecord,
 } from '../shared/protocol'
 import type {
@@ -18,7 +19,12 @@ import type {
   ReservationSnapshot,
   SynxisGuestDisplay,
 } from '../shared/pms-types'
-import { decryptJson, encryptBinary, encryptJson, hashIdNumber } from '../lib/encryption'
+import { decryptJson, encryptBinary, encryptJson, hashIdNumber, hashPhoneNumber } from '../lib/encryption'
+import {
+  filterRecordsByPhone,
+  guestStayRecordFromScanRow,
+} from '../lib/guest-stay-history'
+import { isCompletePhoneForLookup } from '../lib/phone-lookup'
 import type { EncryptedPayload } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
@@ -943,6 +949,7 @@ async function saveIdScan(args: {
   }
   const pii_encrypted = await encryptJson(piiPayload)
   const id_number_hash = rawId ? await hashIdNumber(rawId) : null
+  const phone_number_hash = args.phone?.trim() ? await hashPhoneNumber(args.phone.trim()) : null
 
   let phone_encrypted: Record<string, unknown> | null = null
   let email_encrypted: Record<string, unknown> | null = null
@@ -970,16 +977,16 @@ async function saveIdScan(args: {
 
   let scanResult = await client
     .from('id_scans')
-    .insert({ ...insertBase, id_number_hash })
+    .insert({ ...insertBase, id_number_hash, phone_number_hash })
     .select('id')
     .single()
 
-  // id_number_hash column not yet migrated — retry without it so saves still work.
-  // Run the required SQL migration in the Supabase dashboard to enable returning-guest detection:
-  //   ALTER TABLE id_scans ADD COLUMN IF NOT EXISTS id_number_hash TEXT;
-  //   CREATE INDEX IF NOT EXISTS idx_id_scans_id_number_hash ON id_scans (id_number_hash);
-  if (scanResult.error?.message?.includes('id_number_hash')) {
-    console.warn('[FDN SW] id_number_hash column not found — run the SQL migration. Saving without hash.')
+  // Hash columns optional until Supabase has id_number_hash / phone_number_hash on id_scans.
+  if (
+    scanResult.error?.message?.includes('id_number_hash') ||
+    scanResult.error?.message?.includes('phone_number_hash')
+  ) {
+    console.warn('[FDN SW] id_number_hash / phone_number_hash missing — run SQL migration. Saving without hashes.')
     scanResult = await client
       .from('id_scans')
       .insert(insertBase)
@@ -1535,6 +1542,62 @@ async function fetchReturningGuestHistory(idNumber: string): Promise<ExtensionRe
   return { ok: true, returningGuestHistory: records }
 }
 
+const GUEST_HISTORY_SCAN_SELECT =
+  'id, confirmation_number, created_at, manual_entry, phone_encrypted, email_encrypted, pii_encrypted'
+
+async function fetchGuestHistoryByPhone(phone: string): Promise<ExtensionResponse> {
+  if (!isCompletePhoneForLookup(phone)) return { ok: true, guestStayHistory: [] }
+
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: true, guestStayHistory: [] }
+
+  const phoneHash = await hashPhoneNumber(phone.trim())
+  let data: Record<string, unknown>[] | null = null
+  let error: { message: string } | null = null
+
+  if (phoneHash) {
+    const res = await client
+      .from('id_scans')
+      .select(GUEST_HISTORY_SCAN_SELECT)
+      .eq('phone_number_hash', phoneHash)
+      .order('created_at', { ascending: false })
+      .limit(10)
+    data = (res.data ?? []) as Record<string, unknown>[]
+    error = res.error
+    if (error?.message?.includes('phone_number_hash')) {
+      data = null
+      error = null
+    }
+  }
+
+  if (!data) {
+    const res = await client
+      .from('id_scans')
+      .select(GUEST_HISTORY_SCAN_SELECT)
+      .not('phone_encrypted', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(60)
+    if (res.error) {
+      console.warn('[FDN] guest phone history fallback', res.error.message)
+      return { ok: true, guestStayHistory: [] }
+    }
+    const records = await filterRecordsByPhone((res.data ?? []) as Record<string, unknown>[], phone)
+    return { ok: true, guestStayHistory: records.slice(0, 10) }
+  }
+
+  if (error) {
+    console.warn('[FDN] guest phone history', error.message)
+    return { ok: true, guestStayHistory: [] }
+  }
+
+  const records: GuestStayHistoryRecord[] = (
+    await Promise.all((data ?? []).map((r) => guestStayRecordFromScanRow(r)))
+  ).filter((r): r is GuestStayHistoryRecord => r != null)
+
+  return { ok: true, guestStayHistory: records }
+}
+
 async function fetchKeyHistoryForCurrentReservation(): Promise<ExtensionResponse> {
   lastError = null
   const client = getClient()
@@ -1596,6 +1659,10 @@ async function handleMessage(
 
   if (msg.type === 'GET_RETURNING_GUEST_HISTORY') {
     return fetchReturningGuestHistory(msg.idNumber)
+  }
+
+  if (msg.type === 'GET_GUEST_HISTORY_BY_PHONE') {
+    return fetchGuestHistoryByPhone(msg.phone)
   }
 
   if (msg.type === 'LOAD_EZEE_RESERVATION') {

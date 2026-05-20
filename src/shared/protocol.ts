@@ -17,6 +17,30 @@ export type IdScanHistoryRow = {
   manualEntry: boolean
 }
 
+/** Prior guest profile from another stay (lookup by phone hash). */
+export type GuestStayHistoryRecord = {
+  id: string
+  confirmationNumber: string
+  scannedAt: string
+  manualEntry: boolean
+  phone: string | null
+  email: string | null
+  fullName: string | null
+  firstName: string | null
+  middleName: string | null
+  lastName: string | null
+  streetAddress: string | null
+  city: string | null
+  state: string | null
+  postalCode: string | null
+  dateOfBirth: string | null
+  idNumber: string | null
+  idType: string | null
+  issueDate: string | null
+  expiryDate: string | null
+  address: string | null
+}
+
 /** A single prior visit found by matching the scanned ID number hash across all reservations. */
 export type ReturningGuestRecord = {
   id: string
@@ -127,9 +151,19 @@ export type ExtensionMessage =
   | { type: 'RFID_READ_CARD' }
   /** Look up previous scans by ID number hash to detect returning guests. */
   | { type: 'GET_RETURNING_GUEST_HISTORY'; idNumber: string }
+  /** Look up prior stays / ID profiles by phone number hash. */
+  | { type: 'GET_GUEST_HISTORY_BY_PHONE'; phone: string }
 
 export type ExtensionResponse =
-  | { ok: true; state?: ExtensionState; idScanHistory?: IdScanHistoryRow[]; keyHistory?: KeyHistoryRow[]; signaturePath?: string; returningGuestHistory?: ReturningGuestRecord[] }
+  | {
+      ok: true
+      state?: ExtensionState
+      idScanHistory?: IdScanHistoryRow[]
+      keyHistory?: KeyHistoryRow[]
+      signaturePath?: string
+      returningGuestHistory?: ReturningGuestRecord[]
+      guestStayHistory?: GuestStayHistoryRecord[]
+    }
   | { ok: false; error: string }
 
 /** Service worker → side panel: log native inbound (opens in side panel DevTools). */

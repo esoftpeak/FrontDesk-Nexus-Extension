@@ -128,6 +128,17 @@
   color: #d29922;
 }
 
+.fdn-required {
+  margin-left: 2px;
+  color: #f85149;
+  font-weight: 700;
+}
+
+.fdn-btn--compact {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
 .fdn-input {
   padding: 6px 8px;
   border-radius: 6px;

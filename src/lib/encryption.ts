@@ -1,3 +1,5 @@
+import { isCompletePhoneForLookup, normalizePhoneForLookup } from './phone-lookup'
+
 /**
  * Client-side AES-GCM for id_scans.pii_encrypted.
  * Uses VITE_PII_ENCRYPTION_KEY (shared with Web portal) when set.
@@ -83,6 +85,17 @@ export async function decryptJson<T = unknown>(payload: EncryptedPayload): Promi
 /** SHA-256 hex of the normalized ID number — used as a privacy-safe lookup key in id_scans. */
 export async function hashIdNumber(idNumber: string): Promise<string> {
   const norm = idNumber.replace(/\s+/g, '').toUpperCase()
+  const data = new TextEncoder().encode(norm)
+  const buf = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+/** SHA-256 hex of normalized phone digits — lookup key for returning guests by phone. */
+export async function hashPhoneNumber(phone: string): Promise<string | null> {
+  if (!isCompletePhoneForLookup(phone)) return null
+  const norm = normalizePhoneForLookup(phone)
   const data = new TextEncoder().encode(norm)
   const buf = await crypto.subtle.digest('SHA-256', data)
   return Array.from(new Uint8Array(buf))
