@@ -69,6 +69,7 @@ export default defineManifest({
     'https://sph.synxis.com/*',
     'https://live.ipms247.com/*',
     'https://*.ipms247.com/*',
+    'https://api.zippopotam.us/*',
   ],
   externally_connectable: {
     matches: externallyConnectableMatches,

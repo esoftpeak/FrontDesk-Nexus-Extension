@@ -10,6 +10,9 @@ import type {
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
 import { ageLabelFromDobString, mergeParsedWithGuru } from './lib/id-guru-fields'
+import { ID_DOCUMENT_TYPES, normalizeIdDocumentType } from './lib/id-document-types'
+import { normalizeUsStateCode, US_STATE_SELECT_OPTIONS } from './lib/us-states'
+import { isCompleteUsZip, lookupUsZipCityState, normalizeUsZipInput } from './lib/zip-lookup'
 import { transformBase64ImageSync } from './lib/imageTransform'
 import './sidepanel.css'
 
@@ -100,6 +103,10 @@ function App() {
   } | null>(null)
   /** From native host `document_data` — passed through on Save (not SynXis/eZee). */
   const [lastDocumentData, setLastDocumentData] = useState<Record<string, unknown> | null>(null)
+  const [zipLookupBusy, setZipLookupBusy] = useState(false)
+  const [zipLookupNote, setZipLookupNote] = useState<string | null>(null)
+  const zipLookupAbortRef = useRef<AbortController | null>(null)
+  const lastZipLookupRef = useRef<string | null>(null)
 
   const refreshIdScanHistory = useCallback(async () => {
     const res = (await chrome.runtime.sendMessage({ type: 'GET_ID_SCAN_HISTORY' })) as {
@@ -134,6 +141,8 @@ function App() {
     return () => clearInterval(t)
   }, [refresh])
 
+  useEffect(() => () => zipLookupAbortRef.current?.abort(), [])
+
   useEffect(() => {
     void refreshIdScanHistory()
   }, [refreshIdScanHistory, state?.reservation?.confirmationNumber])
@@ -161,14 +170,67 @@ function App() {
     setGuestRemark('')
     setCheckInRemark('')
     setNotice(null)
+    zipLookupAbortRef.current?.abort()
+    lastZipLookupRef.current = null
+    setZipLookupBusy(false)
+    setZipLookupNote(null)
     void chrome.storage.local.remove('fdn_last_native_scan')
   }
 
+  const runZipLookup = useCallback(async (zipInput: string) => {
+    const zip = normalizeUsZipInput(zipInput)
+    if (!isCompleteUsZip(zip)) {
+      setZipLookupNote(null)
+      return
+    }
+    if (lastZipLookupRef.current === zip) return
+
+    zipLookupAbortRef.current?.abort()
+    const controller = new AbortController()
+    zipLookupAbortRef.current = controller
+    setZipLookupBusy(true)
+    setZipLookupNote(null)
+
+    try {
+      const result = await lookupUsZipCityState(zip, controller.signal)
+      if (controller.signal.aborted) return
+      if (!result) {
+        lastZipLookupRef.current = null
+        setZipLookupNote('No city/state found for this ZIP.')
+        return
+      }
+      lastZipLookupRef.current = zip
+      setIdDetail((d) => ({
+        ...d,
+        postalCode: zip,
+        city: result.city,
+        state: result.stateCode,
+      }))
+      setZipLookupNote(null)
+    } catch (err) {
+      if (controller.signal.aborted) return
+      lastZipLookupRef.current = null
+      setZipLookupNote('ZIP lookup failed — check connection.')
+      console.warn('[FrontDesk Nexus] ZIP lookup', err)
+    } finally {
+      if (!controller.signal.aborted) setZipLookupBusy(false)
+    }
+  }, [])
+
   const applyNativeIdScan = useCallback(
     (m: NativeIdScanBroadcast) => {
-      setParsed(m.parsed)
+      const detail = m.detail ?? emptyIdDetail
+      setParsed({
+        ...m.parsed,
+        idType: normalizeIdDocumentType(m.parsed.idType),
+      })
       setLastOcrProvider(m.ocrProvider)
-      setIdDetail(m.detail ?? emptyIdDetail)
+      setIdDetail({
+        ...detail,
+        state: normalizeUsStateCode(detail.state) ?? detail.state,
+      })
+      lastZipLookupRef.current = normalizeUsZipInput(detail.postalCode) || null
+      setZipLookupNote(null)
       setScanImages({
         front: m.images.front_image_base64,
         back: m.images.back_image_base64,
@@ -728,21 +790,44 @@ function App() {
           </label>
           <label className="fdn-label">
             State
-            <input
-              className="fdn-input"
-              value={idDetail.state ?? ''}
-              onChange={(e) => setIdDetail((d) => ({ ...d, state: e.target.value.trim() || null }))}
-            />
+            <select
+              className="fdn-input fdn-select"
+              value={normalizeUsStateCode(idDetail.state) ?? ''}
+              onChange={(e) =>
+                setIdDetail((d) => ({ ...d, state: e.target.value.trim() || null }))
+              }
+            >
+              <option value="">—</option>
+              {US_STATE_SELECT_OPTIONS.map(({ code, name }) => (
+                <option key={code} value={code}>
+                  {name}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="fdn-label">
             Zip / postal
             <input
               className="fdn-input"
+              inputMode="numeric"
+              autoComplete="postal-code"
               value={idDetail.postalCode ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, postalCode: e.target.value.trim() || null }))
-              }
+              onChange={(e) => {
+                const raw = e.target.value
+                lastZipLookupRef.current = null
+                setIdDetail((d) => ({ ...d, postalCode: raw.trim() || null }))
+                if (isCompleteUsZip(normalizeUsZipInput(raw))) void runZipLookup(raw)
+              }}
+              onBlur={() => {
+                const raw = idDetail.postalCode ?? ''
+                if (isCompleteUsZip(normalizeUsZipInput(raw))) void runZipLookup(raw)
+              }}
             />
+            {zipLookupBusy ? (
+              <span className="fdn-zip-hint">Looking up city &amp; state…</span>
+            ) : zipLookupNote ? (
+              <span className="fdn-zip-hint fdn-zip-hint--warn">{zipLookupNote}</span>
+            ) : null}
           </label>
           <div className="fdn-field fdn-field--full">
             <span className="fdn-field__label">Phone &amp; country</span>
@@ -781,11 +866,24 @@ function App() {
           </label>
           <label className="fdn-label">
             ID type
-            <input
-              className="fdn-input"
-              value={parsed.idType ?? ''}
-              onChange={(e) => setParsed({ ...parsed, idType: e.target.value || null })}
-            />
+            <select
+              className="fdn-input fdn-select"
+              value={
+                parsed.idType && (ID_DOCUMENT_TYPES as readonly string[]).includes(parsed.idType)
+                  ? parsed.idType
+                  : ''
+              }
+              onChange={(e) =>
+                setParsed({ ...parsed, idType: e.target.value.trim() || null })
+              }
+            >
+              <option value="">—</option>
+              {ID_DOCUMENT_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="fdn-label">
             ID number

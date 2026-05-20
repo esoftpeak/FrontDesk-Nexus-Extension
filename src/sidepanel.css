@@ -112,6 +112,22 @@
   grid-column: 1 / -1;
 }
 
+.fdn-select {
+  appearance: auto;
+  cursor: pointer;
+}
+
+.fdn-zip-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #8b949e;
+}
+
+.fdn-zip-hint--warn {
+  color: #d29922;
+}
+
 .fdn-input {
   padding: 6px 8px;
   border-radius: 6px;
