@@ -25,6 +25,25 @@ function RequiredMark() {
   )
 }
 
+/** Label line with optional asterisk inline (matches Phone & country style). */
+function LabelText({
+  children,
+  required,
+  className,
+}: {
+  children: React.ReactNode
+  required?: boolean
+  className?: string
+}) {
+  const cls = ['fdn-label__text', className].filter(Boolean).join(' ')
+  return (
+    <span className={cls}>
+      {children}
+      {required ? <RequiredMark /> : null}
+    </span>
+  )
+}
+
 function guestDisplayName(r: GuestStayHistoryRecord): string {
   if (r.fullName?.trim()) return r.fullName.trim()
   const parts = [r.lastName, r.firstName].filter(Boolean)
@@ -881,31 +900,29 @@ function App() {
         <div className="fdn-grid fdn-grid--idguru">
           <div className="fdn-grid--three-names">
             <label className="fdn-label">
-              First name
-              <RequiredMark />
-            <input
-              required
-              aria-required="true"
-              className="fdn-input"
-              value={idDetail.firstName ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
-              }
-            />
-          </label>
-          <label className="fdn-label">
-            Middle name
-            <input
-              className="fdn-input"
-              value={idDetail.middleName ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
-              }
-            />
-          </label>
+              <LabelText required>First name</LabelText>
+              <input
+                required
+                aria-required="true"
+                className="fdn-input"
+                value={idDetail.firstName ?? ''}
+                onChange={(e) =>
+                  setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
+                }
+              />
+            </label>
             <label className="fdn-label">
-              Last name
-              <RequiredMark />
+              <LabelText>Middle name</LabelText>
+              <input
+                className="fdn-input"
+                value={idDetail.middleName ?? ''}
+                onChange={(e) =>
+                  setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
+                }
+              />
+            </label>
+            <label className="fdn-label">
+              <LabelText required>Last name</LabelText>
               <input
                 className="fdn-input"
                 required
@@ -982,10 +999,9 @@ function App() {
             ) : null}
           </label>
           <div className="fdn-field fdn-field--full">
-            <span className="fdn-field__label">
+            <LabelText required className="fdn-field__label">
               Phone &amp; country
-              <RequiredMark />
-            </span>
+            </LabelText>
             <div className="fdn-phone-inline">
               <label className="fdn-check fdn-check--phone-flag">
                 <input
