@@ -487,6 +487,7 @@ async function completeSynxisReservationFromConfirmation(
   synxisGuestDisplay = apiRes.guestDisplay
   ezeeGuestDisplay = null
   void chrome.storage.local.set({ fdn_active_reservation: reservation })
+  void chrome.storage.local.remove('fdn_ezee_guest_display')
   const { data: sess } = await client.auth.getSession()
   let dbSaved = false
   if (sess.session) {
@@ -539,7 +540,10 @@ async function completeEzeeReservationFromSnapshot(
   reservation = { ...snapshot, pageUrl: tabUrl }
   synxisGuestDisplay = null
   ezeeGuestDisplay = guestDisplay
-  void chrome.storage.local.set({ fdn_active_reservation: reservation })
+  void chrome.storage.local.set({
+    fdn_active_reservation: reservation,
+    fdn_ezee_guest_display: guestDisplay,
+  })
 
   const { data: sess } = await client.auth.getSession()
   let dbSaved = false
@@ -750,7 +754,18 @@ async function buildHardwareStatus(): Promise<ExtensionState['hardware']> {
   }
 }
 
+async function restorePersistedReservationState(): Promise<void> {
+  const stored = await chrome.storage.local.get(['fdn_active_reservation', 'fdn_ezee_guest_display'])
+  if (!reservation && stored.fdn_active_reservation) {
+    reservation = stored.fdn_active_reservation as ReservationSnapshot
+  }
+  if (!ezeeGuestDisplay && stored.fdn_ezee_guest_display && reservation?.pms === 'ezee') {
+    ezeeGuestDisplay = stored.fdn_ezee_guest_display as EzeeGuestDisplay
+  }
+}
+
 async function getState(): Promise<ExtensionState> {
+  await restorePersistedReservationState()
   const client = getClient()
   const { data: sessionData } = await client.auth.getSession()
   const user = sessionData.session?.user ?? null
@@ -1734,11 +1749,7 @@ async function handleMessage(
   }
 
   if (msg.type === 'EZEE_SUPPRESS_GUEST_LOAD') {
-    if (reservation?.pms === 'ezee') {
-      reservation = null
-      void chrome.storage.local.remove('fdn_active_reservation')
-    }
-    ezeeGuestDisplay = null
+    // Legacy no-op: folio/edit navigation must not clear an already-loaded guest.
     return { ok: true, state: await getState() }
   }
 
@@ -2011,7 +2022,7 @@ async function handleMessage(
     await client.auth.signOut()
     cachedRole = null
     reservation = null
-    void chrome.storage.local.remove('fdn_active_reservation')
+    void chrome.storage.local.remove(['fdn_active_reservation', 'fdn_ezee_guest_display'])
     synxisGuestDisplay = null
     ezeeGuestDisplay = null
     return { ok: true, state: await getState() }

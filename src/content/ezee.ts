@@ -42,8 +42,6 @@ let wasDrawerOpen = false
 let lastFailProbeKey = ''
 let lastFailProbeAt = 0
 let lastDedupeLogAt = 0
-let lastSuppressSentAt = 0
-const SUPPRESS_THROTTLE_MS = 1500
 
 console.info('[FDN eZee] content script loaded', {
   href: location.href,
@@ -95,25 +93,13 @@ function buildExtractPayload():
   }
 }
 
-function suppressEzeePanelLoad(): void {
-  const now = Date.now()
-  if (now - lastSuppressSentAt < SUPPRESS_THROTTLE_MS) return
-  lastSuppressSentAt = now
-  void chrome.runtime
-    .sendMessage({ type: 'EZEE_SUPPRESS_GUEST_LOAD' })
-    .catch(() => {
-      /* extension reloading */
-    })
-}
-
 async function runDetection(): Promise<void> {
   // Only auto-detect guests on the reservations list page, not other eZee pages.
   if (!location.pathname.startsWith('/unity/reservations')) return
 
   if (!isEzeeGuestScrapeAllowed(document)) {
     if (isEzeeFolioContext(document)) {
-      console.info('[FDN eZee] Folio / non-guest tab — guest auto-detect disabled')
-      suppressEzeePanelLoad()
+      console.info('[FDN eZee] Folio / edit reservation — keeping loaded guest; auto-detect skipped')
     }
     wasDrawerOpen = false
     lastDedupeKey = null
@@ -885,7 +871,6 @@ document.addEventListener('click', (e) => {
   if (!clickedTab) return
   const tabText = (clickedTab.textContent ?? '').replace(/\s+/g, ' ')
   if (/folio\s*operations/i.test(tabText)) {
-    suppressEzeePanelLoad()
     scheduleCheck()
     return
   }
