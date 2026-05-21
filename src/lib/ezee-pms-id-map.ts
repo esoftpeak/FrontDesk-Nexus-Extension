@@ -32,10 +32,10 @@ export function mapIdTypeToEzeeDropdownOption(idType: string | null | undefined)
   return t
 }
 
-/**
- * Normalize expiry to eZee date input format MM-DD-YYYY (see Add Reservation date picker).
- */
-export function formatEzeeExpiryForPicker(raw: string | null | undefined): string | null {
+export type EzeeExpiryParts = { mm: string; dd: string; yyyy: string }
+
+/** Parse panel / OCR expiry strings into month, day, year. */
+export function parseEzeeExpiryParts(raw: string | null | undefined): EzeeExpiryParts | null {
   const t = raw?.trim()
   if (!t) return null
 
@@ -48,7 +48,16 @@ export function formatEzeeExpiryForPicker(raw: string | null | undefined): strin
     const maxDay = new Date(Number(yyyy), Number(mm), 0).getDate()
     if (dd < 1) dd = 1
     if (dd > maxDay) dd = maxDay
-    return `${mm}-${String(dd).padStart(2, '0')}-${yyyy}`
+    return { mm, dd: String(dd).padStart(2, '0'), yyyy }
+  }
+
+  // MM-YYYY or MM/YYYY (e.g. 06-2031 on panel)
+  const my4 = t.match(/^(\d{1,2})[/.-](\d{4})$/)
+  if (my4) {
+    const mm = my4[1].padStart(2, '0')
+    const yyyy = my4[2]
+    const maxDay = new Date(Number(yyyy), Number(mm), 0).getDate()
+    return { mm, dd: String(maxDay).padStart(2, '0'), yyyy }
   }
 
   const my = t.match(/^(\d{1,2})[/.-](\d{2})$/)
@@ -56,13 +65,27 @@ export function formatEzeeExpiryForPicker(raw: string | null | undefined): strin
     const mm = my[1].padStart(2, '0')
     const yyyy = `20${my[2]}`
     const maxDay = new Date(Number(yyyy), Number(mm), 0).getDate()
-    return `${mm}-${String(maxDay).padStart(2, '0')}-${yyyy}`
+    return { mm, dd: String(maxDay).padStart(2, '0'), yyyy }
   }
 
   const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (iso) {
-    return `${iso[2]}-${iso[3]}-${iso[1]}`
+    return { mm: iso[2], dd: iso[3], yyyy: iso[1] }
   }
 
   return null
+}
+
+/** eZee Add Reservation picker input display: MM-DD-YYYY */
+export function formatEzeeExpiryForPicker(raw: string | null | undefined): string | null {
+  const p = parseEzeeExpiryParts(raw)
+  if (!p) return null
+  return `${p.mm}-${p.dd}-${p.yyyy}`
+}
+
+/** Ant Design DatePicker cell `title` attribute uses YYYY-MM-DD */
+export function ezeeExpiryPickerTitle(raw: string | null | undefined): string | null {
+  const p = parseEzeeExpiryParts(raw)
+  if (!p) return null
+  return `${p.yyyy}-${p.mm}-${p.dd}`
 }

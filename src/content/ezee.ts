@@ -10,7 +10,12 @@ import {
 } from '../lib/ezee-drawer-extract'
 import type { EzeeGuestDisplay, ReservationSnapshot } from '../shared/pms-types'
 import { US_STATES_BY_CODE as US_STATES } from '../lib/us-states'
-import { formatEzeeExpiryForPicker, mapIdTypeToEzeeDropdownOption } from '../lib/ezee-pms-id-map'
+import {
+  ezeeExpiryPickerTitle,
+  formatEzeeExpiryForPicker,
+  mapIdTypeToEzeeDropdownOption,
+  parseEzeeExpiryParts,
+} from '../lib/ezee-pms-id-map'
 import { injectFields, type InjectResult } from './inject-helpers'
 
 const EZEE_INJECT_SELECTORS: Record<string, string[]> = {
@@ -261,9 +266,15 @@ function labelText(el: Element): string {
 function findFormItemByLabel(text: string): Element | null {
   const want = text.trim().toLowerCase()
   for (const item of Array.from(document.querySelectorAll('.ant-form-item, [class*="form-item"]'))) {
-    for (const lbl of Array.from(item.querySelectorAll('label, [class*="label"]'))) {
+    const labelEl = item.querySelector('.ant-form-item-label label, .ant-form-item-label')
+    const candidates = labelEl
+      ? [labelEl, ...Array.from(item.querySelectorAll('label, [class*="label"]'))]
+      : Array.from(item.querySelectorAll('label, [class*="label"]'))
+    for (const lbl of candidates) {
       const got = labelText(lbl).toLowerCase()
       if (got === want || got.startsWith(`${want} `)) return item
+      if (want === 'id type' && /^id\s*type\b/.test(got)) return item
+      if (want === 'expiry date' && /^expiry\s*date\b/.test(got)) return item
     }
   }
   return null
@@ -313,6 +324,182 @@ async function fillInputByLabel(label: string, value: string | null | undefined)
   return true
 }
 
+function getVisibleAntSelectDropdown(): HTMLElement | null {
+  for (const el of document.querySelectorAll<HTMLElement>('.ant-select-dropdown')) {
+    if (el.classList.contains('ant-select-dropdown-hidden')) continue
+    const style = window.getComputedStyle(el)
+    if (style.display === 'none' || style.visibility === 'hidden') continue
+    return el
+  }
+  return null
+}
+
+function findAntSelectOptionRow(optionText: string, root?: ParentNode): HTMLElement | null {
+  const needle = optionText.toLowerCase().trim()
+  const scope = root ?? getVisibleAntSelectDropdown() ?? document
+
+  for (const opt of scope.querySelectorAll<HTMLElement>('.ant-select-item.ant-select-item-option')) {
+    const title = (opt.getAttribute('title') ?? '').trim().toLowerCase()
+    const labelAttr = (opt.getAttribute('label') ?? '').trim().toLowerCase()
+    const content = (opt.querySelector('.ant-select-item-option-content')?.textContent ?? '')
+      .trim()
+      .toLowerCase()
+    const text = title || labelAttr || content
+    if (!text || text === '-select-') continue
+    if (text === needle || text.includes(needle) || needle.includes(text)) {
+      return opt
+    }
+  }
+  return null
+}
+
+async function openAntSelect(trigger: HTMLElement): Promise<void> {
+  trigger.focus()
+  trigger.dispatchEvent(
+    new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }),
+  )
+  await sleep(40)
+  trigger.click()
+  await sleep(450)
+}
+
+async function pickAntSelectOption(optionText: string): Promise<boolean> {
+  let row = findAntSelectOptionRow(optionText)
+  if (!row) {
+    await sleep(200)
+    row = findAntSelectOptionRow(optionText)
+  }
+  if (!row) {
+    const names = Array.from(
+      (getVisibleAntSelectDropdown() ?? document).querySelectorAll(
+        '.ant-select-item-option-content',
+      ),
+    ).map((o) => o.textContent?.trim())
+    console.warn('[FDN] dropdown: no row for', optionText, '— visible:', names)
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    return false
+  }
+
+  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }))
+  row.click()
+  const inner = row.querySelector<HTMLElement>('.ant-select-item-option-content')
+  if (inner) inner.click()
+  console.log('[FDN] dropdown: selected →', optionText)
+  await sleep(150)
+  return true
+}
+
+function getAntSelectTrigger(formItem: Element): HTMLElement | null {
+  const select = formItem.querySelector('.ant-select')
+  if (select) {
+    const t = select.querySelector<HTMLElement>('.ant-select-selector')
+    if (t) return t
+  }
+  return formItem.querySelector<HTMLElement>('.ant-select-selector, [class*="select-selector"]')
+}
+
+async function fillAntSelectByLabel(label: string, optionText: string): Promise<boolean> {
+  const item = findFormItemByLabel(label)
+  if (!item) {
+    console.warn('[FDN] fillAntSelectByLabel: label not found →', label)
+    return false
+  }
+  const trigger = getAntSelectTrigger(item)
+  if (!trigger) {
+    console.warn('[FDN] fillAntSelectByLabel: no .ant-select-selector →', label)
+    return false
+  }
+  await openAntSelect(trigger)
+  return pickAntSelectOption(optionText)
+}
+
+function findExpiryDateInput(): HTMLInputElement | null {
+  const byId = document.querySelector<HTMLInputElement>('#add-reservation-Form_expirydate')
+  if (byId) return byId
+  const item = findFormItemByLabel('Expiry Date')
+  if (!item) return null
+  return (
+    item.querySelector<HTMLInputElement>('.ant-picker input') ??
+    item.querySelector<HTMLInputElement>('input[placeholder*="date" i]') ??
+    findInputInFormItem(item)
+  )
+}
+
+function getVisibleAntPickerDropdown(): HTMLElement | null {
+  for (const el of document.querySelectorAll<HTMLElement>('.ant-picker-dropdown')) {
+    if (el.classList.contains('ant-picker-dropdown-hidden')) continue
+    const style = window.getComputedStyle(el)
+    if (style.display === 'none' || style.visibility === 'hidden') continue
+    return el
+  }
+  return null
+}
+
+async function pickAntPickerCell(titleYyyyMmDd: string): Promise<boolean> {
+  const panel = getVisibleAntPickerDropdown()
+  if (!panel) return false
+
+  const cell =
+    panel.querySelector<HTMLElement>(`td[title="${titleYyyyMmDd}"] .ant-picker-cell-inner`) ??
+    panel.querySelector<HTMLElement>(`td[title="${titleYyyyMmDd}"]`)
+  if (!cell) {
+    console.warn('[FDN] date picker: no cell for title=', titleYyyyMmDd)
+    return false
+  }
+  cell.click()
+  await sleep(120)
+  return true
+}
+
+/** Ant Design DatePicker (#add-reservation-Form_expirydate, readonly). */
+async function fillExpiryDateByLabel(label: string, rawExpiry: string | null | undefined): Promise<boolean> {
+  const parts = parseEzeeExpiryParts(rawExpiry)
+  if (!parts) {
+    console.warn('[FDN] Expiry Date: unrecognized format', rawExpiry)
+    return false
+  }
+
+  const display = formatEzeeExpiryForPicker(rawExpiry)!
+  const pickerTitle = ezeeExpiryPickerTitle(rawExpiry)!
+  const input = findExpiryDateInput()
+  if (!input) {
+    console.warn('[FDN] Expiry Date: input not found (', label, ')')
+    return false
+  }
+
+  const pickerWrap = input.closest<HTMLElement>('.ant-picker')
+  if (pickerWrap) {
+    pickerWrap.click()
+    await sleep(350)
+  } else {
+    input.click()
+    await sleep(350)
+  }
+
+  if (await pickAntPickerCell(pickerTitle)) {
+    console.log('[FDN] filled: Expiry Date (calendar) ←', display)
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    return true
+  }
+
+  input.removeAttribute('readonly')
+  reactSet(input, display)
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }))
+  input.blur()
+  document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await sleep(80)
+
+  const v = input.value?.trim()
+  if (v) {
+    console.log('[FDN] filled: Expiry Date (input) ←', v)
+    return true
+  }
+
+  console.warn('[FDN] Expiry Date: calendar + input set failed for', rawExpiry, '→', display)
+  return false
+}
+
 /** Identity Information: ID #, ID Type (Ant select), Expiry (date input MM-DD-YYYY). */
 async function autoFillIdentityInformation(scan: LastScanResult): Promise<void> {
   await ensureIdentitySectionExpanded()
@@ -331,7 +518,7 @@ async function autoFillIdentityInformation(scan: LastScanResult): Promise<void> 
     ].filter(Boolean) as string[]
     let picked = false
     for (const opt of alternates) {
-      if (await fillDropdownByLabel('ID Type', opt)) {
+      if (await fillAntSelectByLabel('ID Type', opt)) {
         picked = true
         break
       }
@@ -341,47 +528,16 @@ async function autoFillIdentityInformation(scan: LastScanResult): Promise<void> 
     }
   }
 
-  const expiry = formatEzeeExpiryForPicker(scan.expiry_date)
-  if (expiry) {
-    const ok = await fillInputByLabel('Expiry Date', expiry)
-    if (!ok) console.warn('[FDN] Expiry Date: could not fill', scan.expiry_date, '→', expiry)
-  } else if (scan.expiry_date?.trim()) {
-    console.warn('[FDN] Expiry Date: unrecognized format', scan.expiry_date)
+  if (scan.expiry_date?.trim()) {
+    await fillExpiryDateByLabel('Expiry Date', scan.expiry_date)
   }
-}
-
-function getAntSelectTrigger(formItem: Element): HTMLElement | null {
-  return formItem.querySelector<HTMLElement>('.ant-select-selector, [class*="select-selector"]')
 }
 
 async function openAndPickOption(trigger: HTMLElement, optionText: string, waitMs = 320): Promise<boolean> {
   console.log('[FDN] dropdown: opening for option =', optionText)
-  trigger.click()
-  await sleep(waitMs)
-
-  const containers = [
-    ...Array.from(document.querySelectorAll<HTMLElement>(
-      '.ant-select-item-option-content, .ant-select-item, [class*="option-content"], [class*="option-item"]'
-    )),
-  ]
-  console.log('[FDN] dropdown: visible options =', containers.map(o => o.textContent?.trim()))
-
-  // Prefer exact match, then partial (case-insensitive)
-  const needle = optionText.toLowerCase()
-  const match =
-    containers.find(o => (o.textContent?.trim() ?? '').toLowerCase() === needle) ??
-    containers.find(o => (o.textContent?.trim() ?? '').toLowerCase().includes(needle))
-
-  if (match) {
-    match.click()
-    console.log('[FDN] dropdown: selected →', match.textContent?.trim())
-    await sleep(120)
-    return true
-  }
-  // No match — close dropdown
-  document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-  console.warn('[FDN] dropdown: no match for', optionText)
-  return false
+  await openAntSelect(trigger)
+  await sleep(Math.max(0, waitMs - 450))
+  return pickAntSelectOption(optionText)
 }
 
 async function fillDropdownByLabel(labelText_: string, optionText: string): Promise<boolean> {
