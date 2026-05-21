@@ -323,10 +323,32 @@ function mergeFields(
 
 const RESERVATION_NUM = /^[A-Z0-9][A-Z0-9-]{2,31}$/i
 
+/** UI labels mistaken for reservation numbers on Folio / ledger views. */
+const BLOCKED_RESERVATION_TOKENS = new Set([
+  'details',
+  'detail',
+  'view',
+  'edit',
+  'more',
+  'print',
+  'guest',
+  'folio',
+  'booking',
+  'status',
+  'room',
+  'total',
+  'paid',
+  'balance',
+  'deposit',
+  'cash',
+])
+
 export function isValidEzeeReservationNumber(s: string | null | undefined): boolean {
   if (!s) return false
   const t = s.trim()
   if (t.length < 3 || t.length > 32) return false
+  if (BLOCKED_RESERVATION_TOKENS.has(t.toLowerCase())) return false
+  if (!/\d/.test(t)) return false
   return RESERVATION_NUM.test(t)
 }
 
@@ -374,29 +396,135 @@ export function isEzeeGuestDrawerOpen(doc: Document): boolean {
   return findOpenEzeeDrawerRoot(doc) != null
 }
 
+function normalizeTabLabel(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+/** Active reservation-detail tab (eZee uses Ant tabs or role=tab). */
+export function getEzeeActiveTabLabel(doc: Document): string {
+  const direct = [
+    ...doc.querySelectorAll<HTMLElement>('.ant-tabs-tab.ant-tabs-tab-active'),
+    ...doc.querySelectorAll<HTMLElement>('[role="tab"][aria-selected="true"]'),
+    ...doc.querySelectorAll<HTMLElement>('.ant-tabs-tab-active'),
+  ]
+  for (const el of direct) {
+    const t = normalizeTabLabel(el.textContent ?? '')
+    if (t) return t
+  }
+
+  for (const tab of doc.querySelectorAll<HTMLElement>('[role="tab"], .ant-tabs-tab')) {
+    const host = tab.closest<HTMLElement>('.ant-tabs-tab') ?? tab
+    const cls =
+      typeof host.className === 'string' ? host.className : String(host.className ?? '')
+    if (
+      host.getAttribute('aria-selected') === 'true' ||
+      /\bactive\b/i.test(cls) ||
+      host.classList.contains('ant-tabs-tab-active')
+    ) {
+      const t = normalizeTabLabel(tab.textContent ?? '')
+      if (t) return t
+    }
+  }
+
+  return ''
+}
+
+function listEzeeTabLabels(doc: Document): string[] {
+  const out: string[] = []
+  for (const tab of doc.querySelectorAll<HTMLElement>('[role="tab"], .ant-tabs-tab')) {
+    const t = normalizeTabLabel(tab.textContent ?? '')
+    if (t && t.length < 48) out.push(t)
+  }
+  return out
+}
+
+/** Full reservation screen (tabs: Booking Details, Guest Details, Folio Operations, …). */
+export function isEzeeReservationDetailShell(doc: Document): boolean {
+  const labels = listEzeeTabLabels(doc)
+  const hasFolio = labels.some((t) => /folio\s*operations/i.test(t))
+  const hasGuest = labels.some((t) => /guest\s*details/i.test(t))
+  const hasBooking = labels.some((t) => /booking\s*details/i.test(t))
+  return hasFolio && (hasGuest || hasBooking)
+}
+
+export function isEzeeGuestDetailsTabActive(doc: Document): boolean {
+  return /guest\s*details/i.test(getEzeeActiveTabLabel(doc))
+}
+
 /**
- * Reservation detail view uses top tabs (Booking Details, Guest Details, Folio Operations, …).
- * Folio ledger content is not guest master data — scraping there yields name-only partial payloads.
+ * Folio Operations tab selected — ledger is visible; not guest master data.
  */
 export function isEzeeFolioOperationsTabActive(doc: Document): boolean {
-  const selected =
-    doc.querySelector<HTMLElement>('.ant-tabs-tab.ant-tabs-tab-active') ??
-    doc.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
-  const text = (selected?.textContent ?? '').replace(/\s+/g, ' ').trim()
-  if (/folio\s*operations/i.test(text)) return true
+  const active = getEzeeActiveTabLabel(doc)
+  if (/folio\s*operations/i.test(active)) return true
+
+  for (const tab of doc.querySelectorAll<HTMLElement>('[role="tab"], .ant-tabs-tab')) {
+    const t = normalizeTabLabel(tab.textContent ?? '')
+    if (!/folio\s*operations/i.test(t)) continue
+    const host = tab.closest<HTMLElement>('.ant-tabs-tab') ?? tab
+    const cls =
+      typeof host.className === 'string' ? host.className : String(host.className ?? '')
+    if (
+      host.getAttribute('aria-selected') === 'true' ||
+      /\bactive\b/i.test(cls) ||
+      host.classList.contains('ant-tabs-tab-active')
+    ) {
+      return true
+    }
+  }
 
   const pane = doc.querySelector<HTMLElement>('.ant-tabs-tabpane-active')
-  const paneText = (pane?.textContent ?? '').slice(0, 400)
-  if (/folio\s*operations/i.test(paneText) && /room\s*charges|early\s*check|deposit/i.test(paneText)) {
+  const paneText = (pane?.textContent ?? '').replace(/\s+/g, ' ').slice(0, 600)
+  if (
+    /folio\s*operations/i.test(paneText) &&
+    /room\s*charges|particulars|ref\s*no/i.test(paneText)
+  ) {
     return true
   }
 
   return false
 }
 
-/** Auto-load / manual extract should not run on Folio Operations (or when that tab is selected). */
+/** Main content shows folio ledger (even if tab detection misses). */
+export function isEzeeFolioLedgerMainView(doc: Document): boolean {
+  if (!isEzeeReservationDetailShell(doc)) return false
+  const sample = (doc.body?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 12_000)
+  if (!/folio\s*operations/i.test(sample)) return false
+  return (
+    /room\s*charges/i.test(sample) &&
+    (/particulars/i.test(sample) || /ref\s*no\.?/i.test(sample))
+  )
+}
+
+export function isEzeeFolioContext(doc: Document): boolean {
+  return isEzeeFolioOperationsTabActive(doc) || isEzeeFolioLedgerMainView(doc)
+}
+
+/** Enough fields for a real guest load (blocks name-only / folio partial scrapes). */
+export function isCompleteEzeeGuestScrape(fields: EzeeScrapeFields): boolean {
+  if (!isValidEzeeReservationNumber(fields.reservationNumber)) return false
+  const hasContact = !!(fields.phone?.trim() || fields.email?.trim())
+  const hasStay = !!(
+    fields.roomNumber?.trim() ||
+    fields.arrivalDateRaw?.trim() ||
+    fields.departureDateRaw?.trim()
+  )
+  return hasContact || hasStay
+}
+
+/**
+ * When false, do not auto-load, manual extract, or read the arrivals drawer.
+ * - Folio Operations / folio ledger: never
+ * - Reservation detail shell: only Guest Details tab (or full arrivals drawer on list)
+ */
 export function isEzeeGuestScrapeAllowed(doc: Document): boolean {
-  return !isEzeeFolioOperationsTabActive(doc)
+  if (isEzeeFolioContext(doc)) return false
+
+  if (isEzeeReservationDetailShell(doc)) {
+    return isEzeeGuestDetailsTabActive(doc)
+  }
+
+  return true
 }
 
 /** DevTools-friendly snapshot when debugging selectors / timing. */
@@ -495,6 +623,8 @@ export function probeEzeeDrawer(doc: Document): EzeeDrawerProbe {
 }
 
 export function extractEzeeScrapeFields(doc: Document): EzeeScrapeFields | null {
+  if (!isEzeeGuestScrapeAllowed(doc)) return null
+
   const open = findOpenEzeeDrawerRoot(doc)
   if (!open) return null
 

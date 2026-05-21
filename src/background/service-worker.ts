@@ -1728,6 +1728,15 @@ async function handleMessage(
     })
   }
 
+  if (msg.type === 'EZEE_SUPPRESS_GUEST_LOAD') {
+    if (reservation?.pms === 'ezee') {
+      reservation = null
+      void chrome.storage.local.remove('fdn_active_reservation')
+    }
+    ezeeGuestDisplay = null
+    return { ok: true, state: await getState() }
+  }
+
   if (msg.type === 'EZEE_AUTO_GUEST_DETECTED') {
     const tabId = _sender.tab?.id
     if (tabId == null) {
@@ -1736,6 +1745,13 @@ async function handleMessage(
     const c = (msg.snapshot.confirmationNumber ?? '').trim()
     if (!isValidEzeeReservationNumber(c)) {
       console.warn('[FDN] eZee auto-load: invalid reservation #, ignored', msg.snapshot.confirmationNumber)
+      return { ok: true, state: await getState() }
+    }
+    const g = msg.guestDisplay
+    const hasContact = !!(g.phone?.trim() || g.email?.trim())
+    const hasStay = !!(g.roomNumber?.trim() || g.staySummary?.trim())
+    if (!hasContact && !hasStay) {
+      console.warn('[FDN] eZee auto-load: incomplete guest payload, ignored', c, g.nameLine)
       return { ok: true, state: await getState() }
     }
 

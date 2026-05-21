@@ -2,10 +2,10 @@ import {
   extractEzeeScrapeFields,
   ezeeScrapeToGuestDisplay,
   ezeeScrapeToSnapshot,
-  isEzeeFolioOperationsTabActive,
+  isCompleteEzeeGuestScrape,
+  isEzeeFolioContext,
   isEzeeGuestDrawerOpen,
   isEzeeGuestScrapeAllowed,
-  isValidEzeeReservationNumber,
   probeEzeeDrawer,
 } from '../lib/ezee-drawer-extract'
 import type { EzeeGuestDisplay, ReservationSnapshot } from '../shared/pms-types'
@@ -36,6 +36,8 @@ let wasDrawerOpen = false
 let lastFailProbeKey = ''
 let lastFailProbeAt = 0
 let lastDedupeLogAt = 0
+let lastSuppressSentAt = 0
+const SUPPRESS_THROTTLE_MS = 1500
 
 console.info('[FDN eZee] content script loaded', {
   href: location.href,
@@ -64,18 +66,19 @@ function buildExtractPayload():
   if (!isEzeeGuestScrapeAllowed(document)) {
     return {
       ok: false,
-      error: 'Guest data is not available on Folio Operations — open Guest Details or the Arrivals guest drawer.',
+      error:
+        'Guest data is not available on this tab — open Guest Details or use the Arrivals guest drawer.',
     }
   }
   if (!isEzeeGuestDrawerOpen(document)) {
     return { ok: false, error: 'Guest drawer is not open.' }
   }
   const fields = extractEzeeScrapeFields(document)
-  if (!fields || !isValidEzeeReservationNumber(fields.reservationNumber)) {
+  if (!fields || !isCompleteEzeeGuestScrape(fields)) {
     console.warn('[FDN eZee] EZEE_EXTRACT_NOW: scrape failed', probeEzeeDrawer(document))
     return {
       ok: false,
-      error: 'Could not read reservation number from the drawer yet (still loading?).',
+      error: 'Could not read complete guest data — open Guest Details or the Arrivals guest drawer.',
     }
   }
   const loadedAt = new Date().toISOString()
@@ -86,15 +89,28 @@ function buildExtractPayload():
   }
 }
 
+function suppressEzeePanelLoad(): void {
+  const now = Date.now()
+  if (now - lastSuppressSentAt < SUPPRESS_THROTTLE_MS) return
+  lastSuppressSentAt = now
+  void chrome.runtime
+    .sendMessage({ type: 'EZEE_SUPPRESS_GUEST_LOAD' })
+    .catch(() => {
+      /* extension reloading */
+    })
+}
+
 async function runDetection(): Promise<void> {
   // Only auto-detect guests on the reservations list page, not other eZee pages.
   if (!location.pathname.startsWith('/unity/reservations')) return
 
   if (!isEzeeGuestScrapeAllowed(document)) {
-    if (isEzeeFolioOperationsTabActive(document) && wasDrawerOpen) {
-      console.info('[FDN eZee] Folio Operations tab — skipping guest auto-detect')
+    if (isEzeeFolioContext(document)) {
+      console.info('[FDN eZee] Folio / non-guest tab — guest auto-detect disabled')
+      suppressEzeePanelLoad()
     }
     wasDrawerOpen = false
+    lastDedupeKey = null
     return
   }
 
@@ -113,7 +129,7 @@ async function runDetection(): Promise<void> {
   if (!openNow) return
 
   const fields = extractEzeeScrapeFields(document)
-  if (!fields || !isValidEzeeReservationNumber(fields.reservationNumber)) {
+  if (!fields || !isCompleteEzeeGuestScrape(fields)) {
     logThrottledFailProbe(probeEzeeDrawer(document))
     return
   }
@@ -624,7 +640,14 @@ addResObserver.observe(document.body, {
 document.addEventListener('click', (e) => {
   const target = e.target as Element
   const clickedTab = target.closest('[class*="tab"], [role="tab"]')
-  if (clickedTab && !clickedTab.textContent?.includes('Guest Details')) {
+  if (!clickedTab) return
+  const tabText = (clickedTab.textContent ?? '').replace(/\s+/g, ' ')
+  if (/folio\s*operations/i.test(tabText)) {
+    suppressEzeePanelLoad()
+    scheduleCheck()
+    return
+  }
+  if (!tabText.includes('Guest Details')) {
     _fillInProgress = false
   }
 })

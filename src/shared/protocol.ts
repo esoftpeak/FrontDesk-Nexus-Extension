@@ -81,6 +81,8 @@ export type ExtensionMessage =
       snapshot: ReservationSnapshot
       guestDisplay: EzeeGuestDisplay
     }
+  /** Folio / non-guest tab — clear stale eZee panel data in the service worker. */
+  | { type: 'EZEE_SUPPRESS_GUEST_LOAD' }
   /** Content script on live.ipms247.com: user clicked "Print Guest Registration Card". */
   | { type: 'EZEE_PRINT_BASIC_CARD_CLICKED'; confirmation: string }
   /** Content script captured the Stimulsoft report URL — service worker opens the reg-card popup. */
