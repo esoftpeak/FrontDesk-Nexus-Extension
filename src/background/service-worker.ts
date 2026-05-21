@@ -1026,6 +1026,11 @@ async function saveIdScan(args: {
       ...prev,
       phone: args.phone?.trim() || prev.phone || null,
       email: args.email?.trim() || prev.email || null,
+      id_number: args.parsed.idNumber?.trim() || (prev.id_number as string | null) || null,
+      expiry_date: args.parsed.expiryDate?.trim() || (prev.expiry_date as string | null) || null,
+      issue_date: args.parsed.issueDate?.trim() || (prev.issue_date as string | null) || null,
+      document_type: args.parsed.idType?.trim() || (prev.document_type as string | null) || null,
+      dob: args.parsed.dateOfBirth?.trim() || (prev.dob as string | null) || null,
     },
   })
 

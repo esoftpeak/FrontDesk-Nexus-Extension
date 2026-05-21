@@ -10,6 +10,7 @@ import {
 } from '../lib/ezee-drawer-extract'
 import type { EzeeGuestDisplay, ReservationSnapshot } from '../shared/pms-types'
 import { US_STATES_BY_CODE as US_STATES } from '../lib/us-states'
+import { formatEzeeExpiryForPicker, mapIdTypeToEzeeDropdownOption } from '../lib/ezee-pms-id-map'
 import { injectFields, type InjectResult } from './inject-helpers'
 
 const EZEE_INJECT_SELECTORS: Record<string, string[]> = {
@@ -258,12 +259,95 @@ function labelText(el: Element): string {
 }
 
 function findFormItemByLabel(text: string): Element | null {
+  const want = text.trim().toLowerCase()
   for (const item of Array.from(document.querySelectorAll('.ant-form-item, [class*="form-item"]'))) {
     for (const lbl of Array.from(item.querySelectorAll('label, [class*="label"]'))) {
-      if (labelText(lbl) === text) return item
+      const got = labelText(lbl).toLowerCase()
+      if (got === want || got.startsWith(`${want} `)) return item
     }
   }
   return null
+}
+
+function findInputInFormItem(formItem: Element): HTMLInputElement | null {
+  return (
+    formItem.querySelector<HTMLInputElement>('input:not([type="hidden"]):not([type="checkbox"])') ??
+    null
+  )
+}
+
+async function ensureIdentitySectionExpanded(): Promise<void> {
+  for (const hdr of document.querySelectorAll<HTMLElement>(
+    '.ant-collapse-header, [class*="collapse-header"], .ant-card-head, legend, h3, h4, h5, [class*="section-title"], [class*="SectionTitle"]',
+  )) {
+    const text = (hdr.textContent ?? '').replace(/\s+/g, ' ').trim()
+    if (!/identity\s*information/i.test(text)) continue
+
+    const item = hdr.closest('.ant-collapse-item, [class*="collapse-item"]')
+    const expanded =
+      item?.classList.contains('ant-collapse-item-active') ||
+      hdr.getAttribute('aria-expanded') === 'true'
+    if (!expanded) {
+      hdr.click()
+      await sleep(400)
+    }
+    return
+  }
+}
+
+async function fillInputByLabel(label: string, value: string | null | undefined): Promise<boolean> {
+  if (!value?.trim()) return false
+  const item = findFormItemByLabel(label)
+  if (!item) {
+    console.warn('[FDN] fillInputByLabel: form item not found →', label)
+    return false
+  }
+  const input = findInputInFormItem(item)
+  if (!input) {
+    console.warn('[FDN] fillInputByLabel: input not found →', label)
+    return false
+  }
+  reactSet(input, value.trim())
+  console.log('[FDN] filled:', label, '←', value.trim())
+  await sleep(80)
+  return true
+}
+
+/** Identity Information: ID #, ID Type (Ant select), Expiry (date input MM-DD-YYYY). */
+async function autoFillIdentityInformation(scan: LastScanResult): Promise<void> {
+  await ensureIdentitySectionExpanded()
+  await sleep(200)
+
+  if (scan.id_number?.trim()) {
+    await fillInputByLabel('ID Number', scan.id_number)
+  }
+
+  const idTypeOption = mapIdTypeToEzeeDropdownOption(scan.document_type)
+  if (idTypeOption) {
+    const alternates = [
+      idTypeOption,
+      idTypeOption === 'Driving License' ? 'Drivers License' : null,
+      idTypeOption === 'Driving License' ? 'Driver License' : null,
+    ].filter(Boolean) as string[]
+    let picked = false
+    for (const opt of alternates) {
+      if (await fillDropdownByLabel('ID Type', opt)) {
+        picked = true
+        break
+      }
+    }
+    if (!picked) {
+      console.warn('[FDN] ID Type dropdown: could not select', idTypeOption, '(from', scan.document_type, ')')
+    }
+  }
+
+  const expiry = formatEzeeExpiryForPicker(scan.expiry_date)
+  if (expiry) {
+    const ok = await fillInputByLabel('Expiry Date', expiry)
+    if (!ok) console.warn('[FDN] Expiry Date: could not fill', scan.expiry_date, '→', expiry)
+  } else if (scan.expiry_date?.trim()) {
+    console.warn('[FDN] Expiry Date: unrecognized format', scan.expiry_date)
+  }
 }
 
 function getAntSelectTrigger(formItem: Element): HTMLElement | null {
@@ -497,6 +581,8 @@ async function autoFillGuestInfo(scan: LastScanResult): Promise<void> {
     if (cityItem) await fillCityWithPoll(cityItem, scan.city)
     else console.warn('[FDN] City form item not found')
   }
+
+  await autoFillIdentityInformation(scan)
 
   _fillInProgress = false
   console.log('[FDN] autoFill: complete ✓')

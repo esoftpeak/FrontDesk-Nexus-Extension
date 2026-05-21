@@ -550,11 +550,11 @@ function App() {
                                : typeof (docData as Record<string,unknown>).sex === 'string'
                                  ? (docData as Record<string,unknown>).sex as string
                                : null),
-                dob:          mergedParsed.dateOfBirth ?? null,
-                id_number:    null,
-                expiry_date:  null,
-                issue_date:   null,
-                document_type: null,
+                dob:           mergedParsed.dateOfBirth ?? null,
+                id_number:     mergedParsed.idNumber ?? null,
+                expiry_date:   mergedParsed.expiryDate ?? null,
+                issue_date:    mergedParsed.issueDate ?? null,
+                document_type: mergedParsed.idType ?? null,
               },
             })
           }
