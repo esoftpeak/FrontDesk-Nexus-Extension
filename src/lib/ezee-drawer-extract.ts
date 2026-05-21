@@ -374,6 +374,31 @@ export function isEzeeGuestDrawerOpen(doc: Document): boolean {
   return findOpenEzeeDrawerRoot(doc) != null
 }
 
+/**
+ * Reservation detail view uses top tabs (Booking Details, Guest Details, Folio Operations, …).
+ * Folio ledger content is not guest master data — scraping there yields name-only partial payloads.
+ */
+export function isEzeeFolioOperationsTabActive(doc: Document): boolean {
+  const selected =
+    doc.querySelector<HTMLElement>('.ant-tabs-tab.ant-tabs-tab-active') ??
+    doc.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+  const text = (selected?.textContent ?? '').replace(/\s+/g, ' ').trim()
+  if (/folio\s*operations/i.test(text)) return true
+
+  const pane = doc.querySelector<HTMLElement>('.ant-tabs-tabpane-active')
+  const paneText = (pane?.textContent ?? '').slice(0, 400)
+  if (/folio\s*operations/i.test(paneText) && /room\s*charges|early\s*check|deposit/i.test(paneText)) {
+    return true
+  }
+
+  return false
+}
+
+/** Auto-load / manual extract should not run on Folio Operations (or when that tab is selected). */
+export function isEzeeGuestScrapeAllowed(doc: Document): boolean {
+  return !isEzeeFolioOperationsTabActive(doc)
+}
+
 /** DevTools-friendly snapshot when debugging selectors / timing. */
 export type EzeeDrawerProbe = {
   drawerRootFound: boolean

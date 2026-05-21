@@ -2,7 +2,9 @@ import {
   extractEzeeScrapeFields,
   ezeeScrapeToGuestDisplay,
   ezeeScrapeToSnapshot,
+  isEzeeFolioOperationsTabActive,
   isEzeeGuestDrawerOpen,
+  isEzeeGuestScrapeAllowed,
   isValidEzeeReservationNumber,
   probeEzeeDrawer,
 } from '../lib/ezee-drawer-extract'
@@ -59,6 +61,12 @@ function logThrottledFailProbe(probe: ReturnType<typeof probeEzeeDrawer>): void 
 function buildExtractPayload():
   | { ok: true; snapshot: ReservationSnapshot; guestDisplay: EzeeGuestDisplay }
   | { ok: false; error: string } {
+  if (!isEzeeGuestScrapeAllowed(document)) {
+    return {
+      ok: false,
+      error: 'Guest data is not available on Folio Operations — open Guest Details or the Arrivals guest drawer.',
+    }
+  }
   if (!isEzeeGuestDrawerOpen(document)) {
     return { ok: false, error: 'Guest drawer is not open.' }
   }
@@ -81,6 +89,14 @@ function buildExtractPayload():
 async function runDetection(): Promise<void> {
   // Only auto-detect guests on the reservations list page, not other eZee pages.
   if (!location.pathname.startsWith('/unity/reservations')) return
+
+  if (!isEzeeGuestScrapeAllowed(document)) {
+    if (isEzeeFolioOperationsTabActive(document) && wasDrawerOpen) {
+      console.info('[FDN eZee] Folio Operations tab — skipping guest auto-detect')
+    }
+    wasDrawerOpen = false
+    return
+  }
 
   const openNow = isEzeeGuestDrawerOpen(document)
 
