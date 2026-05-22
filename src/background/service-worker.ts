@@ -221,7 +221,12 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
     }
 
     if (typeof raw.encoded_data === 'string' && raw.encoded_data) {
-      const entry = { roomNumber: msg.roomNumber, cardSerial: msg.cardSerial ?? 1 }
+      const entry = {
+        roomNumber: msg.roomNumber,
+        cardSerial: msg.cardSerial ?? 1,
+        checkinTime: dbCheckinTime,
+        checkoutTime: dbCheckoutTime,
+      }
       void chrome.storage.local.set({ [`fdn_card_${raw.encoded_data}`]: entry })
     }
 
@@ -2071,18 +2076,35 @@ async function handleMessage(
       const pythonSerial = typeof raw.card_serial === 'number' ? raw.card_serial : null
       const pythonCheckin = typeof raw.checkin_time === 'string' ? raw.checkin_time : null
       const pythonCheckout = typeof raw.checkout_time === 'string' ? raw.checkout_time : null
-      if (pythonRoomNumber) {
-        return { ok: true, cardData, roomNumber: pythonRoomNumber, cardSerial: pythonSerial, checkinTime: pythonCheckin, checkoutTime: pythonCheckout }
+
+      const stored = await chrome.storage.local.get(`fdn_card_${cardData}`)
+      const known = stored[`fdn_card_${cardData}`] as
+        | {
+            roomNumber: string
+            cardSerial: number
+            checkinTime?: string
+            checkoutTime?: string
+          }
+        | undefined
+
+      const roomNumber = pythonRoomNumber ?? known?.roomNumber ?? null
+      const cardSerial = pythonSerial ?? known?.cardSerial ?? null
+      const checkinTime =
+        known?.checkinTime && /^\d{12}$/.test(known.checkinTime) ? known.checkinTime : pythonCheckin
+      const checkoutTime =
+        known?.checkoutTime && /^\d{12}$/.test(known.checkoutTime)
+          ? known.checkoutTime
+          : pythonCheckout
+
+      if (roomNumber) {
+        return { ok: true, cardData, roomNumber, cardSerial, checkinTime, checkoutTime }
       }
 
-      // Fallback: chrome.storage.local fingerprint (cards encoded via this extension)
-      const stored = await chrome.storage.local.get(`fdn_card_${cardData}`)
-      const known = stored[`fdn_card_${cardData}`] as { roomNumber: string; cardSerial: number } | undefined
       return {
         ok: true,
         cardData,
-        roomNumber: known?.roomNumber ?? null,
-        cardSerial: known?.cardSerial ?? null,
+        roomNumber: null,
+        cardSerial: null,
         checkinTime: null,
         checkoutTime: null,
       }

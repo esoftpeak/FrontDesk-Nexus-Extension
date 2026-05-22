@@ -1378,9 +1378,9 @@ function App() {
                     )}
                   </dd>
                   <dt>Check-in</dt>
-                  <dd>{formatSdkDateTime(readCardResult.checkinTime)}</dd>
+                  <dd>{formatHotelDateTime(readCardResult.checkinTime, 14)}</dd>
                   <dt>Check-out</dt>
-                  <dd>{formatSdkDateTime(readCardResult.checkoutTime)}</dd>
+                  <dd>{formatHotelDateTime(readCardResult.checkoutTime, 12)}</dd>
                 </dl>
               ) : (
                 <>
