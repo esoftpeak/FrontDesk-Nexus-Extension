@@ -1,4 +1,5 @@
 import type { ReservationSnapshot, SynxisAddressLine, SynxisGuestDisplay } from '../shared/pms-types'
+import { calendarDateFromUtcIso, formatCalendarDate } from './hotel-dates'
 
 function isRecord(x: unknown): x is Record<string, unknown> {
   return x !== null && typeof x === 'object' && !Array.isArray(x)
@@ -60,15 +61,10 @@ function formatSynxisStaySummary(stay: Record<string, unknown>): string | null {
   const arrIso = typeof stay.arrivalDateIsoUtc === 'string' ? stay.arrivalDateIsoUtc : null
   const depIso = typeof stay.departureDateIsoUtc === 'string' ? stay.departureDateIsoUtc : null
   if (arrIso && depIso && n != null) {
-    const d1 = new Date(arrIso)
-    const d2 = new Date(depIso)
-    if (!Number.isNaN(d1.getTime()) && !Number.isNaN(d2.getTime())) {
-      const fmt = new Intl.DateTimeFormat('en-US', {
-        weekday: 'short',
-        month: 'short',
-        day: '2-digit',
-      })
-      return `${fmt.format(d1)} - ${fmt.format(d2)} (${n} nights)`
+    const arrCal = calendarDateFromUtcIso(arrIso)
+    const depCal = calendarDateFromUtcIso(depIso)
+    if (arrCal && depCal) {
+      return `${formatCalendarDate(arrCal)} - ${formatCalendarDate(depCal)} (${n} nights)`
     }
   }
   const checkIn = typeof stay.checkInDate === 'string' ? stay.checkInDate : ''
@@ -205,13 +201,16 @@ export function parseSynxisReservationSummaryResponse(
   let checkInDate: string | null = null
   let checkOutDate: string | null = null
   if (isRecord(stay)) {
-    if (typeof stay.checkInDate === 'string') checkInDate = stay.checkInDate
+    if (typeof stay.checkInDate === 'string' && stay.checkInDate.trim()) {
+      checkInDate = stay.checkInDate.trim()
+    }
     if (!checkInDate && typeof stay.arrivalDateIsoUtc === 'string') {
-      checkInDate = stay.arrivalDateIsoUtc
+      const cal = calendarDateFromUtcIso(stay.arrivalDateIsoUtc)
+      checkInDate = cal ?? stay.arrivalDateIsoUtc
     }
     if (typeof stay.departureDateIsoUtc === 'string') {
-      const d = new Date(stay.departureDateIsoUtc)
-      if (!Number.isNaN(d.getTime()) && d.getFullYear() > 1) checkOutDate = stay.departureDateIsoUtc
+      const cal = calendarDateFromUtcIso(stay.departureDateIsoUtc)
+      if (cal) checkOutDate = cal
     }
   }
 

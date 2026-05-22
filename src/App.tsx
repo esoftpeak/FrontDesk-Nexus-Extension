@@ -16,6 +16,7 @@ import { normalizeUsStateCode, US_STATE_SELECT_OPTIONS } from './lib/us-states'
 import { isCompleteUsZip, lookupUsZipCityState, normalizeUsZipInput } from './lib/zip-lookup'
 import { guestProfileToFormState } from './lib/apply-guest-profile'
 import { isCompletePhoneForLookup } from './lib/phone-lookup'
+import { formatHotelDateTime } from './lib/hotel-dates'
 
 function RequiredMark() {
   return (
@@ -1320,9 +1321,9 @@ function App() {
               <dt>Room</dt>
               <dd>{res.roomNumber}</dd>
               <dt>Check-in</dt>
-              <dd>{res.checkInDate ?? '—'}</dd>
+              <dd>{formatHotelDateTime(res.checkInDate)}</dd>
               <dt>Check-out</dt>
-              <dd>{res.checkOutDate ?? '—'}</dd>
+              <dd>{formatHotelDateTime(res.checkOutDate)}</dd>
             </dl>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>

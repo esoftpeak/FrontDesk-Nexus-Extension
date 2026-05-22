@@ -32,6 +32,7 @@ import { pingNativeHost } from '../lib/native-scan'
 import type { NativeScanSuccessPayload } from '../nativeMessaging/types'
 import { initNativeHost, sendNativeMessage, sendNativeRequest } from '../nativeHost'
 import { checkMinExtensionVersion } from '../lib/version-check'
+import { toSdkDatetimeHotel } from '../lib/hotel-dates'
 import { logSynxisGuestSpecConsole, parseSynxisReservationSummaryResponse } from '../lib/synxis-guest-summary'
 import { isSynxisConfirmationToken } from '../lib/synxis-confirmation-dom'
 import {
@@ -110,34 +111,15 @@ function ezeeAutoFlightKey(tabId: number, confirmation: string, roomHint: string
 const SYNXIS_DEFAULT_GUEST_ID = 100
 
 /**
- * Normalise a check-in/out string to SDK format (yyyyMMddHHmm).
- * If the input is a date-only string (YYYY-MM-DD), `defaultHour` is applied
- * so the encoded card and DB record always contain a time component.
- * Hotel convention: check-in 14:00, check-out 12:00.
- */
-function toSdkDatetime(s: string, defaultHour: number): string {
-  const t = s.trim()
-  if (!t) return t
-  if (/^\d{12}$/.test(t)) return t                        // already yyyyMMddHHmm
-  const iso = /^\d{4}-\d{2}-\d{2}$/.test(t)
-    ? `${t}T${String(defaultHour).padStart(2, '0')}:00:00` // date-only → add default hour
-    : t
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return t
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}`
-}
-
-/**
  * `key_history` text times: keep the same 12-char SDK form as the encoder (`YYYYMMDDHHmm`),
- * matching legacy PMS-synced rows. Falls back to `toSdkDatetime` when Python omits a value.
+ * matching legacy PMS-synced rows. Falls back to `toSdkDatetimeHotel` when Python omits a value.
  */
 function keyHistoryTimeForDb(rawSdk: unknown, fallbackMsg: string, defaultHour: number): string {
   if (typeof rawSdk === 'string') {
     const t = rawSdk.trim()
     if (/^\d{12}$/.test(t)) return t
   }
-  return toSdkDatetime(fallbackMsg, defaultHour)
+  return toSdkDatetimeHotel(fallbackMsg, defaultHour)
 }
 
 type RfidMakeKeyMessage = Extract<ExtensionMessage, { type: 'RFID_MAKE_KEY' }>
@@ -148,8 +130,8 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
     const raw = await sendNativeRequest({
       type: 'RFID_MAKE_KEY',
       room_number: msg.roomNumber,
-      checkin_time: toSdkDatetime(msg.checkinTime, 14),
-      checkout_time: toSdkDatetime(msg.checkoutTime, 12),
+      checkin_time: toSdkDatetimeHotel(msg.checkinTime, 14),
+      checkout_time: toSdkDatetimeHotel(msg.checkoutTime, 12),
       card_serial: msg.cardSerial ?? 1,
     })
 
