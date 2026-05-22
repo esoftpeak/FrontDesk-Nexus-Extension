@@ -1321,9 +1321,9 @@ function App() {
               <dt>Room</dt>
               <dd>{res.roomNumber}</dd>
               <dt>Check-in</dt>
-              <dd>{formatHotelDateTime(res.checkInDate)}</dd>
+              <dd>{formatHotelDateTime(res.checkInDate, 14)}</dd>
               <dt>Check-out</dt>
-              <dd>{formatHotelDateTime(res.checkOutDate)}</dd>
+              <dd>{formatHotelDateTime(res.checkOutDate, 12)}</dd>
             </dl>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>

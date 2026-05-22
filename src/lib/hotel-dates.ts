@@ -53,25 +53,39 @@ export function toSdkDatetimeHotel(s: string, defaultHour: number): string {
   return t
 }
 
-/** Human-readable check-in/out for UI (ISO, SDK 12-char, or free text). */
-export function formatHotelDateTime(s: string | null | undefined): string {
+function formatLocalDateTime(d: Date): string {
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+/** Date-only stay boundary → local wall time for display (matches encoder defaults). */
+function formatCalendarDateWithHour(isoDate: string, hour: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate.trim())
+  if (!m) return isoDate
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), hour, 0, 0, 0)
+  if (Number.isNaN(d.getTime())) return isoDate
+  return formatLocalDateTime(d)
+}
+
+/**
+ * Human-readable check-in/out for UI (ISO, SDK 12-char, or free text).
+ * Date-only values use `defaultHour` (check-in 14:00, check-out 12:00) so format matches timed strings.
+ */
+export function formatHotelDateTime(
+  s: string | null | undefined,
+  defaultHour: number = 12,
+): string {
   if (!s?.trim()) return '—'
   const t = s.trim()
   if (/^\d{12}$/.test(t)) {
     const d = new Date(
       `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(8, 10)}:${t.slice(10, 12)}:00`,
     )
-    if (!Number.isNaN(d.getTime())) {
-      return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-    }
+    if (!Number.isNaN(d.getTime())) return formatLocalDateTime(d)
   }
-  const cal = calendarDateFromUtcIso(t)
-  if (cal && (t.endsWith('Z') || /T00:00:00/.test(t))) {
-    return formatCalendarDate(cal)
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
-    return formatCalendarDate(t)
+  const cal = calendarDateFromUtcIso(t) ?? (/^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null)
+  if (cal && (t.endsWith('Z') || /T00:00:00/.test(t) || t === cal)) {
+    return formatCalendarDateWithHour(cal, defaultHour)
   }
   const d = new Date(t)
-  return Number.isNaN(d.getTime()) ? t : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  return Number.isNaN(d.getTime()) ? t : formatLocalDateTime(d)
 }
