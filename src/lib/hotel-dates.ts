@@ -3,6 +3,60 @@
  * Use the calendar date from the ISO string, not local `Date` shifts.
  */
 
+/** True when SynXis `stay.checkInDate` is a wall-clock time, not a stay date. */
+export function isHotelTimeOnlyString(s: string): boolean {
+  const t = s.trim()
+  if (!t) return false
+  if (/^\d{1,2}:\d{2}(\s*:\d{2})?(\s*[AP]M)?$/i.test(t)) return true
+  if (/^\d{1,2}:\d{2}\s*[AP]M$/i.test(t)) return true
+  return false
+}
+
+/** US `M/D/YYYY` or `MM/DD/YYYY` → `YYYY-MM-DD` (SynXis stay summary text). */
+export function parseUsSlashDateToYmd(s: string): string | null {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s.trim())
+  if (!m) return null
+  const mo = parseInt(m[1]!, 10)
+  const day = parseInt(m[2]!, 10)
+  const y = parseInt(m[3]!, 10)
+  if (mo < 1 || mo > 12 || day < 1 || day > 31 || y < 1990 || y > 2100) return null
+  return `${y}-${pad2(mo)}-${pad2(day)}`
+}
+
+/**
+ * Normalize a stay boundary for DB / encoder (prefer `YYYY-MM-DD` or UTC ISO).
+ * Rejects time-only and bare `M/D` (JS defaults missing years to 2001).
+ */
+export function normalizeHotelStayDate(
+  isoUtc: string | null | undefined,
+  fallback: string | null | undefined,
+): string | null {
+  if (isoUtc?.trim()) {
+    const cal = calendarDateFromUtcIso(isoUtc)
+    if (cal) return cal
+  }
+
+  const raw = (fallback ?? '').trim()
+  if (!raw || isHotelTimeOnlyString(raw)) return null
+
+  const fromIso = calendarDateFromUtcIso(raw)
+  if (fromIso) return fromIso
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+
+  const slash = parseUsSlashDateToYmd(raw)
+  if (slash) return slash
+
+  // `5/22` or `05/22` without a year → May 22, 2001 in JS — ignore.
+  if (/^\d{1,2}\/\d{1,2}$/.test(raw)) return null
+
+  if (/^\d{12}$/.test(raw)) {
+    return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+  }
+
+  return null
+}
+
 /** `2026-05-22T00:00:00Z` → `2026-05-22` */
 export function calendarDateFromUtcIso(iso: string): string | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso.trim())
@@ -39,6 +93,13 @@ export function toSdkDatetimeHotel(s: string, defaultHour: number): string {
   if (!t) return t
   if (/^\d{12}$/.test(t)) return t
 
+  const normalized = normalizeHotelStayDate(null, t)
+  if (normalized) {
+    const [y, mo, d] = normalized.split('-').map(Number)
+    const date = new Date(y, mo - 1, d, defaultHour, 0, 0, 0)
+    return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}${pad2(date.getHours())}${pad2(date.getMinutes())}`
+  }
+
   const cal = calendarDateFromUtcIso(t) ?? (/^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null)
   if (cal && (t.endsWith('Z') || /T00:00:00/.test(t) || t === cal)) {
     const [y, mo, d] = cal.split('-').map(Number)
@@ -46,10 +107,7 @@ export function toSdkDatetimeHotel(s: string, defaultHour: number): string {
     return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}${pad2(date.getHours())}${pad2(date.getMinutes())}`
   }
 
-  const d = new Date(t)
-  if (!Number.isNaN(d.getTime())) {
-    return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}`
-  }
+  // Do not `new Date(t)` on arbitrary PMS strings — MM/DD without year becomes year 2001.
   return t
 }
 
@@ -82,10 +140,15 @@ export function formatHotelDateTime(
     )
     if (!Number.isNaN(d.getTime())) return formatLocalDateTime(d)
   }
+  const normalized = normalizeHotelStayDate(null, t)
+  if (normalized) {
+    return formatCalendarDateWithHour(normalized, defaultHour)
+  }
+
   const cal = calendarDateFromUtcIso(t) ?? (/^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null)
   if (cal && (t.endsWith('Z') || /T00:00:00/.test(t) || t === cal)) {
     return formatCalendarDateWithHour(cal, defaultHour)
   }
-  const d = new Date(t)
-  return Number.isNaN(d.getTime()) ? t : formatLocalDateTime(d)
+
+  return t
 }

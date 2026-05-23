@@ -73,13 +73,11 @@ function formatLocalFromIso(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-function formatSdkDateTime(s: string | null | undefined): string {
-  if (!s?.trim()) return '—'
-  if (s.length >= 12) {
-    const d = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}T${s.slice(8,10)}:${s.slice(10,12)}:00`)
-    if (!Number.isNaN(d.getTime())) return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-  }
-  return s
+function formatSdkDateTime(
+  s: string | null | undefined,
+  defaultHour: number = 14,
+): string {
+  return formatHotelDateTime(s, defaultHour)
 }
 
 const emptyIdDetail: IdScanDetailGuru = {
@@ -1426,8 +1424,8 @@ function App() {
                         : '—'}
                     </td>
                     <td>{row.room_number}</td>
-                    <td>{formatSdkDateTime(row.checkin_time)}</td>
-                    <td>{formatSdkDateTime(row.checkout_time)}</td>
+                    <td>{formatSdkDateTime(row.checkin_time, 14)}</td>
+                    <td>{formatSdkDateTime(row.checkout_time, 12)}</td>
                     <td>{row.card_serial}</td>
                     <td className="fdn-mono">{row.encoded_by_username ?? '—'}</td>
                   </tr>

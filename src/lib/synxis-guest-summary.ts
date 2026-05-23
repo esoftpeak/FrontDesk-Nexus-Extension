@@ -1,5 +1,9 @@
 import type { ReservationSnapshot, SynxisAddressLine, SynxisGuestDisplay } from '../shared/pms-types'
-import { calendarDateFromUtcIso, formatCalendarDate } from './hotel-dates'
+import {
+  calendarDateFromUtcIso,
+  formatCalendarDate,
+  normalizeHotelStayDate,
+} from './hotel-dates'
 
 function isRecord(x: unknown): x is Record<string, unknown> {
   return x !== null && typeof x === 'object' && !Array.isArray(x)
@@ -201,17 +205,18 @@ export function parseSynxisReservationSummaryResponse(
   let checkInDate: string | null = null
   let checkOutDate: string | null = null
   if (isRecord(stay)) {
-    if (typeof stay.checkInDate === 'string' && stay.checkInDate.trim()) {
-      checkInDate = stay.checkInDate.trim()
-    }
-    if (!checkInDate && typeof stay.arrivalDateIsoUtc === 'string') {
-      const cal = calendarDateFromUtcIso(stay.arrivalDateIsoUtc)
-      checkInDate = cal ?? stay.arrivalDateIsoUtc
-    }
-    if (typeof stay.departureDateIsoUtc === 'string') {
-      const cal = calendarDateFromUtcIso(stay.departureDateIsoUtc)
-      if (cal) checkOutDate = cal
-    }
+    const arrivalIso =
+      typeof stay.arrivalDateIsoUtc === 'string' ? stay.arrivalDateIsoUtc : null
+    const departureIso =
+      typeof stay.departureDateIsoUtc === 'string' ? stay.departureDateIsoUtc : null
+    const checkInFallback =
+      typeof stay.checkInDate === 'string' ? stay.checkInDate : null
+    const checkOutFallback =
+      typeof stay.checkOutDate === 'string' ? stay.checkOutDate : null
+
+    // ISO UTC fields are authoritative; `checkInDate` is often arrival *time* (e.g. "4:39 PM").
+    checkInDate = normalizeHotelStayDate(arrivalIso, checkInFallback)
+    checkOutDate = normalizeHotelStayDate(departureIso, checkOutFallback)
   }
 
   let reservationTotal: string | null = null
