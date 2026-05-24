@@ -80,6 +80,24 @@ function formatSdkDateTime(
   return formatHotelDateTime(s, defaultHour)
 }
 
+/** Same cap as portal `AdminPortalEncodeModal` (1–8 keys per stay). */
+const MAX_ROOM_KEYS = 8
+
+function nextKeySerialFromHistory(
+  history: KeyHistoryRow[],
+  confirmation: string | null | undefined,
+): number {
+  const conf = confirmation?.trim()
+  if (!conf) return 1
+  let max = 0
+  for (const row of history) {
+    if (row.confirmation_number?.trim() !== conf) continue
+    const s = typeof row.card_serial === 'number' ? row.card_serial : 0
+    if (s > max) max = s
+  }
+  return Math.min(MAX_ROOM_KEYS, Math.max(1, max + 1))
+}
+
 const emptyIdDetail: IdScanDetailGuru = {
   firstName: null,
   middleName: null,
@@ -202,10 +220,10 @@ function App() {
     void refreshKeyHistory()
   }, [refreshKeyHistory, state?.reservation?.confirmationNumber])
 
-  // Reset key serial to 1 when a new reservation is loaded
+  // Keep "Key #N" in sync with key_history for this confirmation (portal-style serial).
   useEffect(() => {
-    setKeyCardSerial(1)
-  }, [state?.reservation?.confirmationNumber])
+    setKeyCardSerial(nextKeySerialFromHistory(keyHistory, state?.reservation?.confirmationNumber))
+  }, [state?.reservation?.confirmationNumber, keyHistory])
 
   function clearIdScan() {
     setParsed(emptyParsed)
@@ -626,38 +644,70 @@ function App() {
     }
   }
 
-  async function onMakeKey() {
-    if (!res?.roomNumber || !res?.checkInDate || !res?.checkOutDate) return
+  /** Encode one key (portal: IN time = encode moment; checkout from stay). */
+  async function runEncodeKey(serial: number): Promise<boolean> {
+    if (!res?.roomNumber || !res?.checkOutDate) {
+      setKeyNotice('Load a reservation with room and check-out before encoding.')
+      return false
+    }
+    if (serial < 1 || serial > MAX_ROOM_KEYS) {
+      setKeyNotice(`This stay allows up to ${MAX_ROOM_KEYS} keys.`)
+      return false
+    }
+
     setKeyBusy(true)
     setKeyNotice(null)
     try {
       const result = (await chrome.runtime.sendMessage({
         type: 'RFID_MAKE_KEY',
         roomNumber: res.roomNumber,
-        checkinTime: res.checkInDate,
+        checkinTime: new Date().toISOString(),
         checkoutTime: res.checkOutDate,
-        cardSerial: keyCardSerial,
+        cardSerial: serial,
       })) as { ok: boolean; error?: string; dbWarning?: string; state?: ExtensionState } | undefined
+
       if (!result) {
         setKeyNotice('No response from native host — reload the extension and try again.')
-        return
+        return false
       }
       if (!result.ok) {
         setKeyNotice(result.error ?? 'Key encoding failed')
-        return
+        return false
       }
+
+      const base = `Key ${serial} encoded — room ${res.roomNumber}.`
       if (result.dbWarning) {
-        setKeyNotice(`Card encoded — room ${res.roomNumber}, serial ${keyCardSerial}. Warning: ${result.dbWarning}`)
+        setKeyNotice(`${base} Warning: ${result.dbWarning}`)
+      } else if (serial >= MAX_ROOM_KEYS) {
+        setKeyNotice(`${base} Maximum keys for this stay.`)
       } else {
-        setKeyNotice(`Key encoded — room ${res.roomNumber}, serial ${keyCardSerial}.`)
+        setKeyNotice(
+          `${base} Remove this card, place blank card ${serial + 1}, then press Next key.`,
+        )
       }
+
       if (result.state) setState(result.state)
+      setKeyCardSerial(Math.min(MAX_ROOM_KEYS + 1, serial + 1))
       void refreshKeyHistory()
+      return true
     } catch (e) {
       setKeyNotice(e instanceof Error ? e.message : 'Key encoding failed — check device connection.')
+      return false
     } finally {
       setKeyBusy(false)
     }
+  }
+
+  async function onMakeKey() {
+    await runEncodeKey(keyCardSerial)
+  }
+
+  async function onNextKey() {
+    if (keyCardSerial <= 1) {
+      setKeyNotice('Encode the first key with Encode Key, then use Next key for each additional card.')
+      return
+    }
+    await runEncodeKey(keyCardSerial)
   }
 
   async function onReadCard() {
@@ -1325,25 +1375,60 @@ function App() {
             </dl>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
-              <span style={{ fontSize: 12, color: '#c9d1d9' }}>Key #{keyCardSerial}</span>
+              <span style={{ fontSize: 12, color: '#c9d1d9' }}>
+                Key #{Math.min(keyCardSerial, MAX_ROOM_KEYS)}
+                {keyCardSerial > MAX_ROOM_KEYS ? ' (max reached)' : ''}
+              </span>
               <button
                 type="button"
                 className="fdn-btn fdn-btn--secondary"
                 style={{ padding: '3px 10px', fontSize: 12 }}
-                onClick={() => setKeyCardSerial((n) => n + 1)}
+                disabled={
+                  keyBusy ||
+                  hw.rfid_encoder !== 'connected' ||
+                  !state.auth.signedIn ||
+                  keyCardSerial <= 1 ||
+                  keyCardSerial > MAX_ROOM_KEYS
+                }
+                title={
+                  keyCardSerial <= 1
+                    ? 'Encode key 1 first'
+                    : 'Swap in a blank card and encode the next copy'
+                }
+                onClick={() => void onNextKey()}
               >
-                Next key
+                {keyBusy ? 'Encoding…' : 'Next key'}
               </button>
             </div>
+
+            {keyCardSerial > 1 && keyCardSerial <= MAX_ROOM_KEYS ? (
+              <p className="fdn-help" style={{ marginTop: 6 }}>
+                Remove the last card, place a blank card on the encoder, then press Next key (key{' '}
+                {keyCardSerial} of {MAX_ROOM_KEYS}).
+              </p>
+            ) : keyCardSerial === 1 ? (
+              <p className="fdn-help" style={{ marginTop: 6 }}>
+                First card: press Encode Key. Additional cards: swap blank, then Next key.
+              </p>
+            ) : null}
 
             <div className="fdn-actions">
               <button
                 type="button"
                 className="fdn-btn fdn-btn--primary"
-                disabled={keyBusy || hw.rfid_encoder !== 'connected' || !state.auth.signedIn}
+                disabled={
+                  keyBusy ||
+                  hw.rfid_encoder !== 'connected' ||
+                  !state.auth.signedIn ||
+                  keyCardSerial > MAX_ROOM_KEYS
+                }
                 onClick={() => void onMakeKey()}
               >
-                {keyBusy ? 'Encoding…' : 'Encode Key'}
+                {keyBusy
+                  ? 'Encoding…'
+                  : keyCardSerial <= 1
+                    ? 'Encode Key'
+                    : `Encode key ${keyCardSerial}`}
               </button>
               <button
                 type="button"
