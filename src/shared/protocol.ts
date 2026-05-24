@@ -151,6 +151,12 @@ export type ExtensionMessage =
       portalAdminEncode?: boolean
     }
   | { type: 'RFID_READ_CARD' }
+  /**
+   * Encode a cancel/disable payload onto an old card.
+   * The guest taps the card on their room lock — the lock deactivates all previous keys.
+   * Then a new key can be encoded normally.
+   */
+  | { type: 'RFID_DISABLE_CARD'; roomNumber: string }
   /** Look up previous scans by ID number hash to detect returning guests. */
   | { type: 'GET_RETURNING_GUEST_HISTORY'; idNumber: string }
   /** Look up prior stays / ID profiles by phone number hash. */

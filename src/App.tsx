@@ -149,6 +149,7 @@ function App() {
   const [keyNotice, setKeyNotice] = useState<string | null>(null)
   const [keyCardSerial, setKeyCardSerial] = useState<number>(1)
   const [readCardBusy, setReadCardBusy] = useState(false)
+  const [cancelCardBusy, setCancelCardBusy] = useState(false)
   const [readCardResult, setReadCardResult] = useState<{
     ok: boolean
     cardData?: string
@@ -726,6 +727,37 @@ function App() {
       setReadCardResult({ ok: false, error: e instanceof Error ? e.message : 'Read failed' })
     } finally {
       setReadCardBusy(false)
+    }
+  }
+
+  async function onCancelCard() {
+    const roomNumber = res?.roomNumber
+    if (!roomNumber) {
+      setKeyNotice('Load a reservation first to use Cancel Card.')
+      return
+    }
+    setCancelCardBusy(true)
+    setKeyNotice(null)
+    try {
+      const result = (await chrome.runtime.sendMessage({
+        type: 'RFID_DISABLE_CARD',
+        roomNumber,
+      })) as { ok: boolean; error?: string } | undefined
+      if (!result) {
+        setKeyNotice('Cancel card failed — no response from encoder.')
+        return
+      }
+      if (!result.ok) {
+        setKeyNotice(`Cancel card failed — ${result.error ?? 'unknown error'}`)
+        return
+      }
+      setKeyNotice(
+        'Cancel card encoded. Have the guest tap this card on the room lock — all previous keys will be deactivated. Then encode a new key.',
+      )
+    } catch (e) {
+      setKeyNotice(`Cancel card error — ${e instanceof Error ? e.message : 'unknown error'}`)
+    } finally {
+      setCancelCardBusy(false)
     }
   }
 
@@ -1438,10 +1470,19 @@ function App() {
               >
                 {readCardBusy ? 'Reading…' : 'Read Card'}
               </button>
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--danger"
+                disabled={cancelCardBusy || hw.rfid_encoder !== 'connected' || !res?.roomNumber}
+                title="Encode a cancel payload onto an old card. Guest taps lock → all previous keys deactivated."
+                onClick={() => void onCancelCard()}
+              >
+                {cancelCardBusy ? 'Encoding…' : 'Cancel Card'}
+              </button>
             </div>
 
             {keyNotice && (
-              <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
+              <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') || keyNotice.startsWith('Cancel card encoded') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
                 {keyNotice}
               </div>
             )}

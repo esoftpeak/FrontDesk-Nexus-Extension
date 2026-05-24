@@ -191,6 +191,11 @@
   background: transparent;
 }
 
+.fdn-btn--danger {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
 .fdn-help {
   font-size: 11px;
   color: #8b949e;

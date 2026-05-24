@@ -2114,6 +2114,22 @@ async function handleMessage(
     }
   }
 
+  if (msg.type === 'RFID_DISABLE_CARD') {
+    try {
+      const raw = await sendNativeRequest({
+        type: 'RFID_DISABLE_CARD',
+        room_number: msg.roomNumber,
+      })
+      if (!raw.success) {
+        return { ok: false, error: String(raw.error ?? 'Cancel card encode failed') }
+      }
+      return { ok: true }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Cancel card encode failed'
+      return { ok: false, error: message }
+    }
+  }
+
   return { ok: false, error: 'Unknown message type' }
 }
 
