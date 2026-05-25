@@ -2104,12 +2104,14 @@ async function handleMessage(
 
       const roomNumber = pythonRoomNumber ?? known?.roomNumber ?? null
       const cardSerial = pythonSerial ?? known?.cardSerial ?? null
+      // Python reads the physical card directly — always authoritative for dates.
+      // Fall back to Chrome cache only when Python did not return a valid compact value.
       const checkinTime =
-        known?.checkinTime && /^\d{12}$/.test(known.checkinTime) ? known.checkinTime : pythonCheckin
+        pythonCheckin && /^\d{12}$/.test(pythonCheckin) ? pythonCheckin :
+        known?.checkinTime ?? pythonCheckin
       const checkoutTime =
-        known?.checkoutTime && /^\d{12}$/.test(known.checkoutTime)
-          ? known.checkoutTime
-          : pythonCheckout
+        pythonCheckout && /^\d{12}$/.test(pythonCheckout) ? pythonCheckout :
+        known?.checkoutTime ?? pythonCheckout
 
       if (roomNumber) {
         return { ok: true, cardData, roomNumber, cardSerial, checkinTime, checkoutTime }
