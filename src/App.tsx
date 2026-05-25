@@ -663,7 +663,7 @@ function App() {
       const result = (await chrome.runtime.sendMessage({
         type: 'RFID_MAKE_KEY',
         roomNumber: res.roomNumber,
-        checkinTime: new Date().toISOString(),
+        checkinTime: res.checkInDate ?? new Date().toISOString(),
         checkoutTime: res.checkOutDate,
         cardSerial: serial,
       })) as { ok: boolean; error?: string; dbWarning?: string; state?: ExtensionState } | undefined
@@ -742,7 +742,7 @@ function App() {
       const result = (await chrome.runtime.sendMessage({
         type: 'RFID_MAKE_KEY',
         roomNumber: res.roomNumber,
-        checkinTime: new Date().toISOString(),
+        checkinTime: res.checkInDate ?? new Date().toISOString(),
         checkoutTime: res.checkOutDate,
         cardSerial: 1,
       })) as { ok: boolean; error?: string; state?: ExtensionState } | undefined
