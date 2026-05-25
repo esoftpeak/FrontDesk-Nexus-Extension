@@ -150,6 +150,7 @@ function App() {
   const [keyCardSerial, setKeyCardSerial] = useState<number>(1)
   const [readCardBusy, setReadCardBusy] = useState(false)
   const [cancelCardBusy, setCancelCardBusy] = useState(false)
+  const [replaceKeyBusy, setReplaceKeyBusy] = useState(false)
   const [readCardResult, setReadCardResult] = useState<{
     ok: boolean
     cardData?: string
@@ -727,6 +728,42 @@ function App() {
       setReadCardResult({ ok: false, error: e instanceof Error ? e.message : 'Read failed' })
     } finally {
       setReadCardBusy(false)
+    }
+  }
+
+  async function onReplaceKey() {
+    if (!res?.roomNumber || !res?.checkOutDate) {
+      setKeyNotice('Load a reservation with room and check-out before replacing a key.')
+      return
+    }
+    setReplaceKeyBusy(true)
+    setKeyNotice(null)
+    try {
+      const result = (await chrome.runtime.sendMessage({
+        type: 'RFID_MAKE_KEY',
+        roomNumber: res.roomNumber,
+        checkinTime: new Date().toISOString(),
+        checkoutTime: res.checkOutDate,
+        cardSerial: 1,
+      })) as { ok: boolean; error?: string; state?: ExtensionState } | undefined
+
+      if (!result) {
+        setKeyNotice('No response from native host — reload the extension and try again.')
+        return
+      }
+      if (!result.ok) {
+        setKeyNotice(result.error ?? 'Replace key encoding failed')
+        return
+      }
+      setKeyNotice(
+        `Replacement key encoded for Room ${res.roomNumber}. Give this card to the guest — when they tap it on the door, all previous keys will stop working automatically.`,
+      )
+      if (result.state) setState(result.state)
+      void refreshKeyHistory()
+    } catch (e) {
+      setKeyNotice(e instanceof Error ? e.message : 'Replace key encoding failed — check device connection.')
+    } finally {
+      setReplaceKeyBusy(false)
     }
   }
 
@@ -1472,9 +1509,18 @@ function App() {
               </button>
               <button
                 type="button"
+                className="fdn-btn fdn-btn--secondary"
+                disabled={replaceKeyBusy || hw.rfid_encoder !== 'connected' || !state.auth.signedIn || !res?.roomNumber || !res?.checkOutDate}
+                title="Lost key: encode a new serial-1 key with a fresh check-in time. Give to guest — their first tap on the lock automatically invalidates all old keys."
+                onClick={() => void onReplaceKey()}
+              >
+                {replaceKeyBusy ? 'Encoding…' : 'Replace Key'}
+              </button>
+              <button
+                type="button"
                 className="fdn-btn fdn-btn--danger"
                 disabled={cancelCardBusy || hw.rfid_encoder !== 'connected' || !res?.roomNumber}
-                title="Encode a cancel payload onto an old card. Staff takes it to the room and taps the lock — all previous keys deactivated."
+                title="Emergency: encode a cancel payload onto an old card. Staff takes it to the room and taps the lock — all previous keys deactivated immediately without guest involvement."
                 onClick={() => void onCancelCard()}
               >
                 {cancelCardBusy ? 'Encoding…' : 'Cancel Card'}
@@ -1482,7 +1528,7 @@ function App() {
             </div>
 
             {keyNotice && (
-              <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') || keyNotice.startsWith('Cancel card encoded') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
+              <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') || keyNotice.startsWith('Cancel card encoded') || keyNotice.startsWith('Replacement key encoded') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
                 {keyNotice}
               </div>
             )}
