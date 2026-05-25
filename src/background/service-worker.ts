@@ -953,6 +953,24 @@ async function saveIdScan(args: {
   const id_number_hash = rawId ? await hashIdNumber(rawId) : null
   const phone_number_hash = args.phone?.trim() ? await hashPhoneNumber(args.phone.trim()) : null
 
+  // Dedup guard: if the same ID was auto-saved for this confirmation within the last 5 minutes,
+  // skip this insert silently. Prevents duplicate rows when the card stays on the reader
+  // between scan cycles or the clerk triggers a second scan before removing the card.
+  if (id_number_hash && !args.manualEntry && !conf.startsWith('NO-RES-')) {
+    const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    const { data: recent } = await client
+      .from('id_scans')
+      .select('id')
+      .eq('id_number_hash', id_number_hash)
+      .eq('confirmation_number', conf)
+      .gte('created_at', cutoff)
+      .limit(1)
+    if (recent && recent.length > 0) {
+      console.log('[FDN SW] Dedup: id_scan already saved for this guest+reservation within 5 min — skipping duplicate')
+      return { ok: true }
+    }
+  }
+
   let phone_encrypted: Record<string, unknown> | null = null
   let email_encrypted: Record<string, unknown> | null = null
   if (args.phone?.trim()) phone_encrypted = (await encryptJson({ value: args.phone.trim() })) as unknown as Record<string, unknown>
