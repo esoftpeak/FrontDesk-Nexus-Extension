@@ -2105,15 +2105,27 @@ async function handleMessage(
       const roomNumber = pythonRoomNumber ?? known?.roomNumber ?? null
       const cardSerial = pythonSerial ?? known?.cardSerial ?? null
 
-      // Both checkin and checkout are yyyyMMddHHmm at fixed offsets in the raw SDK card string.
-      // Read them directly from the bytes — no intermediate parsing needed.
+      // Checkin is yyyyMMddHHmm at bytes [15:27].
+      // Checkout is at bytes [27:39] but uses a variant format for months 1–9:
+      //   yyyy + '1' + M + ddHHmm  (M is single digit, no leading zero)
+      // For months 10–12 the format is the standard yyyyMMddHHmm.
+      // Detect by checking whether bytes [4:6] parsed as int exceed 12.
       let checkinFromCard: string | null = null
       let checkoutFromCard: string | null = null
       if (cardData.length >= 39) {
         const ci = cardData.slice(15, 27)
-        const co = cardData.slice(27, 39)
         if (/^\d{12}$/.test(ci)) checkinFromCard = ci
-        if (/^\d{12}$/.test(co)) checkoutFromCard = co
+        const coRaw = cardData.slice(27, 39)
+        if (/^\d{12}$/.test(coRaw)) {
+          const mmInt = parseInt(coRaw.slice(4, 6), 10)
+          if (mmInt > 12) {
+            // Single-digit month: skip the extra byte at index 4, pad month to 2 digits
+            const month = parseInt(coRaw[5]!, 10)
+            checkoutFromCard = `${coRaw.slice(0, 4)}${String(month).padStart(2, '0')}${coRaw.slice(6)}`
+          } else {
+            checkoutFromCard = coRaw
+          }
+        }
       }
       const checkinTime = checkinFromCard ?? pythonCheckin
       const checkoutTime = checkoutFromCard ?? pythonCheckout
