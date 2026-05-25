@@ -752,7 +752,7 @@ function App() {
         return
       }
       setKeyNotice(
-        'Cancel card encoded. Have the guest tap this card on the room lock — all previous keys will be deactivated. Then encode a new key.',
+        `Cancel card encoded for Room ${roomNumber}. A staff member must take this card to the room and tap it on the door lock — this deactivates all old keys. Once staff returns, encode a new key for the guest.`,
       )
     } catch (e) {
       setKeyNotice(`Cancel card error — ${e instanceof Error ? e.message : 'unknown error'}`)
@@ -1474,7 +1474,7 @@ function App() {
                 type="button"
                 className="fdn-btn fdn-btn--danger"
                 disabled={cancelCardBusy || hw.rfid_encoder !== 'connected' || !res?.roomNumber}
-                title="Encode a cancel payload onto an old card. Guest taps lock → all previous keys deactivated."
+                title="Encode a cancel payload onto an old card. Staff takes it to the room and taps the lock — all previous keys deactivated."
                 onClick={() => void onCancelCard()}
               >
                 {cancelCardBusy ? 'Encoding…' : 'Cancel Card'}
