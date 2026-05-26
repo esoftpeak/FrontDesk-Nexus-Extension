@@ -1031,7 +1031,7 @@ function App() {
               ) : null}
 
               <div className="fdn-grid fdn-grid--idguru fdn-grid--dense">
-                <div className="fdn-grid--two-names">
+                <div className="fdn-grid--three-names">
                   <label className="fdn-label">
                     <LabelText required>First name</LabelText>
                     <input
@@ -1041,6 +1041,16 @@ function App() {
                       value={idDetail.firstName ?? ''}
                       onChange={(e) =>
                         setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
+                      }
+                    />
+                  </label>
+                  <label className="fdn-label">
+                    <LabelText>Middle name</LabelText>
+                    <input
+                      className="fdn-input"
+                      value={idDetail.middleName ?? ''}
+                      onChange={(e) =>
+                        setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
                       }
                     />
                   </label>
@@ -1057,32 +1067,6 @@ function App() {
                     />
                   </label>
                 </div>
-                <details
-                  className="fdn-details fdn-details--optional"
-                  open={Boolean(idDetail.middleName?.trim() || emailGuest.trim())}
-                >
-                  <summary>Optional</summary>
-                  <div className="fdn-details__body fdn-grid fdn-grid--dense">
-                    <label className="fdn-label fdn-label--full">
-                      Middle name
-                      <input
-                        className="fdn-input"
-                        value={idDetail.middleName ?? ''}
-                        onChange={(e) =>
-                          setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
-                        }
-                      />
-                    </label>
-                    <label className="fdn-label fdn-label--full">
-                      Email (guest)
-                      <input
-                        className="fdn-input"
-                        value={emailGuest}
-                        onChange={(e) => setEmailGuest(e.target.value)}
-                      />
-                    </label>
-                  </div>
-                </details>
                 <label className="fdn-label fdn-label--full">
                   Street address
                   <input
@@ -1195,6 +1179,10 @@ function App() {
                   ) : null}
                 </div>
                 <label className="fdn-label">
+                  Email (guest)
+                  <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
+                </label>
+                <label className="fdn-label">
                   ID type
                   <select
                     className="fdn-input fdn-select"
@@ -1244,19 +1232,22 @@ function App() {
                   <input
                     className="fdn-input"
                     value={parsed.dateOfBirth ?? ''}
-                    title={idAgeLabel ? `Age: ${idAgeLabel}` : 'Date of birth'}
                     onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
                   />
                 </label>
+                <label className="fdn-label">
+                  Age (from DOB)
+                  <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
+                </label>
+                {lastScanReceivedAt ? (
+                  <span className="fdn-scan-time" title="Last ID scan received">
+                    Scan {formatLocalFromIso(lastScanReceivedAt)}
+                  </span>
+                ) : null}
               </div>
 
               <details className="fdn-details">
-                <summary>
-                  Scan history ({idScanHistory.length})
-                  {lastScanReceivedAt ? (
-                    <span className="fdn-details__meta"> · {formatLocalFromIso(lastScanReceivedAt)}</span>
-                  ) : null}
-                </summary>
+                <summary>Scan history ({idScanHistory.length})</summary>
                 {idScanHistory.length === 0 ? (
                   <p className="fdn-muted">No prior scans for this confirmation.</p>
                 ) : (

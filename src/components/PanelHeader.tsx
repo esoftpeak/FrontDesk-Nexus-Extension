@@ -79,43 +79,42 @@ export function PanelHeader({
             <span className="fdn-header__user fdn-header__user--muted">Not signed in</span>
           )}
         </div>
-        {signedIn ? (
+        <div className="fdn-header__actions" role="group" aria-label="Hardware status">
           <button
             type="button"
-            className="fdn-header__logout"
-            onClick={onLogout}
-            title="Sign out"
-            aria-label="Sign out"
+            className={`fdn-hw-pill ${idOn ? 'fdn-hw-pill--ok' : 'fdn-hw-pill--bad'}`}
+            title={`ID scanner — ${idOn ? 'connected' : 'offline'} · ${idCheckedAgo}`}
+            onClick={onRefreshId}
           >
-            <LogOutIcon />
+            <span className={`fdn-hw-pill__dot ${idOn ? 'fdn-hw-pill__dot--ok' : 'fdn-hw-pill__dot--bad'}`} />
+            <span className="fdn-hw-pill__label">ID</span>
+            <span className="fdn-hw-pill__state">{idOn ? 'on' : 'off'}</span>
+            <span className="fdn-hw-pill__time">{idCheckedAgo}</span>
           </button>
-        ) : null}
-      </div>
-
-      <div className="fdn-header__row fdn-header__row--hw" role="group" aria-label="Hardware status">
-        <button
-          type="button"
-          className={`fdn-hw-pill ${idOn ? 'fdn-hw-pill--ok' : 'fdn-hw-pill--bad'}`}
-          title={`ID scanner — ${idOn ? 'connected' : 'offline'} · ${idCheckedAgo}`}
-          onClick={onRefreshId}
-        >
-          <span className={`fdn-hw-pill__dot ${idOn ? 'fdn-hw-pill__dot--ok' : 'fdn-hw-pill__dot--bad'}`} />
-          <span className="fdn-hw-pill__label">ID</span>
-          <span className="fdn-hw-pill__state">{idOn ? 'on' : 'off'}</span>
-          <span className="fdn-hw-pill__time">{idCheckedAgo}</span>
-        </button>
-        <button
-          type="button"
-          className={`fdn-hw-pill ${keyOn ? 'fdn-hw-pill--ok' : 'fdn-hw-pill--bad'}`}
-          title={`Key encoder — ${keyOn ? 'connected' : 'offline'} · ${keyCheckedAgo}`}
-          disabled={rfidCheckBusy}
-          onClick={onCheckKey}
-        >
-          <span className={`fdn-hw-pill__dot ${keyOn ? 'fdn-hw-pill__dot--ok' : 'fdn-hw-pill__dot--bad'}`} />
-          <span className="fdn-hw-pill__label">Key</span>
-          <span className="fdn-hw-pill__state">{rfidCheckBusy ? '…' : keyOn ? 'on' : 'off'}</span>
-          <span className="fdn-hw-pill__time">{rfidCheckBusy ? 'chk' : keyCheckedAgo}</span>
-        </button>
+          <button
+            type="button"
+            className={`fdn-hw-pill ${keyOn ? 'fdn-hw-pill--ok' : 'fdn-hw-pill--bad'}`}
+            title={`Key encoder — ${keyOn ? 'connected' : 'offline'} · ${keyCheckedAgo}`}
+            disabled={rfidCheckBusy}
+            onClick={onCheckKey}
+          >
+            <span className={`fdn-hw-pill__dot ${keyOn ? 'fdn-hw-pill__dot--ok' : 'fdn-hw-pill__dot--bad'}`} />
+            <span className="fdn-hw-pill__label">Key</span>
+            <span className="fdn-hw-pill__state">{rfidCheckBusy ? '…' : keyOn ? 'on' : 'off'}</span>
+            <span className="fdn-hw-pill__time">{rfidCheckBusy ? 'chk' : keyCheckedAgo}</span>
+          </button>
+          {signedIn ? (
+            <button
+              type="button"
+              className="fdn-header__logout"
+              onClick={onLogout}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOutIcon />
+            </button>
+          ) : null}
+        </div>
       </div>
     </header>
   )
