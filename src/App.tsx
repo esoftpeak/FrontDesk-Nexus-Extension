@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  ExtensionResponse,
   ExtensionState,
   GuestStayHistoryRecord,
   IdScanHistoryRow,
@@ -150,6 +151,7 @@ function App() {
   const [keyCardSerial, setKeyCardSerial] = useState<number>(1)
   const [readCardBusy, setReadCardBusy] = useState(false)
   const [cancelCardBusy, setCancelCardBusy] = useState(false)
+  const [rfidCheckBusy, setRfidCheckBusy] = useState(false)
   const [readCardResult, setReadCardResult] = useState<{
     ok: boolean
     cardData?: string
@@ -761,6 +763,16 @@ function App() {
     }
   }
 
+  async function onCheckRfid() {
+    setRfidCheckBusy(true)
+    try {
+      const resp = (await chrome.runtime.sendMessage({ type: 'RFID_CHECK_CONNECTION' })) as ExtensionResponse
+      if (resp?.ok && 'state' in resp && resp.state) setState(resp.state)
+    } finally {
+      setRfidCheckBusy(false)
+    }
+  }
+
   const toastBanner =
     panelToast != null ? (
       <div
@@ -826,9 +838,19 @@ function App() {
             <span className={hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
             ID scanner · {hw.id_scanner}
           </span>
-          <span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
             RFID · {hw.rfid_encoder}
+            <button
+              type="button"
+              className="fdn-btn fdn-btn--ghost"
+              style={{ fontSize: 10, padding: '1px 6px' }}
+              disabled={rfidCheckBusy}
+              onClick={() => void onCheckRfid()}
+              title="Manually check if the RFID encoder is connected"
+            >
+              {rfidCheckBusy ? '…' : 'Check'}
+            </button>
           </span>
           {state.auth.signedIn && (
             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>

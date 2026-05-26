@@ -157,6 +157,8 @@ export type ExtensionMessage =
    * Then a new key can be encoded normally.
    */
   | { type: 'RFID_DISABLE_CARD'; roomNumber: string }
+  /** Force a real HandShake() check and return updated hardware state. */
+  | { type: 'RFID_CHECK_CONNECTION' }
   /** Look up previous scans by ID number hash to detect returning guests. */
   | { type: 'GET_RETURNING_GUEST_HISTORY'; idNumber: string }
   /** Look up prior stays / ID profiles by phone number hash. */

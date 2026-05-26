@@ -57,7 +57,6 @@ let supabase: SupabaseClient | null = null
 let rfidConnected: 'connected' | 'disconnected' = 'disconnected'
 let rfidError: string | null = null
 let rfidStatusCheckedAt = 0
-const RFID_STATUS_TTL_MS = 5_000
 
 function handleRfidStatus(connected: boolean, error: string | null): void {
   const next = connected ? 'connected' : 'disconnected'
@@ -727,10 +726,10 @@ async function buildHardwareStatus(): Promise<ExtensionState['hardware']> {
     idScanner = 'disconnected'
   }
 
-  // Refresh RFID status when the cache is stale. Fire-and-forget: the response
-  // comes back asynchronously via handleRfidStatus → next GET_STATE reflects it.
-  if (Date.now() - rfidStatusCheckedAt > RFID_STATUS_TTL_MS) {
-    rfidStatusCheckedAt = Date.now() // mark checked now to prevent concurrent pings
+  // Check once on startup only (rfidStatusCheckedAt === 0).
+  // After that, status only updates via RFID_CHECK_CONNECTION (manual button).
+  if (rfidStatusCheckedAt === 0) {
+    rfidStatusCheckedAt = Date.now()
     sendNativeMessage({ type: 'RFID_HANDSHAKE' })
   }
 
@@ -2162,6 +2161,17 @@ async function handleMessage(
       const message = e instanceof Error ? e.message : 'Cancel card encode failed'
       return { ok: false, error: message }
     }
+  }
+
+  if (msg.type === 'RFID_CHECK_CONNECTION') {
+    try {
+      const raw = await sendNativeRequest({ type: 'RFID_HANDSHAKE' })
+      handleRfidStatus(!!raw.connected, raw.error ? String(raw.error) : null)
+      rfidStatusCheckedAt = Date.now()
+    } catch (e) {
+      handleRfidStatus(false, e instanceof Error ? e.message : 'Check failed')
+    }
+    return { ok: true, state: await getState() }
   }
 
   return { ok: false, error: 'Unknown message type' }
