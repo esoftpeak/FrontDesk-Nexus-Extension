@@ -152,6 +152,8 @@ function App() {
   const [readCardBusy, setReadCardBusy] = useState(false)
   const [cancelCardBusy, setCancelCardBusy] = useState(false)
   const [rfidCheckBusy, setRfidCheckBusy] = useState(false)
+  const [rfidLastCheckedAt, setRfidLastCheckedAt] = useState<number | null>(null)
+  const [, setRfidTick] = useState(0)
   const [readCardResult, setReadCardResult] = useState<{
     ok: boolean
     cardData?: string
@@ -763,11 +765,27 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    const t = setInterval(() => setRfidTick(n => n + 1), 15_000)
+    return () => clearInterval(t)
+  }, [])
+
+  function rfidCheckedAgo(): string {
+    if (rfidLastCheckedAt === null) return ''
+    const s = Math.floor((Date.now() - rfidLastCheckedAt) / 1000)
+    if (s < 10) return 'just now'
+    if (s < 60) return `${s}s ago`
+    const m = Math.floor(s / 60)
+    if (m < 60) return `${m}m ago`
+    return `${Math.floor(m / 60)}h ago`
+  }
+
   async function onCheckRfid() {
     setRfidCheckBusy(true)
     try {
       const resp = (await chrome.runtime.sendMessage({ type: 'RFID_CHECK_CONNECTION' })) as ExtensionResponse
       if (resp?.ok && 'state' in resp && resp.state) setState(resp.state)
+      setRfidLastCheckedAt(Date.now())
     } finally {
       setRfidCheckBusy(false)
     }
@@ -851,6 +869,9 @@ function App() {
             >
               {rfidCheckBusy ? '…' : 'Check'}
             </button>
+            {!rfidCheckBusy && rfidLastCheckedAt !== null && (
+              <span style={{ color: '#6e7681', fontSize: 10 }}>{rfidCheckedAgo()}</span>
+            )}
           </span>
           {state.auth.signedIn && (
             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
