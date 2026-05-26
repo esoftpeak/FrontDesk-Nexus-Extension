@@ -744,30 +744,40 @@ function App() {
     }
   }
 
-  async function onCancelCard() {
+  async function onLostKey() {
     const roomNumber = res?.roomNumber
     if (!roomNumber) {
       setKeyNotice('Load a reservation first to use Lost Key.')
       return
     }
+    if (!res?.checkOutDate) {
+      setKeyNotice('Reservation check-out date is required for Lost Key.')
+      return
+    }
+    if (!window.confirm('This will invalidate the existing key. Continue?')) return
+
     setCancelCardBusy(true)
     setKeyNotice(null)
     try {
       const result = (await chrome.runtime.sendMessage({
-        type: 'RFID_DISABLE_CARD',
+        type: 'RFID_MAKE_LOST_KEY',
         roomNumber,
-      })) as { ok: boolean; error?: string } | undefined
+        checkoutTime: res.checkOutDate,
+      })) as { ok: boolean; error?: string; dbWarning?: string; newCheckinTime?: string; state?: ExtensionState } | undefined
       if (!result) {
-        setKeyNotice('Lost key card failed — no response from encoder.')
+        setKeyNotice('Lost key failed — no response from encoder.')
         return
       }
       if (!result.ok) {
-        setKeyNotice(`Lost key card failed — ${result.error ?? 'unknown error'}`)
+        setKeyNotice(`Lost key failed — ${result.error ?? 'unknown error'}`)
         return
       }
-      setKeyNotice(
-        `Lost key card ready for Room ${roomNumber}. Step 1: Staff takes this card to the room and taps the door lock — all old keys are deactivated. Step 2: Once staff returns, use Encode Key to issue a new card to the guest.`,
-      )
+      if (result.state) setState(result.state)
+      void refreshKeyHistory()
+      const notice = result.dbWarning
+        ? `Lost key encoded. Warning: ${result.dbWarning}`
+        : `Lost key replacement ready for Room ${roomNumber}. Give card to guest — when they tap the lock, the old key is automatically deactivated.`
+      setKeyNotice(notice)
     } catch (e) {
       setKeyNotice(`Lost key error — ${e instanceof Error ? e.message : 'unknown error'}`)
     } finally {
@@ -1422,8 +1432,8 @@ function App() {
                       type="button"
                       className="fdn-btn fdn-btn--danger"
                       disabled={cancelCardBusy || hw.rfid_encoder !== 'connected' || !res?.roomNumber}
-                      title="Lost key: encodes a disable card onto a blank card. Staff takes it to the room and taps the lock — all old keys deactivated. Then encode a new key for the guest."
-                      onClick={() => void onCancelCard()}
+                      title="Lost key: encodes a new guest card with a fresh check-in time. When guest taps door, lock automatically invalidates the old key."
+                      onClick={() => void onLostKey()}
                     >
                       {cancelCardBusy ? 'Encoding…' : 'Lost Key'}
                     </button>

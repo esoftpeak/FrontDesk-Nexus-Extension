@@ -156,7 +156,12 @@ export type ExtensionMessage =
    * The guest taps the card on their room lock — the lock deactivates all previous keys.
    * Then a new key can be encoded normally.
    */
-  | { type: 'RFID_DISABLE_CARD'; roomNumber: string }
+  /**
+   * Lost key replacement: encode a new guest card [00] with serial 1 and a fresh check-in time.
+   * When the guest taps the new card at the door, the lock automatically invalidates the old key.
+   * No disable card needed.
+   */
+  | { type: 'RFID_MAKE_LOST_KEY'; roomNumber: string; checkoutTime: string }
   /** Force a real HandShake() check and return updated hardware state. */
   | { type: 'RFID_CHECK_CONNECTION' }
   /** Look up previous scans by ID number hash to detect returning guests. */

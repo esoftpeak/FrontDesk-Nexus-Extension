@@ -2168,18 +2168,86 @@ async function handleMessage(
     }
   }
 
-  if (msg.type === 'RFID_DISABLE_CARD') {
+  if (msg.type === 'RFID_MAKE_LOST_KEY') {
+    const client = getClient()
     try {
       const raw = await sendNativeRequest({
-        type: 'RFID_DISABLE_CARD',
+        type: 'RFID_MAKE_LOST_KEY',
         room_number: msg.roomNumber,
+        checkout_time: toSdkDatetimeHotel(msg.checkoutTime, 12),
       })
+
       if (!raw.success) {
-        return { ok: false, error: String(raw.error ?? 'Cancel card encode failed') }
+        return { ok: false, error: String(raw.error ?? 'Lost key encoding failed') }
       }
-      return { ok: true }
+
+      const { data: sess } = await client.auth.getSession()
+      const user = sess.session?.user ?? null
+      const terminalId = await ensureTerminal(client)
+      const conf = reservation?.confirmationNumber ?? null
+      let dbWarning: string | null = null
+
+      const newCheckinTime = typeof raw.new_checkin_time === 'string' ? raw.new_checkin_time : String(raw.new_checkin_time ?? '')
+      const dbCheckoutTime = keyHistoryTimeForDb(raw.checkout_time, msg.checkoutTime, 12)
+
+      if (user && conf) {
+        const { error: khErr } = await client.from('key_history').insert({
+          confirmation_number: conf,
+          room_number: msg.roomNumber,
+          card_serial: 1,
+          checkin_time: newCheckinTime,
+          checkout_time: dbCheckoutTime,
+          encoded_by: user.id,
+          encoded_by_username: user.email ?? null,
+          terminal_id: terminalId,
+        })
+        if (khErr) {
+          console.error('[FDN SW] key_history insert (lost key) failed:', khErr.message)
+          dbWarning = `Lost key encoded but DB record failed: ${khErr.message}`
+        }
+
+        await client
+          .from('audit_log')
+          .insert({
+            user_id: user.id,
+            username: user.email,
+            user_role: cachedRole,
+            terminal_id: terminalId,
+            action_type: 'KEY_ENCODED',
+            confirmation_number: conf,
+            description: `Lost key replacement encoded — room ${msg.roomNumber}, serial 1`,
+            new_value: { room_number: msg.roomNumber, card_serial: 1, return_msg: raw.return_msg, lost_key_replacement: true },
+          })
+          .then(({ error }) => {
+            if (error) console.error('[FDN SW] audit_log (lost_key) failed:', error.message)
+          })
+      } else if (!user) {
+        dbWarning = 'Lost key encoded but extension is not signed in — key_history not saved.'
+      } else if (!conf) {
+        dbWarning = 'Lost key encoded but no confirmation — key_history not saved.'
+      }
+
+      if (dbWarning) {
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon.png',
+          title: 'Lost Key Encoded — DB Warning',
+          message: `Room ${msg.roomNumber}\n${dbWarning}`,
+          priority: 2,
+        })
+      } else {
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon.png',
+          title: 'Lost Key Replacement Encoded',
+          message: `Room ${msg.roomNumber} — tap door to invalidate old key. Conf: ${conf ?? '—'}`,
+          priority: 1,
+        })
+      }
+
+      return { ok: true, newCheckinTime, dbWarning: dbWarning ?? undefined, state: await getState() }
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Cancel card encode failed'
+      const message = e instanceof Error ? e.message : 'Lost key encoding failed'
       return { ok: false, error: message }
     }
   }
