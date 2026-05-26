@@ -2,6 +2,13 @@
  * Override Vite template #root (index.css uses width:1126px + centered text) so the
  * Chrome side panel stays narrow without horizontal overflow.
  */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 #root {
   width: 100% !important;
   max-width: 100%;
@@ -339,7 +346,7 @@
 }
 
 .fdn-header__row--hw {
-  padding-left: 40px;
+  padding-left: 0;
   gap: 6px;
   flex-wrap: wrap;
 }
@@ -388,20 +395,6 @@
   margin: 0 3px;
   color: #484f58;
   font-weight: 400;
-}
-
-.fdn-header__stay {
-  font-size: 10px;
-  font-family: ui-monospace, 'Cascadia Code', monospace;
-  color: #79c0ff;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.fdn-header__stay--empty {
-  color: #6e7681;
-  font-family: inherit;
 }
 
 .fdn-header__logout {
@@ -516,6 +509,11 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overscroll-behavior: contain;
+}
+
+.fdn-panel--id {
+  gap: 4px;
 }
 
 .fdn-panel__toolbar {
@@ -559,10 +557,14 @@
   color: #e3b341;
 }
 
-.fdn-scan-time {
-  grid-column: 1 / -1;
-  font-size: 10px;
+.fdn-tag--ocr {
+  font-size: 8px;
+  line-height: 1.2;
+  padding: 0 4px;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  text-transform: lowercase;
   color: #6e7681;
+  letter-spacing: 0;
 }
 
 .fdn-details {
@@ -574,6 +576,24 @@
   cursor: pointer;
   color: #8b949e;
   user-select: none;
+}
+
+.fdn-details__meta {
+  font-weight: 400;
+  color: #6e7681;
+}
+
+.fdn-details--optional {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.fdn-details--optional summary {
+  font-size: 10px;
+}
+
+.fdn-details__body {
+  margin-top: 4px;
 }
 
 .fdn-steps {
@@ -621,13 +641,13 @@
 }
 
 .fdn-id-preview--compact .fdn-id-preview__main {
-  max-height: 118px;
-  min-height: 96px;
+  max-height: 84px;
+  min-height: 72px;
 }
 
 .fdn-id-preview--compact .fdn-id-preview__img {
-  max-height: 118px;
-  min-height: 88px;
+  max-height: 84px;
+  min-height: 68px;
 }
 
 .fdn-id-preview--compact .fdn-id-preview__side {
@@ -1131,6 +1151,10 @@
   background: #30363d;
 }
 
+.fdn-panel--id .fdn-grid--idguru {
+  margin-top: 4px;
+}
+
 .fdn-grid--idguru {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1142,26 +1166,34 @@
   box-sizing: border-box;
 }
 
+.fdn-grid--two-names,
 .fdn-grid--three-names {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
 }
 
+.fdn-grid--three-names {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.fdn-grid--two-names > .fdn-label,
 .fdn-grid--three-names > .fdn-label {
   min-width: 0;
   width: 100%;
 }
 
+.fdn-grid--two-names .fdn-label__text,
 .fdn-grid--three-names .fdn-label__text {
   width: 100%;
 }
 
+.fdn-grid--two-names .fdn-input,
 .fdn-grid--three-names .fdn-input {
   min-width: 0;
   width: 100%;
@@ -1170,6 +1202,7 @@
 }
 
 @media (max-width: 420px) {
+  .fdn-grid--two-names,
   .fdn-grid--three-names {
     grid-template-columns: 1fr;
   }

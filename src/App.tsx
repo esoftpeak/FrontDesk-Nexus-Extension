@@ -40,6 +40,11 @@ function formatRoleLabel(role: string | null | undefined): string {
   return r.charAt(0).toUpperCase() + r.slice(1).toLowerCase()
 }
 
+function ocrProviderShortLabel(provider: string): string {
+  if (provider === 'native_host') return 'scan'
+  return provider.length > 8 ? `${provider.slice(0, 7)}…` : provider
+}
+
 function accountDisplayName(email: string | null | undefined): string {
   if (!email?.trim()) return 'Signed in'
   const local = email.split('@')[0]?.trim()
@@ -202,6 +207,7 @@ function App() {
   const lastPhoneLookupRef = useRef<string | null>(null)
   const guestFormEmptyRef = useRef(true)
   const lastLoadedConfRef = useRef<string | null>(null)
+  const idPanelRef = useRef<HTMLElement>(null)
   type WorkspaceTab = 'id' | 'payment' | 'signature' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
 
@@ -268,6 +274,11 @@ function App() {
     setReadCardResult(null)
     if (state?.reservation?.roomNumber) setActiveTab('key')
   }, [state?.reservation?.confirmationNumber, state?.reservation?.roomNumber])
+
+  useEffect(() => {
+    if (activeTab !== 'id') return
+    idPanelRef.current?.scrollTo({ top: 0 })
+  }, [activeTab, scanImages, lastScanReceivedAt])
 
   function clearIdScan() {
     setParsed(emptyParsed)
@@ -804,7 +815,6 @@ function App() {
   const keyCheckedAgo = formatCheckedAgo(hwChecked?.rfid_encoder)
   const idAgeLabel = ageLabelFromDobString(parsed.dateOfBirth)
   const pmsLabel = res?.pms === 'ezee' ? 'eZee' : res?.pms === 'synxis' ? 'SynXis' : 'PMS'
-  const confLine = res?.confirmationNumber ?? guest?.pmsConfirmationCode ?? ezee?.reservationNumber ?? null
   const idTabReady = Boolean(idDetail.firstName?.trim() && idDetail.lastName?.trim() && phone.trim())
   const transferDisabled = busy || !state.auth.signedIn || !idTabReady
 
@@ -862,8 +872,6 @@ function App() {
           state.auth.signedIn ? accountDisplayName(state.auth.email) : 'Guest'
         }
         roleLabel={formatRoleLabel(state.auth.role)}
-        confLine={confLine}
-        roomNumber={res?.roomNumber ?? null}
         idScanner={hw.id_scanner}
         rfidEncoder={hw.rfid_encoder}
         idCheckedAgo={idCheckedAgo}
@@ -935,7 +943,7 @@ function App() {
 
         <main className="fdn-main">
           {activeTab === 'id' ? (
-            <section className="fdn-panel fdn-panel--id">
+            <section ref={idPanelRef} className="fdn-panel fdn-panel--id">
               {formError ? (
                 <p className="fdn-form-error" role="alert">
                   {formError}
@@ -952,7 +960,9 @@ function App() {
                 </label>
                 {managerOverride ? <span className="fdn-tag fdn-tag--warn">Mgr override</span> : null}
                 {!manualEntry && lastOcrProvider ? (
-                  <span className="fdn-tag">{lastOcrProvider}</span>
+                  <span className="fdn-tag fdn-tag--ocr" title={`OCR source: ${lastOcrProvider}`}>
+                    {ocrProviderShortLabel(lastOcrProvider)}
+                  </span>
                 ) : null}
                 {!manualEntry && scanPreviewUrls ? (
                   <div className="fdn-id-preview__tools-inline" aria-label="Adjust image orientation">
@@ -1021,7 +1031,7 @@ function App() {
               ) : null}
 
               <div className="fdn-grid fdn-grid--idguru fdn-grid--dense">
-                <div className="fdn-grid--three-names">
+                <div className="fdn-grid--two-names">
                   <label className="fdn-label">
                     <LabelText required>First name</LabelText>
                     <input
@@ -1031,16 +1041,6 @@ function App() {
                       value={idDetail.firstName ?? ''}
                       onChange={(e) =>
                         setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
-                      }
-                    />
-                  </label>
-                  <label className="fdn-label">
-                    <LabelText>Middle name</LabelText>
-                    <input
-                      className="fdn-input"
-                      value={idDetail.middleName ?? ''}
-                      onChange={(e) =>
-                        setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
                       }
                     />
                   </label>
@@ -1057,6 +1057,32 @@ function App() {
                     />
                   </label>
                 </div>
+                <details
+                  className="fdn-details fdn-details--optional"
+                  open={Boolean(idDetail.middleName?.trim() || emailGuest.trim())}
+                >
+                  <summary>Optional</summary>
+                  <div className="fdn-details__body fdn-grid fdn-grid--dense">
+                    <label className="fdn-label fdn-label--full">
+                      Middle name
+                      <input
+                        className="fdn-input"
+                        value={idDetail.middleName ?? ''}
+                        onChange={(e) =>
+                          setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
+                        }
+                      />
+                    </label>
+                    <label className="fdn-label fdn-label--full">
+                      Email (guest)
+                      <input
+                        className="fdn-input"
+                        value={emailGuest}
+                        onChange={(e) => setEmailGuest(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </details>
                 <label className="fdn-label fdn-label--full">
                   Street address
                   <input
@@ -1169,10 +1195,6 @@ function App() {
                   ) : null}
                 </div>
                 <label className="fdn-label">
-                  Email (guest)
-                  <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
-                </label>
-                <label className="fdn-label">
                   ID type
                   <select
                     className="fdn-input fdn-select"
@@ -1222,22 +1244,19 @@ function App() {
                   <input
                     className="fdn-input"
                     value={parsed.dateOfBirth ?? ''}
+                    title={idAgeLabel ? `Age: ${idAgeLabel}` : 'Date of birth'}
                     onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
                   />
                 </label>
-                <label className="fdn-label">
-                  Age (from DOB)
-                  <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
-                </label>
-                {lastScanReceivedAt ? (
-                  <span className="fdn-scan-time" title="Last ID scan received">
-                    Scan {formatLocalFromIso(lastScanReceivedAt)}
-                  </span>
-                ) : null}
               </div>
 
               <details className="fdn-details">
-                <summary>Scan history ({idScanHistory.length})</summary>
+                <summary>
+                  Scan history ({idScanHistory.length})
+                  {lastScanReceivedAt ? (
+                    <span className="fdn-details__meta"> · {formatLocalFromIso(lastScanReceivedAt)}</span>
+                  ) : null}
+                </summary>
                 {idScanHistory.length === 0 ? (
                   <p className="fdn-muted">No prior scans for this confirmation.</p>
                 ) : (

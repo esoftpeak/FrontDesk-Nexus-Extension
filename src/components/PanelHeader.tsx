@@ -6,8 +6,6 @@ type Props = {
   role: string | null
   displayName: string
   roleLabel: string
-  confLine: string | null
-  roomNumber: string | null
   idScanner: 'connected' | 'disconnected'
   rfidEncoder: 'connected' | 'disconnected'
   idCheckedAgo: string
@@ -45,8 +43,6 @@ export function PanelHeader({
   role,
   displayName,
   roleLabel,
-  confLine,
-  roomNumber,
   idScanner,
   rfidEncoder,
   idCheckedAgo,
@@ -82,12 +78,6 @@ export function PanelHeader({
           ) : (
             <span className="fdn-header__user fdn-header__user--muted">Not signed in</span>
           )}
-          <span className="fdn-header__stay">
-            {confLine ? <span>#{confLine}</span> : null}
-            {confLine && roomNumber ? <span className="fdn-header__sep">·</span> : null}
-            {roomNumber ? <span>Rm {roomNumber}</span> : null}
-            {!confLine && !roomNumber ? <span className="fdn-header__stay--empty">No stay</span> : null}
-          </span>
         </div>
         {signedIn ? (
           <button
