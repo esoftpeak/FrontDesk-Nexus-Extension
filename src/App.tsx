@@ -992,14 +992,6 @@ function App() {
         <main className="fdn-main">
           {notice ? <div className="fdn-banner fdn-banner--info fdn-main__notice">{notice}</div> : null}
 
-          {res?.confirmationNumber ? (
-            <GuestStaySummary res={res} guest={guest} ezee={ezee} pmsLabel={pmsLabel} />
-          ) : (
-            <p className="fdn-stay-summary__empty">
-              Open a guest in {pmsLabel} and tap <strong>Sync {pmsLabel}</strong> to load stay details.
-            </p>
-          )}
-
           {activeTab === 'id' ? (
             <section className="fdn-panel fdn-panel--id">
               <div className="fdn-panel__toolbar">
@@ -1381,7 +1373,7 @@ function App() {
 
           {activeTab === 'payment' ? (
             <section className="fdn-panel fdn-panel--payment">
-              <p className="fdn-panel__lead">Folio totals are in the stay summary above.</p>
+              <p className="fdn-panel__lead">Folio and stay details are on the Key tab after you sync a guest.</p>
               <p className="fdn-help">Card capture and payment posting will live here in a future release.</p>
             </section>
           ) : null}
@@ -1399,6 +1391,14 @@ function App() {
 
           {activeTab === 'key' ? (
             <section className="fdn-panel fdn-panel--key">
+              {res?.confirmationNumber ? (
+                <GuestStaySummary res={res} guest={guest} ezee={ezee} pmsLabel={pmsLabel} />
+              ) : (
+                <p className="fdn-stay-summary__empty">
+                  Open a guest in {pmsLabel} and tap <strong>Sync {pmsLabel}</strong> to load stay details.
+                </p>
+              )}
+
               <h2 className="fdn-h2">Key encoder</h2>
 
         {hw.rfid_encoder !== 'connected' && (
