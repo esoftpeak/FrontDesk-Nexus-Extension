@@ -19,8 +19,37 @@ import { isCompletePhoneForLookup } from './lib/phone-lookup'
 import { formatHotelDateTime } from './lib/hotel-dates'
 import { GuestStaySummary } from './components/GuestStaySummary'
 import { LoadingScreen } from './components/LoadingScreen'
-import { ExtensionLogo } from './components/ExtensionLogo'
+import { PanelHeader } from './components/PanelHeader'
 import { IconArrowLeft, IconId, IconKey, IconPayment, IconSignature } from './components/WorkspaceIcons'
+
+function formatCheckedAgo(ms: number | null | undefined): string {
+  if (!ms || ms <= 0) return 'not checked'
+  const s = Math.floor((Date.now() - ms) / 1000)
+  if (s < 10) return 'just now'
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+function formatRoleLabel(role: string | null | undefined): string {
+  if (!role?.trim()) return 'Staff'
+  const r = role.trim()
+  return r.charAt(0).toUpperCase() + r.slice(1).toLowerCase()
+}
+
+function accountDisplayName(email: string | null | undefined): string {
+  if (!email?.trim()) return 'Signed in'
+  const local = email.split('@')[0]?.trim()
+  if (!local) return email
+  return local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .join(' ')
+}
 
 function showChromeNotification(title: string, message: string) {
   void chrome.notifications.create({
@@ -562,23 +591,23 @@ function App() {
             await chrome.tabs.sendMessage(tabId, {
               type: 'FDN_FILL_GUEST_FORM',
               payload: {
-                first_name:   detailForSave.firstName   ?? null,
-                middle_name:  detailForSave.middleName  ?? null,
-                last_name:    detailForSave.lastName     ?? null,
-                address:      detailForSave.streetAddress ?? null,
-                city:         detailForSave.city         ?? null,
-                state:        detailForSave.state        ?? null,
-                postal_code:  detailForSave.postalCode   ?? null,
-                phone:        phone.trim() || null,
-                email:        emailGuest.trim() || null,
-                gender:       (typeof docData.gender === 'string' ? docData.gender
-                               : typeof (docData as Record<string,unknown>).sex === 'string'
-                                 ? (docData as Record<string,unknown>).sex as string
-                               : null),
-                dob:           mergedParsed.dateOfBirth ?? null,
-                id_number:     mergedParsed.idNumber ?? null,
-                expiry_date:   mergedParsed.expiryDate ?? null,
-                issue_date:    mergedParsed.issueDate ?? null,
+                first_name: detailForSave.firstName ?? null,
+                middle_name: detailForSave.middleName ?? null,
+                last_name: detailForSave.lastName ?? null,
+                address: detailForSave.streetAddress ?? null,
+                city: detailForSave.city ?? null,
+                state: detailForSave.state ?? null,
+                postal_code: detailForSave.postalCode ?? null,
+                phone: phone.trim() || null,
+                email: emailGuest.trim() || null,
+                gender: (typeof docData.gender === 'string' ? docData.gender
+                  : typeof (docData as Record<string, unknown>).sex === 'string'
+                    ? (docData as Record<string, unknown>).sex as string
+                    : null),
+                dob: mergedParsed.dateOfBirth ?? null,
+                id_number: mergedParsed.idNumber ?? null,
+                expiry_date: mergedParsed.expiryDate ?? null,
+                issue_date: mergedParsed.issueDate ?? null,
                 document_type: mergedParsed.idType ?? null,
               },
             })
@@ -618,44 +647,6 @@ function App() {
     }
   }
 
-
-  async function onGetGuestData() {
-    setBusy(true)
-    setFormError(null)
-    try {
-      const res = (await chrome.runtime.sendMessage({
-        type: 'LOAD_SYNXIS_RESERVATION',
-      })) as { ok: boolean; error?: string; state?: ExtensionState; message?: string }
-      if (!res.ok) {
-        showChromeNotification('FrontDesk Nexus', res.error ?? 'Could not load reservation.')
-        return
-      }
-      if (res.state) setState(res.state)
-      if (res.message) showChromeNotification('FrontDesk Nexus', res.message)
-      void refresh()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onGetEzeeGuestData() {
-    setBusy(true)
-    setFormError(null)
-    try {
-      const res = (await chrome.runtime.sendMessage({
-        type: 'LOAD_EZEE_RESERVATION',
-      })) as { ok: boolean; error?: string; state?: ExtensionState; message?: string }
-      if (!res.ok) {
-        showChromeNotification('FrontDesk Nexus', res.error ?? 'Could not load eZee reservation.')
-        return
-      }
-      if (res.state) setState(res.state)
-      if (res.message) showChromeNotification('FrontDesk Nexus', res.message)
-      void refresh()
-    } finally {
-      setBusy(false)
-    }
-  }
 
   /** Encode one key (portal: IN time = encode moment; checkout from stay). */
   async function runEncodeKey(serial: number): Promise<boolean> {
@@ -808,6 +799,9 @@ function App() {
   const guest = state.synxisGuestDisplay
   const ezee = state.ezeeGuestDisplay
   const hw = state.hardware
+  const hwChecked = state.hardwareCheckedAt
+  const idCheckedAgo = formatCheckedAgo(hwChecked?.id_scanner)
+  const keyCheckedAgo = formatCheckedAgo(hwChecked?.rfid_encoder)
   const idAgeLabel = ageLabelFromDobString(parsed.dateOfBirth)
   const pmsLabel = res?.pms === 'ezee' ? 'eZee' : res?.pms === 'synxis' ? 'SynXis' : 'PMS'
   const confLine = res?.confirmationNumber ?? guest?.pmsConfirmationCode ?? ezee?.reservationNumber ?? null
@@ -827,100 +821,58 @@ function App() {
     status: 'ready' | 'idle' | 'warn'
     Icon: typeof IconId
   }[] = [
-    {
-      id: 'id',
-      label: 'ID',
-      hint: 'Guest ID scan & details',
-      status: scanImages || manualEntry || idTabReady ? 'ready' : 'idle',
-      Icon: IconId,
-    },
-    {
-      id: 'payment',
-      label: 'Payment',
-      hint: 'Folio & balance',
-      status: res?.dueAmount || ezee?.balance ? 'ready' : 'idle',
-      Icon: IconPayment,
-    },
-    {
-      id: 'signature',
-      label: 'Signature',
-      hint: 'Registration card signature',
-      status: 'idle',
-      Icon: IconSignature,
-    },
-    {
-      id: 'key',
-      label: 'Key',
-      hint: 'Encode room keys',
-      status:
-        hw.rfid_encoder !== 'connected' ? 'warn' : keyHistory.length > 0 ? 'ready' : res?.roomNumber ? 'idle' : 'warn',
-      Icon: IconKey,
-    },
-  ]
+      {
+        id: 'id',
+        label: 'ID',
+        hint: 'Guest ID scan & details',
+        status: scanImages || manualEntry || idTabReady ? 'ready' : 'idle',
+        Icon: IconId,
+      },
+      {
+        id: 'payment',
+        label: 'Payment',
+        hint: 'Folio & balance',
+        status: res?.dueAmount || ezee?.balance ? 'ready' : 'idle',
+        Icon: IconPayment,
+      },
+      {
+        id: 'signature',
+        label: 'Signature',
+        hint: 'Registration card signature',
+        status: 'idle',
+        Icon: IconSignature,
+      },
+      {
+        id: 'key',
+        label: 'Key',
+        hint: 'Encode room keys',
+        status:
+          hw.rfid_encoder !== 'connected' ? 'warn' : keyHistory.length > 0 ? 'ready' : res?.roomNumber ? 'idle' : 'warn',
+        Icon: IconKey,
+      },
+    ]
 
   return (
     <div className="fdn-root">
-      <header className="fdn-topbar">
-        <ExtensionLogo />
-        <div className="fdn-topbar__actions">
-          {confLine ? (
-            <span className="fdn-topbar__pill" title="Confirmation">
-              #{confLine}
-            </span>
-          ) : null}
-          {res?.roomNumber ? (
-            <span className="fdn-topbar__pill" title="Room">
-              Rm {res.roomNumber}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--primary fdn-btn--top"
-            disabled={busy}
-            onClick={() => void (res?.pms === 'ezee' ? onGetEzeeGuestData() : onGetGuestData())}
-            title="Load guest from the active PMS tab"
-          >
-            Sync {pmsLabel}
-          </button>
-          <button
-            type="button"
-            className={`fdn-hw-chip ${hw.id_scanner === 'connected' ? 'fdn-hw-chip--ok' : 'fdn-hw-chip--bad'}`}
-            title={`ID scanner: ${hw.id_scanner}`}
-            onClick={() => void refresh()}
-          >
-            <span
-              className={
-                hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'
-              }
-            />
-            ID
-          </button>
-          <button
-            type="button"
-            className={`fdn-hw-chip ${hw.rfid_encoder === 'connected' ? 'fdn-hw-chip--ok' : 'fdn-hw-chip--bad'}`}
-            title={`RFID encoder: ${hw.rfid_encoder}`}
-            disabled={rfidCheckBusy}
-            onClick={() => void onCheckRfid()}
-          >
-            <span
-              className={
-                hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'
-              }
-            />
-            Key
-          </button>
-          {state.auth.signedIn ? (
-            <button
-              type="button"
-              className="fdn-btn fdn-btn--ghost fdn-btn--top"
-              onClick={() => void onLogout()}
-              title="Sign out"
-            >
-              Out
-            </button>
-          ) : null}
-        </div>
-      </header>
+      <PanelHeader
+        signedIn={state.auth.signedIn}
+        email={state.auth.email}
+        role={state.auth.role}
+        displayName={
+          state.auth.signedIn ? accountDisplayName(state.auth.email) : 'Guest'
+        }
+        roleLabel={formatRoleLabel(state.auth.role)}
+        confLine={confLine}
+        roomNumber={res?.roomNumber ?? null}
+        idScanner={hw.id_scanner}
+        rfidEncoder={hw.rfid_encoder}
+        idCheckedAgo={idCheckedAgo}
+        keyCheckedAgo={keyCheckedAgo}
+        rfidCheckBusy={rfidCheckBusy}
+        onLogout={() => void onLogout()}
+        onRefreshId={() => void refresh()}
+        onCheckKey={() => void onCheckRfid()}
+      />
 
       {!state.auth.signedIn && (
         <section className="fdn-card fdn-card--compact">
@@ -1037,267 +989,251 @@ function App() {
 
               {!manualEntry && scanPreviewUrls ? (
                 <div className="fdn-id-preview fdn-id-preview--dual fdn-id-preview--compact">
-            <div className="fdn-id-preview__pair">
-              <div className="fdn-id-preview__cell">
-                <p className="fdn-id-preview__side">Front</p>
-                <div className="fdn-id-preview__main">
-                  <img
-                    className="fdn-id-preview__img"
-                    src={scanPreviewUrls.front}
-                    alt="ID front"
-                    style={{
-                      transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
-                    }}
-                  />
+                  <div className="fdn-id-preview__pair">
+                    <div className="fdn-id-preview__cell">
+                      <p className="fdn-id-preview__side">Front</p>
+                      <div className="fdn-id-preview__main">
+                        <img
+                          className="fdn-id-preview__img"
+                          src={scanPreviewUrls.front}
+                          alt="ID front"
+                          style={{
+                            transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="fdn-id-preview__cell">
+                      <p className="fdn-id-preview__side">Back</p>
+                      <div className="fdn-id-preview__main">
+                        <img
+                          className="fdn-id-preview__img"
+                          src={scanPreviewUrls.back}
+                          alt="ID back"
+                          style={{
+                            transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div className="fdn-id-preview__cell">
-                <p className="fdn-id-preview__side">Back</p>
-                <div className="fdn-id-preview__main">
-                  <img
-                    className="fdn-id-preview__img"
-                    src={scanPreviewUrls.back}
-                    alt="ID back"
-                    style={{
-                      transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
               ) : null}
 
               <div className="fdn-grid fdn-grid--idguru fdn-grid--dense">
-          <div className="fdn-grid--three-names">
-            <label className="fdn-label">
-              <LabelText required>First name</LabelText>
-              <input
-                required
-                aria-required="true"
-                className="fdn-input"
-                value={idDetail.firstName ?? ''}
-                onChange={(e) =>
-                  setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
-                }
-              />
-            </label>
-            <label className="fdn-label">
-              <LabelText>Middle name</LabelText>
-              <input
-                className="fdn-input"
-                value={idDetail.middleName ?? ''}
-                onChange={(e) =>
-                  setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
-                }
-              />
-            </label>
-            <label className="fdn-label">
-              <LabelText required>Last name</LabelText>
-              <input
-                className="fdn-input"
-                required
-                aria-required="true"
-                value={idDetail.lastName ?? ''}
-                onChange={(e) =>
-                  setIdDetail((d) => ({ ...d, lastName: e.target.value.trim() || null }))
-                }
-              />
-            </label>
-          </div>
-          <label className="fdn-label fdn-label--full">
-            Street address
-            <input
-              className="fdn-input"
-              value={idDetail.streetAddress ?? ''}
-              onChange={(e) =>
-                setIdDetail((d) => ({ ...d, streetAddress: e.target.value.trim() || null }))
-              }
-            />
-          </label>
-          <label className="fdn-label">
-            City
-            <input
-              className="fdn-input"
-              value={idDetail.city ?? ''}
-              onChange={(e) => {
-                cancelZipLookup()
-                lastZipLookupRef.current = null
-                setIdDetail((d) => ({ ...d, city: e.target.value.trim() || null }))
-              }}
-            />
-          </label>
-          <label className="fdn-label">
-            State
-            <select
-              className="fdn-input fdn-select"
-              value={normalizeUsStateCode(idDetail.state) ?? ''}
-              onChange={(e) => {
-                cancelZipLookup()
-                setIdDetail((d) => ({ ...d, state: e.target.value.trim() || null }))
-              }}
-            >
-              <option value="">—</option>
-              {US_STATE_SELECT_OPTIONS.map(({ code, name }) => (
-                <option key={code} value={code}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="fdn-label">
-            Zip / postal
-            <input
-              className="fdn-input"
-              inputMode="numeric"
-              autoComplete="postal-code"
-              value={idDetail.postalCode ?? ''}
-              onChange={(e) => {
-                const raw = e.target.value
-                lastZipLookupRef.current = null
-                setIdDetail((d) => ({ ...d, postalCode: raw.trim() || null }))
-                if (isCompleteUsZip(normalizeUsZipInput(raw))) void runZipLookup(raw)
-              }}
-              onBlur={() => {
-                const raw = idDetail.postalCode ?? ''
-                if (isCompleteUsZip(normalizeUsZipInput(raw))) void runZipLookup(raw)
-              }}
-            />
-            {zipLookupBusy ? (
-              <span className="fdn-zip-hint">Looking up city &amp; state…</span>
-            ) : zipLookupNote ? (
-              <span className="fdn-zip-hint fdn-zip-hint--warn">{zipLookupNote}</span>
-            ) : null}
-          </label>
-          <div className="fdn-field fdn-field--full">
-            <LabelText required className="fdn-field__label">
-              Phone &amp; country
-            </LabelText>
-            <div className="fdn-phone-inline">
-              <label className="fdn-check fdn-check--phone-flag">
-                <input
-                  type="checkbox"
-                  checked={idDetail.usaCaPhone === true}
-                  onChange={(e) =>
-                    setIdDetail((d) => ({ ...d, usaCaPhone: e.target.checked ? true : null }))
-                  }
-                />
-                USA/CA
-              </label>
-              <input
-                className="fdn-input fdn-input--country-code"
-                placeholder="+1"
-                value={idDetail.phoneCountryCode ?? ''}
-                onChange={(e) =>
-                  setIdDetail((d) => ({ ...d, phoneCountryCode: e.target.value.trim() || null }))
-                }
-              />
-              <input
-                className="fdn-input"
-                inputMode="tel"
-                autoComplete="tel"
-                required
-                aria-required="true"
-                placeholder="(555) 555-5555"
-                value={phone}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setPhone(v)
-                  schedulePhoneHistoryLookup(v)
-                }}
-                onBlur={() => {
-                  if (isCompletePhoneForLookup(phone)) void runPhoneHistoryLookup(phone)
-                }}
-              />
-            </div>
-            {guestHistoryBusy ? (
-              <span className="fdn-zip-hint">Looking up prior guest…</span>
-            ) : guestHistoryNote ? (
-              <span className="fdn-zip-hint">{guestHistoryNote}</span>
-            ) : null}
-          </div>
-          <label className="fdn-label">
-            Email (guest)
-            <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
-          </label>
-          <label className="fdn-label">
-            ID type
-            <select
-              className="fdn-input fdn-select"
-              value={
-                parsed.idType && (ID_DOCUMENT_TYPES as readonly string[]).includes(parsed.idType)
-                  ? parsed.idType
-                  : ''
-              }
-              onChange={(e) =>
-                setParsed({ ...parsed, idType: e.target.value.trim() || null })
-              }
-            >
-              <option value="">—</option>
-              {ID_DOCUMENT_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="fdn-label">
-            ID number
-            <input
-              className="fdn-input"
-              value={parsed.idNumber ?? ''}
-              onChange={(e) => setParsed({ ...parsed, idNumber: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            ID issue date
-            <input
-              className="fdn-input"
-              value={parsed.issueDate ?? ''}
-              onChange={(e) => setParsed({ ...parsed, issueDate: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            ID expiration
-            <input
-              className="fdn-input"
-              value={parsed.expiryDate ?? ''}
-              onChange={(e) => setParsed({ ...parsed, expiryDate: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            Date of birth
-            <input
-              className="fdn-input"
-              value={parsed.dateOfBirth ?? ''}
-              onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
-            />
-          </label>
-          <label className="fdn-label">
-            Age (from DOB)
-            <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
-          </label>
-          {lastScanReceivedAt ? (
-            <span className="fdn-scan-time" title="Last ID scan received">
-              Scan {formatLocalFromIso(lastScanReceivedAt)}
-            </span>
-          ) : null}
-          <label className="fdn-label fdn-label--full">
-            Guest remark
-            <input
-              className="fdn-input"
-              value={guestRemark}
-              onChange={(e) => setGuestRemark(e.target.value)}
-            />
-          </label>
-          <label className="fdn-label fdn-label--full">
-            Check-in remark
-            <input
-              className="fdn-input"
-              value={checkInRemark}
-              onChange={(e) => setCheckInRemark(e.target.value)}
-            />
-          </label>
+                <div className="fdn-grid--three-names">
+                  <label className="fdn-label">
+                    <LabelText required>First name</LabelText>
+                    <input
+                      required
+                      aria-required="true"
+                      className="fdn-input"
+                      value={idDetail.firstName ?? ''}
+                      onChange={(e) =>
+                        setIdDetail((d) => ({ ...d, firstName: e.target.value.trim() || null }))
+                      }
+                    />
+                  </label>
+                  <label className="fdn-label">
+                    <LabelText>Middle name</LabelText>
+                    <input
+                      className="fdn-input"
+                      value={idDetail.middleName ?? ''}
+                      onChange={(e) =>
+                        setIdDetail((d) => ({ ...d, middleName: e.target.value.trim() || null }))
+                      }
+                    />
+                  </label>
+                  <label className="fdn-label">
+                    <LabelText required>Last name</LabelText>
+                    <input
+                      className="fdn-input"
+                      required
+                      aria-required="true"
+                      value={idDetail.lastName ?? ''}
+                      onChange={(e) =>
+                        setIdDetail((d) => ({ ...d, lastName: e.target.value.trim() || null }))
+                      }
+                    />
+                  </label>
+                </div>
+                <label className="fdn-label fdn-label--full">
+                  Street address
+                  <input
+                    className="fdn-input"
+                    value={idDetail.streetAddress ?? ''}
+                    onChange={(e) =>
+                      setIdDetail((d) => ({ ...d, streetAddress: e.target.value.trim() || null }))
+                    }
+                  />
+                </label>
+                <label className="fdn-label">
+                  City
+                  <input
+                    className="fdn-input"
+                    value={idDetail.city ?? ''}
+                    onChange={(e) => {
+                      cancelZipLookup()
+                      lastZipLookupRef.current = null
+                      setIdDetail((d) => ({ ...d, city: e.target.value.trim() || null }))
+                    }}
+                  />
+                </label>
+                <label className="fdn-label">
+                  State
+                  <select
+                    className="fdn-input fdn-select"
+                    value={normalizeUsStateCode(idDetail.state) ?? ''}
+                    onChange={(e) => {
+                      cancelZipLookup()
+                      setIdDetail((d) => ({ ...d, state: e.target.value.trim() || null }))
+                    }}
+                  >
+                    <option value="">—</option>
+                    {US_STATE_SELECT_OPTIONS.map(({ code, name }) => (
+                      <option key={code} value={code}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="fdn-label">
+                  Zip / postal
+                  <input
+                    className="fdn-input"
+                    inputMode="numeric"
+                    autoComplete="postal-code"
+                    value={idDetail.postalCode ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      lastZipLookupRef.current = null
+                      setIdDetail((d) => ({ ...d, postalCode: raw.trim() || null }))
+                      if (isCompleteUsZip(normalizeUsZipInput(raw))) void runZipLookup(raw)
+                    }}
+                    onBlur={() => {
+                      const raw = idDetail.postalCode ?? ''
+                      if (isCompleteUsZip(normalizeUsZipInput(raw))) void runZipLookup(raw)
+                    }}
+                  />
+                  {zipLookupBusy ? (
+                    <span className="fdn-zip-hint">Looking up city &amp; state…</span>
+                  ) : zipLookupNote ? (
+                    <span className="fdn-zip-hint fdn-zip-hint--warn">{zipLookupNote}</span>
+                  ) : null}
+                </label>
+                <div className="fdn-field fdn-field--full">
+                  <LabelText required className="fdn-field__label">
+                    Phone &amp; country
+                  </LabelText>
+                  <div className="fdn-phone-inline">
+                    <label className="fdn-check fdn-check--phone-flag">
+                      <input
+                        type="checkbox"
+                        checked={idDetail.usaCaPhone === true}
+                        onChange={(e) =>
+                          setIdDetail((d) => ({ ...d, usaCaPhone: e.target.checked ? true : null }))
+                        }
+                      />
+                      USA/CA
+                    </label>
+                    <input
+                      className="fdn-input fdn-input--country-code"
+                      placeholder="+1"
+                      value={idDetail.phoneCountryCode ?? ''}
+                      onChange={(e) =>
+                        setIdDetail((d) => ({ ...d, phoneCountryCode: e.target.value.trim() || null }))
+                      }
+                    />
+                    <input
+                      className="fdn-input"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      required
+                      aria-required="true"
+                      placeholder="(555) 555-5555"
+                      value={phone}
+                      onChange={(e) => {
+                        const v = e.target.value
+                        setPhone(v)
+                        schedulePhoneHistoryLookup(v)
+                      }}
+                      onBlur={() => {
+                        if (isCompletePhoneForLookup(phone)) void runPhoneHistoryLookup(phone)
+                      }}
+                    />
+                  </div>
+                  {guestHistoryBusy ? (
+                    <span className="fdn-zip-hint">Looking up prior guest…</span>
+                  ) : guestHistoryNote ? (
+                    <span className="fdn-zip-hint">{guestHistoryNote}</span>
+                  ) : null}
+                </div>
+                <label className="fdn-label">
+                  Email (guest)
+                  <input className="fdn-input" value={emailGuest} onChange={(e) => setEmailGuest(e.target.value)} />
+                </label>
+                <label className="fdn-label">
+                  ID type
+                  <select
+                    className="fdn-input fdn-select"
+                    value={
+                      parsed.idType && (ID_DOCUMENT_TYPES as readonly string[]).includes(parsed.idType)
+                        ? parsed.idType
+                        : ''
+                    }
+                    onChange={(e) =>
+                      setParsed({ ...parsed, idType: e.target.value.trim() || null })
+                    }
+                  >
+                    <option value="">—</option>
+                    {ID_DOCUMENT_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="fdn-label">
+                  ID number
+                  <input
+                    className="fdn-input"
+                    value={parsed.idNumber ?? ''}
+                    onChange={(e) => setParsed({ ...parsed, idNumber: e.target.value || null })}
+                  />
+                </label>
+                <label className="fdn-label">
+                  ID issue date
+                  <input
+                    className="fdn-input"
+                    value={parsed.issueDate ?? ''}
+                    onChange={(e) => setParsed({ ...parsed, issueDate: e.target.value || null })}
+                  />
+                </label>
+                <label className="fdn-label">
+                  ID expiration
+                  <input
+                    className="fdn-input"
+                    value={parsed.expiryDate ?? ''}
+                    onChange={(e) => setParsed({ ...parsed, expiryDate: e.target.value || null })}
+                  />
+                </label>
+                <label className="fdn-label">
+                  Date of birth
+                  <input
+                    className="fdn-input"
+                    value={parsed.dateOfBirth ?? ''}
+                    onChange={(e) => setParsed({ ...parsed, dateOfBirth: e.target.value || null })}
+                  />
+                </label>
+                <label className="fdn-label">
+                  Age (from DOB)
+                  <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
+                </label>
+                {lastScanReceivedAt ? (
+                  <span className="fdn-scan-time" title="Last ID scan received">
+                    Scan {formatLocalFromIso(lastScanReceivedAt)}
+                  </span>
+                ) : null}
               </div>
 
               <details className="fdn-details">
@@ -1318,11 +1254,11 @@ function App() {
                           <td>
                             {row.scannedAt
                               ? new Date(row.scannedAt).toLocaleString(undefined, {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })
                               : '—'}
                           </td>
                           <td>{row.manualEntry ? 'Y' : '—'}</td>
@@ -1390,142 +1326,142 @@ function App() {
                 <GuestStaySummary res={res} guest={guest} ezee={ezee} pmsLabel={pmsLabel} />
               ) : (
                 <p className="fdn-stay-summary__empty">
-                  Open a guest in {pmsLabel} and tap <strong>Sync {pmsLabel}</strong> to load stay details.
+                  Open a guest in {pmsLabel} — stay details load automatically when the guest drawer is open.
                 </p>
               )}
 
               <h2 className="fdn-h2">Key encoder</h2>
 
-        {hw.rfid_encoder !== 'connected' && (
-          <p className="fdn-note">
-            {state.rfidError
-              ? `Encoder offline — ${state.rfidError}`
-              : 'Encoder offline — check USB cable and close INNGuru GMS if running, then reload the extension.'}
-          </p>
-        )}
+              {hw.rfid_encoder !== 'connected' && (
+                <p className="fdn-note">
+                  {state.rfidError
+                    ? `Encoder offline — ${state.rfidError}`
+                    : 'Encoder offline — check USB cable and close INNGuru GMS if running, then reload the extension.'}
+                </p>
+              )}
 
-        {!res?.roomNumber ? (
-          <p className="fdn-muted">Load a reservation first to enable key encoding.</p>
-        ) : (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
-              <span style={{ fontSize: 12, color: '#c9d1d9' }}>
-                Key #{Math.min(keyCardSerial, MAX_ROOM_KEYS)}
-                {keyCardSerial > MAX_ROOM_KEYS ? ' (max reached)' : ''}
-              </span>
-              <button
-                type="button"
-                className="fdn-btn fdn-btn--secondary"
-                style={{ padding: '3px 10px', fontSize: 12 }}
-                disabled={
-                  keyBusy ||
-                  hw.rfid_encoder !== 'connected' ||
-                  !state.auth.signedIn ||
-                  keyCardSerial <= 1 ||
-                  keyCardSerial > MAX_ROOM_KEYS
-                }
-                title={
-                  keyCardSerial <= 1
-                    ? 'Encode key 1 first'
-                    : 'Swap in a blank card and encode the next copy'
-                }
-                onClick={() => void onNextKey()}
-              >
-                {keyBusy ? 'Encoding…' : 'Next key'}
-              </button>
-            </div>
-
-            {keyCardSerial > 1 && keyCardSerial <= MAX_ROOM_KEYS ? (
-              <p className="fdn-help" style={{ marginTop: 6 }}>
-                Remove the last card, place a blank card on the encoder, then press Next key (key{' '}
-                {keyCardSerial} of {MAX_ROOM_KEYS}).
-              </p>
-            ) : keyCardSerial === 1 ? (
-              <p className="fdn-help" style={{ marginTop: 6 }}>
-                First card: press Encode Key. Additional cards: swap blank, then Next key.
-              </p>
-            ) : null}
-
-            <div className="fdn-actions">
-              <button
-                type="button"
-                className="fdn-btn fdn-btn--primary"
-                disabled={
-                  keyBusy ||
-                  hw.rfid_encoder !== 'connected' ||
-                  !state.auth.signedIn ||
-                  keyCardSerial > MAX_ROOM_KEYS
-                }
-                onClick={() => void onMakeKey()}
-              >
-                {keyBusy
-                  ? 'Encoding…'
-                  : keyCardSerial <= 1
-                    ? 'Encode Key'
-                    : `Encode key ${keyCardSerial}`}
-              </button>
-              <button
-                type="button"
-                className="fdn-btn fdn-btn--secondary"
-                disabled={readCardBusy || hw.rfid_encoder !== 'connected'}
-                onClick={() => void onReadCard()}
-              >
-                {readCardBusy ? 'Reading…' : 'Read Card'}
-              </button>
-              <button
-                type="button"
-                className="fdn-btn fdn-btn--danger"
-                disabled={cancelCardBusy || hw.rfid_encoder !== 'connected' || !res?.roomNumber}
-                title="Lost key: encodes a disable card onto a blank card. Staff takes it to the room and taps the lock — all old keys deactivated. Then encode a new key for the guest."
-                onClick={() => void onCancelCard()}
-              >
-                {cancelCardBusy ? 'Encoding…' : 'Lost Key'}
-              </button>
-            </div>
-
-            {keyNotice && (
-              <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') || keyNotice.startsWith('Lost key card ready') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
-                {keyNotice}
-              </div>
-            )}
-          </>
-        )}
-
-        {readCardResult ? (
-          <div
-            className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'} fdn-read-card`}
-            style={{ marginTop: 8 }}
-          >
-            <p className="fdn-read-card__title">Last card read (encoder)</p>
-            {readCardResult.ok ? (
-              readCardResult.roomNumber ? (
-                <dl className="fdn-dl fdn-dl--compact" style={{ margin: 0 }}>
-                  <dt>Room</dt>
-                  <dd>
-                    <strong>{readCardResult.roomNumber}</strong>
-                    {readCardResult.cardSerial && readCardResult.cardSerial > 1 ? (
-                      <span className="fdn-read-card__meta"> · Serial {readCardResult.cardSerial}</span>
-                    ) : null}
-                    {res?.roomNumber && readCardResult.roomNumber !== res.roomNumber ? (
-                      <span className="fdn-read-card__warn"> · Different from loaded stay (Rm {res.roomNumber})</span>
-                    ) : null}
-                  </dd>
-                  <dt>Check-in</dt>
-                  <dd>{formatHotelDateTime(readCardResult.checkinTime, 14)}</dd>
-                  <dt>Check-out</dt>
-                  <dd>{formatHotelDateTime(readCardResult.checkoutTime, 12)}</dd>
-                </dl>
+              {!res?.roomNumber ? (
+                <p className="fdn-muted">Load a reservation first to enable key encoding.</p>
               ) : (
                 <>
-                  <strong>Card detected</strong>
-                  <div className="fdn-help">Encoded by another system — room number unavailable</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+                    <span style={{ fontSize: 12, color: '#c9d1d9' }}>
+                      Key #{Math.min(keyCardSerial, MAX_ROOM_KEYS)}
+                      {keyCardSerial > MAX_ROOM_KEYS ? ' (max reached)' : ''}
+                    </span>
+                    <button
+                      type="button"
+                      className="fdn-btn fdn-btn--secondary"
+                      style={{ padding: '3px 10px', fontSize: 12 }}
+                      disabled={
+                        keyBusy ||
+                        hw.rfid_encoder !== 'connected' ||
+                        !state.auth.signedIn ||
+                        keyCardSerial <= 1 ||
+                        keyCardSerial > MAX_ROOM_KEYS
+                      }
+                      title={
+                        keyCardSerial <= 1
+                          ? 'Encode key 1 first'
+                          : 'Swap in a blank card and encode the next copy'
+                      }
+                      onClick={() => void onNextKey()}
+                    >
+                      {keyBusy ? 'Encoding…' : 'Next key'}
+                    </button>
+                  </div>
+
+                  {keyCardSerial > 1 && keyCardSerial <= MAX_ROOM_KEYS ? (
+                    <p className="fdn-help" style={{ marginTop: 6 }}>
+                      Remove the last card, place a blank card on the encoder, then press Next key (key{' '}
+                      {keyCardSerial} of {MAX_ROOM_KEYS}).
+                    </p>
+                  ) : keyCardSerial === 1 ? (
+                    <p className="fdn-help" style={{ marginTop: 6 }}>
+                      First card: press Encode Key. Additional cards: swap blank, then Next key.
+                    </p>
+                  ) : null}
+
+                  <div className="fdn-actions">
+                    <button
+                      type="button"
+                      className="fdn-btn fdn-btn--primary"
+                      disabled={
+                        keyBusy ||
+                        hw.rfid_encoder !== 'connected' ||
+                        !state.auth.signedIn ||
+                        keyCardSerial > MAX_ROOM_KEYS
+                      }
+                      onClick={() => void onMakeKey()}
+                    >
+                      {keyBusy
+                        ? 'Encoding…'
+                        : keyCardSerial <= 1
+                          ? 'Encode Key'
+                          : `Encode key ${keyCardSerial}`}
+                    </button>
+                    <button
+                      type="button"
+                      className="fdn-btn fdn-btn--secondary"
+                      disabled={readCardBusy || hw.rfid_encoder !== 'connected'}
+                      onClick={() => void onReadCard()}
+                    >
+                      {readCardBusy ? 'Reading…' : 'Read Card'}
+                    </button>
+                    <button
+                      type="button"
+                      className="fdn-btn fdn-btn--danger"
+                      disabled={cancelCardBusy || hw.rfid_encoder !== 'connected' || !res?.roomNumber}
+                      title="Lost key: encodes a disable card onto a blank card. Staff takes it to the room and taps the lock — all old keys deactivated. Then encode a new key for the guest."
+                      onClick={() => void onCancelCard()}
+                    >
+                      {cancelCardBusy ? 'Encoding…' : 'Lost Key'}
+                    </button>
+                  </div>
+
+                  {keyNotice && (
+                    <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') || keyNotice.startsWith('Lost key card ready') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
+                      {keyNotice}
+                    </div>
+                  )}
                 </>
-              )
-            ) : (
-              `Read failed — ${readCardResult.error}`
-            )}
-          </div>
-        ) : null}
+              )}
+
+              {readCardResult ? (
+                <div
+                  className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'} fdn-read-card`}
+                  style={{ marginTop: 8 }}
+                >
+                  <p className="fdn-read-card__title">Last card read (encoder)</p>
+                  {readCardResult.ok ? (
+                    readCardResult.roomNumber ? (
+                      <dl className="fdn-dl fdn-dl--compact" style={{ margin: 0 }}>
+                        <dt>Room</dt>
+                        <dd>
+                          <strong>{readCardResult.roomNumber}</strong>
+                          {readCardResult.cardSerial && readCardResult.cardSerial > 1 ? (
+                            <span className="fdn-read-card__meta"> · Serial {readCardResult.cardSerial}</span>
+                          ) : null}
+                          {res?.roomNumber && readCardResult.roomNumber !== res.roomNumber ? (
+                            <span className="fdn-read-card__warn"> · Different from loaded stay (Rm {res.roomNumber})</span>
+                          ) : null}
+                        </dd>
+                        <dt>Check-in</dt>
+                        <dd>{formatHotelDateTime(readCardResult.checkinTime, 14)}</dd>
+                        <dt>Check-out</dt>
+                        <dd>{formatHotelDateTime(readCardResult.checkoutTime, 12)}</dd>
+                      </dl>
+                    ) : (
+                      <>
+                        <strong>Card detected</strong>
+                        <div className="fdn-help">Encoded by another system — room number unavailable</div>
+                      </>
+                    )
+                  ) : (
+                    `Read failed — ${readCardResult.error}`
+                  )}
+                </div>
+              ) : null}
 
               <details className="fdn-details">
                 <summary>Key history ({keyHistory.length})</summary>
@@ -1546,11 +1482,11 @@ function App() {
                           <td>
                             {row.created_at
                               ? new Date(row.created_at).toLocaleString(undefined, {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })
                               : '—'}
                           </td>
                           <td>{row.card_serial}</td>

@@ -229,6 +229,11 @@ export type ExtensionState = {
   /** eZee Arrivals drawer scrape. */
   ezeeGuestDisplay: EzeeGuestDisplay | null
   hardware: HardwareStatus
+  /** Unix ms when each device status was last probed (side panel “last checked”). */
+  hardwareCheckedAt: {
+    id_scanner: number | null
+    rfid_encoder: number | null
+  }
   rfidError: string | null
   terminalId: string | null
   dnrHit: boolean

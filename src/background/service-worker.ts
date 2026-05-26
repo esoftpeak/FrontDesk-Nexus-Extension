@@ -57,6 +57,7 @@ let supabase: SupabaseClient | null = null
 let rfidConnected: 'connected' | 'disconnected' = 'disconnected'
 let rfidError: string | null = null
 let rfidStatusCheckedAt = 0
+let idScannerStatusCheckedAt = 0
 
 function handleRfidStatus(connected: boolean, error: string | null): void {
   const next = connected ? 'connected' : 'disconnected'
@@ -736,8 +737,10 @@ async function buildHardwareStatus(): Promise<ExtensionState['hardware']> {
   let idScanner: 'connected' | 'disconnected' = 'disconnected'
   try {
     idScanner = (await pingNativeHost()) ? 'connected' : 'disconnected'
+    idScannerStatusCheckedAt = Date.now()
   } catch {
     idScanner = 'disconnected'
+    idScannerStatusCheckedAt = Date.now()
   }
 
   // Check once on startup only (rfidStatusCheckedAt === 0).
@@ -789,6 +792,10 @@ async function getState(): Promise<ExtensionState> {
     synxisGuestDisplay,
     ezeeGuestDisplay,
     hardware,
+    hardwareCheckedAt: {
+      id_scanner: idScannerStatusCheckedAt > 0 ? idScannerStatusCheckedAt : null,
+      rfid_encoder: rfidStatusCheckedAt > 0 ? rfidStatusCheckedAt : null,
+    },
     rfidError,
     terminalId: typeof terminalId === 'string' ? terminalId : null,
     dnrHit,
