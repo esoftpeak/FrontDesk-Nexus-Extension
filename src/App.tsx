@@ -7,7 +7,6 @@ import type {
   KeyHistoryRow,
   NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
-  PanelToastBroadcast,
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
@@ -20,7 +19,17 @@ import { isCompletePhoneForLookup } from './lib/phone-lookup'
 import { formatHotelDateTime } from './lib/hotel-dates'
 import { GuestStaySummary } from './components/GuestStaySummary'
 import { LoadingScreen } from './components/LoadingScreen'
+import { ExtensionLogo } from './components/ExtensionLogo'
 import { IconArrowLeft, IconId, IconKey, IconPayment, IconSignature } from './components/WorkspaceIcons'
+
+function showChromeNotification(title: string, message: string) {
+  void chrome.notifications.create({
+    type: 'basic',
+    title,
+    message,
+    iconUrl: chrome.runtime.getURL('icon.png'),
+  })
+}
 
 function RequiredMark() {
   return (
@@ -122,13 +131,7 @@ function App() {
   const [managerPassword, setManagerPassword] = useState('')
   const [showManagerModal, setShowManagerModal] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
-  const [panelToast, setPanelToast] = useState<{
-    confirmationNumber: string
-    detail?: string
-    variant: NonNullable<PanelToastBroadcast['variant']>
-  } | null>(null)
-  const panelToastTimerRef = useRef(0)
+  const [formError, setFormError] = useState<string | null>(null)
   const [scanImages, setScanImages] = useState<{
     front: string
     back: string
@@ -250,7 +253,7 @@ function App() {
     setFlipH(false)
     setGuestRemark('')
     setCheckInRemark('')
-    setNotice(null)
+    setFormError(null)
     zipLookupAbortRef.current?.abort()
     lastZipLookupRef.current = null
     setZipLookupBusy(false)
@@ -407,11 +410,14 @@ function App() {
       }
       if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
       if (m.autoSave.ok) {
-        setNotice('Thales scan received — saved to Supabase.')
+        showChromeNotification('FrontDesk Nexus', 'Thales scan received — saved to Supabase.')
       } else if ('ok' in m.autoSave && !m.autoSave.ok && 'error' in m.autoSave && m.autoSave.error) {
-        setNotice(`Thales scan received — not saved: ${m.autoSave.error}`)
+        showChromeNotification(
+          'FrontDesk Nexus — Scan not saved',
+          `Thales scan received — ${m.autoSave.error}`,
+        )
       } else {
-        setNotice('Thales scan received — not saved: unknown error')
+        showChromeNotification('FrontDesk Nexus — Scan not saved', 'Thales scan received — unknown error')
       }
       void refresh()
       void refreshIdScanHistory()
@@ -435,16 +441,7 @@ function App() {
         return
       }
       if (m.type === 'FDN_PANEL_TOAST') {
-        const t = msg as PanelToastBroadcast
-        if (!t.confirmationNumber) return
-        window.clearTimeout(panelToastTimerRef.current)
-        setPanelToast({
-          confirmationNumber: t.confirmationNumber,
-          detail: t.detail,
-          variant: t.variant === 'warn' ? 'warn' : 'success',
-        })
         void refresh()
-        panelToastTimerRef.current = window.setTimeout(() => setPanelToast(null), 3000)
         return
       }
       if (m.type === 'FDN_NATIVE_ID_SCAN') {
@@ -458,7 +455,6 @@ function App() {
     })
     return () => {
       chrome.runtime.onMessage.removeListener(onRuntimeMessage)
-      window.clearTimeout(panelToastTimerRef.current)
     }
   }, [refresh, applyNativeIdScan])
 
@@ -477,14 +473,14 @@ function App() {
   async function onDevLogin(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
-    setNotice(null)
+    setFormError(null)
     try {
       const res = (await chrome.runtime.sendMessage({
         type: 'AUTH_DEV_LOGIN',
         email,
         password,
       })) as { ok: boolean; error?: string }
-      if (!res.ok) setNotice(res.error ?? 'Login failed')
+      if (!res.ok) setFormError(res.error ?? 'Login failed')
       else void refresh()
     } finally {
       setBusy(false)
@@ -502,11 +498,11 @@ function App() {
   async function onSave(fillTab = false) {
     const requiredErr = validateRequiredGuestFields(idDetail, phone)
     if (requiredErr) {
-      setNotice(requiredErr)
+      setFormError(requiredErr)
       return
     }
     setBusy(true)
-    setNotice(null)
+    setFormError(null)
     try {
       let frontB64 = scanImages?.front ?? null
       let backB64 = scanImages?.back ?? null
@@ -515,7 +511,7 @@ function App() {
           if (frontB64) frontB64 = await transformBase64ImageSync(frontB64, rotationDeg, flipH)
           if (backB64) backB64 = await transformBase64ImageSync(backB64, rotationDeg, flipH)
         } catch (e) {
-          setNotice(e instanceof Error ? e.message : 'Could not apply image rotation.')
+          setFormError(e instanceof Error ? e.message : 'Could not apply image rotation.')
           return
         }
       }
@@ -551,7 +547,7 @@ function App() {
         if (err.includes('DNR')) setShowManagerModal(true)
         return
       }
-      setNotice('Saved to Supabase.')
+      showChromeNotification('FrontDesk Nexus', 'Guest ID saved to Supabase.')
       setManagerOverride(false)
       setShowManagerModal(false)
       void refresh()
@@ -610,12 +606,13 @@ function App() {
         password: managerPassword,
       })) as { ok: boolean; error?: string }
       if (!res.ok) {
-        setNotice(res.error ?? 'Verification failed')
+        setFormError(res.error ?? 'Verification failed')
         return
       }
       setManagerOverride(true)
       setShowManagerModal(false)
-      setNotice('Manager verified — you can save with override.')
+      setFormError(null)
+      showChromeNotification('FrontDesk Nexus', 'Manager verified — you can save with override.')
     } finally {
       setBusy(false)
     }
@@ -624,17 +621,17 @@ function App() {
 
   async function onGetGuestData() {
     setBusy(true)
-    setNotice(null)
+    setFormError(null)
     try {
       const res = (await chrome.runtime.sendMessage({
         type: 'LOAD_SYNXIS_RESERVATION',
       })) as { ok: boolean; error?: string; state?: ExtensionState; message?: string }
       if (!res.ok) {
-        setNotice(res.error ?? 'Could not load reservation.')
+        showChromeNotification('FrontDesk Nexus', res.error ?? 'Could not load reservation.')
         return
       }
       if (res.state) setState(res.state)
-      setNotice(res.message ?? 'Guest data loaded.')
+      if (res.message) showChromeNotification('FrontDesk Nexus', res.message)
       void refresh()
     } finally {
       setBusy(false)
@@ -643,17 +640,17 @@ function App() {
 
   async function onGetEzeeGuestData() {
     setBusy(true)
-    setNotice(null)
+    setFormError(null)
     try {
       const res = (await chrome.runtime.sendMessage({
         type: 'LOAD_EZEE_RESERVATION',
       })) as { ok: boolean; error?: string; state?: ExtensionState; message?: string }
       if (!res.ok) {
-        setNotice(res.error ?? 'Could not load eZee reservation.')
+        showChromeNotification('FrontDesk Nexus', res.error ?? 'Could not load eZee reservation.')
         return
       }
       if (res.state) setState(res.state)
-      setNotice(res.message ?? 'eZee guest data loaded.')
+      if (res.message) showChromeNotification('FrontDesk Nexus', res.message)
       void refresh()
     } finally {
       setBusy(false)
@@ -791,25 +788,9 @@ function App() {
     }
   }
 
-  const toastBanner =
-    panelToast != null ? (
-      <div
-        className={`fdn-panel-toast fdn-panel-toast--${panelToast.variant}`}
-        role="status"
-        aria-live="polite"
-      >
-        <div className="fdn-panel-toast__label">Confirmation</div>
-        <div className="fdn-panel-toast__conf">{panelToast.confirmationNumber}</div>
-        {panelToast.detail ? (
-          <div className="fdn-panel-toast__detail">{panelToast.detail}</div>
-        ) : null}
-      </div>
-    ) : null
-
   if (!state) {
     return (
       <div className="fdn-root fdn-root--loading">
-        {toastBanner}
         <LoadingScreen />
       </div>
     )
@@ -818,7 +799,6 @@ function App() {
   if (state.versionBlocked) {
     return (
       <div className="fdn-root">
-        {toastBanner}
         <div className="fdn-banner fdn-banner--danger">{state.versionMessage}</div>
       </div>
     )
@@ -830,10 +810,6 @@ function App() {
   const hw = state.hardware
   const idAgeLabel = ageLabelFromDobString(parsed.dateOfBirth)
   const pmsLabel = res?.pms === 'ezee' ? 'eZee' : res?.pms === 'synxis' ? 'SynXis' : 'PMS'
-  const guestLine =
-    ezee?.nameLine ??
-    guest?.nameLine ??
-    ([idDetail.firstName, idDetail.lastName].filter(Boolean).join(' ') || null)
   const confLine = res?.confirmationNumber ?? guest?.pmsConfirmationCode ?? ezee?.reservationNumber ?? null
   const idTabReady = Boolean(idDetail.firstName?.trim() && idDetail.lastName?.trim() && phone.trim())
   const transferDisabled = busy || !state.auth.signedIn || !idTabReady
@@ -884,51 +860,62 @@ function App() {
 
   return (
     <div className="fdn-root">
-      {toastBanner}
-
       <header className="fdn-topbar">
-        <div className="fdn-topbar__brand">
-          <h1 className="fdn-title">FrontDesk Nexus</h1>
-          <div className="fdn-topbar__stay">
-            {confLine ? (
-              <span className="fdn-topbar__conf" title="Confirmation">
-                #{confLine}
-              </span>
-            ) : (
-              <span className="fdn-topbar__conf fdn-topbar__conf--empty">No reservation</span>
-            )}
-            {res?.roomNumber ? <span className="fdn-topbar__room">Rm {res.roomNumber}</span> : null}
-            {guestLine ? <span className="fdn-topbar__guest">{guestLine}</span> : null}
-          </div>
-        </div>
+        <ExtensionLogo />
         <div className="fdn-topbar__actions">
+          {confLine ? (
+            <span className="fdn-topbar__pill" title="Confirmation">
+              #{confLine}
+            </span>
+          ) : null}
+          {res?.roomNumber ? (
+            <span className="fdn-topbar__pill" title="Room">
+              Rm {res.roomNumber}
+            </span>
+          ) : null}
           <button
             type="button"
-            className="fdn-btn fdn-btn--ghost fdn-btn--xs"
+            className="fdn-btn fdn-btn--primary fdn-btn--top"
             disabled={busy}
             onClick={() => void (res?.pms === 'ezee' ? onGetEzeeGuestData() : onGetGuestData())}
             title="Load guest from the active PMS tab"
           >
             Sync {pmsLabel}
           </button>
-          <span className="fdn-topbar__hw" title={`ID scanner: ${hw.id_scanner}`}>
-            <span className={hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
+          <button
+            type="button"
+            className={`fdn-hw-chip ${hw.id_scanner === 'connected' ? 'fdn-hw-chip--ok' : 'fdn-hw-chip--bad'}`}
+            title={`ID scanner: ${hw.id_scanner}`}
+            onClick={() => void refresh()}
+          >
+            <span
+              className={
+                hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'
+              }
+            />
             ID
-          </span>
-          <span className="fdn-topbar__hw" title={`RFID encoder: ${hw.rfid_encoder}`}>
-            <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
+          </button>
+          <button
+            type="button"
+            className={`fdn-hw-chip ${hw.rfid_encoder === 'connected' ? 'fdn-hw-chip--ok' : 'fdn-hw-chip--bad'}`}
+            title={`RFID encoder: ${hw.rfid_encoder}`}
+            disabled={rfidCheckBusy}
+            onClick={() => void onCheckRfid()}
+          >
+            <span
+              className={
+                hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'
+              }
+            />
             Key
+          </button>
+          {state.auth.signedIn ? (
             <button
               type="button"
-              className="fdn-btn fdn-btn--ghost fdn-btn--xs"
-              disabled={rfidCheckBusy}
-              onClick={() => void onCheckRfid()}
+              className="fdn-btn fdn-btn--ghost fdn-btn--top"
+              onClick={() => void onLogout()}
+              title="Sign out"
             >
-              {rfidCheckBusy ? '…' : '↻'}
-            </button>
-          </span>
-          {state.auth.signedIn ? (
-            <button type="button" className="fdn-btn fdn-btn--ghost fdn-btn--xs" onClick={() => void onLogout()}>
               Out
             </button>
           ) : null}
@@ -938,6 +925,11 @@ function App() {
       {!state.auth.signedIn && (
         <section className="fdn-card fdn-card--compact">
           <h2 className="fdn-h2">Sign in</h2>
+          {formError ? (
+            <p className="fdn-form-error" role="alert">
+              {formError}
+            </p>
+          ) : null}
           <form className="fdn-form" onSubmit={(e) => void onDevLogin(e)}>
             <label className="fdn-label">
               Email
@@ -990,10 +982,13 @@ function App() {
         </nav>
 
         <main className="fdn-main">
-          {notice ? <div className="fdn-banner fdn-banner--info fdn-main__notice">{notice}</div> : null}
-
           {activeTab === 'id' ? (
             <section className="fdn-panel fdn-panel--id">
+              {formError ? (
+                <p className="fdn-form-error" role="alert">
+                  {formError}
+                </p>
+              ) : null}
               <div className="fdn-panel__toolbar">
                 <label className="fdn-check fdn-check--compact">
                   <input

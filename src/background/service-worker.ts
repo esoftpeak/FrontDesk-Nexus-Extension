@@ -508,7 +508,14 @@ async function completeSynxisReservationFromConfirmation(
   }
 
   const msgText = `Loaded reservation ${conf} (SynXis API)`
-  if (options.chromeNotify) void notifyUser('FrontDesk Nexus — Reservation loaded', msgText)
+  if (options.chromeNotify) {
+    const detail = sess.session
+      ? dbSaved
+        ? 'Guest loaded from SynXis and saved to database'
+        : 'Guest loaded from SynXis but not saved to database'
+      : 'Guest loaded from SynXis. Sign in to save to the database.'
+    void notifyUser('FrontDesk Nexus', `#${conf} — ${detail}`)
+  }
   lastError = null
   return { ok: true, state: await getState(), message: msgText }
 }
@@ -570,7 +577,14 @@ async function completeEzeeReservationFromSnapshot(
     dbSaved,
     guestName: guestDisplay.nameLine,
   })
-  if (options.chromeNotify) void notifyUser('FrontDesk Nexus — Reservation loaded', msgText)
+  if (options.chromeNotify) {
+    const detail = sess.session
+      ? dbSaved
+        ? 'Guest loaded from eZee and saved to database'
+        : 'Guest loaded from eZee but not saved to database'
+      : 'Guest loaded from eZee. Sign in to save to the database.'
+    void notifyUser('FrontDesk Nexus', `#${conf} — ${detail}`)
+  }
   lastError = null
   return { ok: true, state: await getState(), message: msgText }
 }
@@ -1796,7 +1810,7 @@ async function handleMessage(
         tabUrl,
         msg.snapshot,
         msg.guestDisplay,
-        { chromeNotify: false, panelToast: true },
+        { chromeNotify: true, panelToast: false },
       )
       if (result && typeof result === 'object' && 'ok' in result && result.ok === true) {
         ezeeAutoDedupeByTab.set(tabId, { confirmation: c, roomHint, at: Date.now() })
@@ -1838,8 +1852,8 @@ async function handleMessage(
     synxisAutoInFlight.add(fk)
     try {
       const result = await completeSynxisReservationFromConfirmation(tabId, tabUrl, c, {
-        chromeNotify: false,
-        panelToast: true,
+        chromeNotify: true,
+        panelToast: false,
       })
       if (result.ok === true) {
         synxisAutoDedupeByTab.set(tabId, { confirmation: c, roomHint, at: Date.now() })
