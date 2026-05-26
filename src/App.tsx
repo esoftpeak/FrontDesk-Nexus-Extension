@@ -74,13 +74,6 @@ function formatLocalFromIso(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-function formatSdkDateTime(
-  s: string | null | undefined,
-  defaultHour: number = 14,
-): string {
-  return formatHotelDateTime(s, defaultHour)
-}
-
 /** Same cap as portal `AdminPortalEncodeModal` (1–8 keys per stay). */
 const MAX_ROOM_KEYS = 8
 
@@ -152,7 +145,6 @@ function App() {
   const [readCardBusy, setReadCardBusy] = useState(false)
   const [cancelCardBusy, setCancelCardBusy] = useState(false)
   const [rfidCheckBusy, setRfidCheckBusy] = useState(false)
-  const [rfidLastCheckedAt, setRfidLastCheckedAt] = useState<number | null>(null)
   const [, setRfidTick] = useState(0)
   const [readCardResult, setReadCardResult] = useState<{
     ok: boolean
@@ -174,6 +166,8 @@ function App() {
   const phoneHistoryTimerRef = useRef(0)
   const lastPhoneLookupRef = useRef<string | null>(null)
   const guestFormEmptyRef = useRef(true)
+  type WorkspaceTab = 'id' | 'payment' | 'signature' | 'key'
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
 
   const refreshIdScanHistory = useCallback(async () => {
     const res = (await chrome.runtime.sendMessage({ type: 'GET_ID_SCAN_HISTORY' })) as {
@@ -589,6 +583,10 @@ function App() {
     }
   }
 
+  async function onTransferToPms() {
+    await onSave(true)
+  }
+
   async function onVerifyManager(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
@@ -770,22 +768,11 @@ function App() {
     return () => clearInterval(t)
   }, [])
 
-  function rfidCheckedAgo(): string {
-    if (rfidLastCheckedAt === null) return ''
-    const s = Math.floor((Date.now() - rfidLastCheckedAt) / 1000)
-    if (s < 10) return 'just now'
-    if (s < 60) return `${s}s ago`
-    const m = Math.floor(s / 60)
-    if (m < 60) return `${m}m ago`
-    return `${Math.floor(m / 60)}h ago`
-  }
-
   async function onCheckRfid() {
     setRfidCheckBusy(true)
     try {
       const resp = (await chrome.runtime.sendMessage({ type: 'RFID_CHECK_CONNECTION' })) as ExtensionResponse
       if (resp?.ok && 'state' in resp && resp.state) setState(resp.state)
-      setRfidLastCheckedAt(Date.now())
     } finally {
       setRfidCheckBusy(false)
     }
@@ -829,64 +816,99 @@ function App() {
   const ezee = state.ezeeGuestDisplay
   const hw = state.hardware
   const idAgeLabel = ageLabelFromDobString(parsed.dateOfBirth)
+  const pmsLabel = res?.pms === 'ezee' ? 'eZee' : res?.pms === 'synxis' ? 'SynXis' : 'PMS'
+  const guestLine =
+    ezee?.nameLine ??
+    guest?.nameLine ??
+    ([idDetail.firstName, idDetail.lastName].filter(Boolean).join(' ') || null)
+  const confLine = res?.confirmationNumber ?? guest?.pmsConfirmationCode ?? ezee?.reservationNumber ?? null
+  const idTabReady = Boolean(idDetail.firstName?.trim() && idDetail.lastName?.trim() && phone.trim())
+  const transferDisabled = busy || !state.auth.signedIn || !idTabReady
+  const transferLabel = busy ? '…' : 'To PMS'
+
+  const workspaceTabs: { id: WorkspaceTab; label: string; hint: string; status: 'ready' | 'idle' | 'warn' }[] = [
+    {
+      id: 'id',
+      label: 'ID',
+      hint: 'Guest ID scan & details',
+      status: scanImages || manualEntry || idTabReady ? 'ready' : 'idle',
+    },
+    {
+      id: 'payment',
+      label: 'Pay',
+      hint: 'Folio & balance',
+      status: res?.dueAmount || ezee?.balance ? 'ready' : 'idle',
+    },
+    {
+      id: 'signature',
+      label: 'Sign',
+      hint: 'Registration card signature',
+      status: 'idle',
+    },
+    {
+      id: 'key',
+      label: 'Key',
+      hint: 'Encode room keys',
+      status:
+        hw.rfid_encoder !== 'connected' ? 'warn' : keyHistory.length > 0 ? 'ready' : res?.roomNumber ? 'idle' : 'warn',
+    },
+  ]
 
   return (
     <div className="fdn-root">
       {toastBanner}
 
-      <header className="fdn-header">
-        <h1 className="fdn-title">FrontDesk Nexus</h1>
-      </header>
-
-      <section className="fdn-card" style={{ marginBottom: 8 }}>
-        <div className="fdn-modules">
-          <span className="fdn-mod">ID · in progress</span>
-          <span className="fdn-mod fdn-mod--off">Payment</span>
-          <span className="fdn-mod fdn-mod--off">Signature</span>
-          {hw.rfid_encoder !== 'connected' ? (
-            <span className="fdn-mod fdn-mod--off">Key · offline</span>
-          ) : keyHistory.length > 0 ? (
-            <span className="fdn-mod">Key · {keyHistory.length} encoded</span>
-          ) : (
-            <span className="fdn-mod fdn-mod--off">Key · ready</span>
-          )}
+      <header className="fdn-topbar">
+        <div className="fdn-topbar__brand">
+          <h1 className="fdn-title">FrontDesk Nexus</h1>
+          <div className="fdn-topbar__stay">
+            {confLine ? (
+              <span className="fdn-topbar__conf" title="Confirmation">
+                #{confLine}
+              </span>
+            ) : (
+              <span className="fdn-topbar__conf fdn-topbar__conf--empty">No reservation</span>
+            )}
+            {res?.roomNumber ? <span className="fdn-topbar__room">Rm {res.roomNumber}</span> : null}
+            {guestLine ? <span className="fdn-topbar__guest">{guestLine}</span> : null}
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 11, color: '#8b949e', flexWrap: 'wrap', alignItems: 'center' }}>
-          <span>
+        <div className="fdn-topbar__actions">
+          <button
+            type="button"
+            className="fdn-btn fdn-btn--ghost fdn-btn--xs"
+            disabled={busy}
+            onClick={() => void (res?.pms === 'ezee' ? onGetEzeeGuestData() : onGetGuestData())}
+            title="Load guest from the active PMS tab"
+          >
+            Sync {pmsLabel}
+          </button>
+          <span className="fdn-topbar__hw" title={`ID scanner: ${hw.id_scanner}`}>
             <span className={hw.id_scanner === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
-            ID scanner · {hw.id_scanner}
+            ID
           </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span className="fdn-topbar__hw" title={`RFID encoder: ${hw.rfid_encoder}`}>
             <span className={hw.rfid_encoder === 'connected' ? 'fdn-dot fdn-dot--ok' : 'fdn-dot fdn-dot--bad'} />
-            RFID · {hw.rfid_encoder}
+            Key
             <button
               type="button"
-              className="fdn-btn fdn-btn--ghost"
-              style={{ fontSize: 10, padding: '1px 6px' }}
+              className="fdn-btn fdn-btn--ghost fdn-btn--xs"
               disabled={rfidCheckBusy}
               onClick={() => void onCheckRfid()}
-              title="Manually check if the RFID encoder is connected"
             >
-              {rfidCheckBusy ? '…' : 'Check'}
+              {rfidCheckBusy ? '…' : '↻'}
             </button>
-            {!rfidCheckBusy && rfidLastCheckedAt !== null && (
-              <span style={{ color: '#6e7681', fontSize: 10 }}>{rfidCheckedAgo()}</span>
-            )}
           </span>
-          {state.auth.signedIn && (
-            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-              <strong style={{ color: '#e8eaed', fontSize: 11 }}>{state.auth.email}</strong>
-              <span className="fdn-badge">{state.auth.role ?? 'role?'}</span>
-              <button type="button" className="fdn-btn fdn-btn--ghost" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => void onLogout()}>
-                Sign out
-              </button>
-            </span>
-          )}
+          {state.auth.signedIn ? (
+            <button type="button" className="fdn-btn fdn-btn--ghost fdn-btn--xs" onClick={() => void onLogout()}>
+              Out
+            </button>
+          ) : null}
         </div>
-      </section>
+      </header>
 
       {!state.auth.signedIn && (
-        <section className="fdn-card">
+        <section className="fdn-card fdn-card--compact">
           <h2 className="fdn-h2">Sign in</h2>
           <form className="fdn-form" onSubmit={(e) => void onDevLogin(e)}>
             <label className="fdn-label">
@@ -915,25 +937,103 @@ function App() {
         </section>
       )}
 
-      <section className="fdn-card fdn-card--idguru">
-        <h2 className="fdn-h2">ID scan (ID Guru–style)</h2>
-        <label className="fdn-check">
-          <input
-            type="checkbox"
-            checked={manualEntry}
-            onChange={(e) => setManualEntry(e.target.checked)}
-          />
-          Manual entry mode (no scanner / OCR)
-        </label>
-        {managerOverride && <p className="fdn-note">Manager override active for DNR gate.</p>}
-        {!manualEntry && lastOcrProvider && (
-          <p className="fdn-muted fdn-line">
-            Last scan source: <strong>{lastOcrProvider}</strong>
-          </p>
-        )}
+      <div className="fdn-shell">
+        <nav className="fdn-sidebar" aria-label="Workspace">
+          {workspaceTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={[
+                'fdn-nav-btn',
+                activeTab === tab.id ? 'fdn-nav-btn--active' : '',
+                tab.status === 'ready' ? 'fdn-nav-btn--ready' : '',
+                tab.status === 'warn' ? 'fdn-nav-btn--warn' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              title={tab.hint}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <span className="fdn-nav-btn__label">{tab.label}</span>
+            </button>
+          ))}
+        </nav>
 
-        {!manualEntry && scanPreviewUrls ? (
-          <div className="fdn-id-preview fdn-id-preview--dual">
+        <div className="fdn-transfer-rail">
+          <button
+            type="button"
+            className="fdn-transfer-btn"
+            disabled={transferDisabled}
+            title={
+              !state.auth.signedIn
+                ? 'Sign in to send guest data to the PMS'
+                : !idTabReady
+                  ? 'First name, last name, and phone are required'
+                  : 'Save to database and fill the open PMS guest form'
+            }
+            onClick={() => void onTransferToPms()}
+          >
+            <span className="fdn-transfer-btn__arrow" aria-hidden>
+              ←
+            </span>
+            <span className="fdn-transfer-btn__text">{transferLabel}</span>
+          </button>
+        </div>
+
+        <main className="fdn-main">
+          {notice ? <div className="fdn-banner fdn-banner--info fdn-main__notice">{notice}</div> : null}
+
+          {activeTab === 'id' ? (
+            <section className="fdn-panel fdn-panel--id">
+              <div className="fdn-panel__toolbar">
+                <label className="fdn-check fdn-check--compact">
+                  <input
+                    type="checkbox"
+                    checked={manualEntry}
+                    onChange={(e) => setManualEntry(e.target.checked)}
+                  />
+                  Manual entry
+                </label>
+                {managerOverride ? <span className="fdn-tag fdn-tag--warn">Mgr override</span> : null}
+                {!manualEntry && lastOcrProvider ? (
+                  <span className="fdn-tag">{lastOcrProvider}</span>
+                ) : null}
+                {!manualEntry && scanPreviewUrls ? (
+                  <div className="fdn-id-preview__tools-inline" aria-label="Adjust image orientation">
+                    <button
+                      type="button"
+                      className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                      title="Rotate clockwise"
+                      onClick={() => setRotationDeg((d) => (d + 90) % 360)}
+                    >
+                      ↻
+                    </button>
+                    <button
+                      type="button"
+                      className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                      title="Flip horizontal"
+                      onClick={() => setFlipH((f) => !f)}
+                    >
+                      ⇄
+                    </button>
+                    <button
+                      type="button"
+                      className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                      title="Reset orientation"
+                      onClick={() => {
+                        setRotationDeg(0)
+                        setFlipH(false)
+                      }}
+                    >
+                      ⊡
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              {!manualEntry && scanPreviewUrls ? (
+                <div className="fdn-id-preview fdn-id-preview--dual fdn-id-preview--compact">
             <div className="fdn-id-preview__pair">
               <div className="fdn-id-preview__cell">
                 <p className="fdn-id-preview__side">Front</p>
@@ -962,47 +1062,10 @@ function App() {
                 </div>
               </div>
             </div>
-            <div className="fdn-id-preview__toolbar" aria-label="Adjust image orientation (both sides)">
-              <button
-                type="button"
-                className="fdn-id-preview__tool"
-                title="Rotate clockwise"
-                onClick={() => setRotationDeg((d) => (d + 90) % 360)}
-              >
-                ↻
-              </button>
-              <button
-                type="button"
-                className="fdn-id-preview__tool"
-                title="Rotate counter-clockwise"
-                onClick={() => setRotationDeg((d) => (d - 90 + 360) % 360)}
-              >
-                ↺
-              </button>
-              <button
-                type="button"
-                className="fdn-id-preview__tool"
-                title="Flip horizontal mirror"
-                onClick={() => setFlipH((f) => !f)}
-              >
-                ⇄
-              </button>
-              <button
-                type="button"
-                className="fdn-id-preview__tool"
-                title="Straighten (reset rotation + flip)"
-                onClick={() => {
-                  setRotationDeg(0)
-                  setFlipH(false)
-                }}
-              >
-                ⊡
-              </button>
-            </div>
           </div>
-        ) : null}
+              ) : null}
 
-        <div className="fdn-grid fdn-grid--idguru">
+              <div className="fdn-grid fdn-grid--idguru fdn-grid--dense">
           <div className="fdn-grid--three-names">
             <label className="fdn-label">
               <LabelText required>First name</LabelText>
@@ -1211,222 +1274,120 @@ function App() {
             Age (from DOB)
             <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
           </label>
-          <div className="fdn-field fdn-field--full fdn-checkin-times">
-            <span className="fdn-field__label">Check-in &amp; timestamps</span>
-            <dl className="fdn-kv">
-              <dt>ID data received (this scan)</dt>
-              <dd title="ISO: local display below">{formatLocalFromIso(lastScanReceivedAt)}</dd>
-            </dl>
-          </div>
+          {lastScanReceivedAt ? (
+            <span className="fdn-scan-time" title="Last ID scan received">
+              Scan {formatLocalFromIso(lastScanReceivedAt)}
+            </span>
+          ) : null}
           <label className="fdn-label fdn-label--full">
             Guest remark
-            <textarea
-              className="fdn-input fdn-textarea"
-              rows={2}
+            <input
+              className="fdn-input"
               value={guestRemark}
               onChange={(e) => setGuestRemark(e.target.value)}
             />
           </label>
           <label className="fdn-label fdn-label--full">
             Check-in remark
-            <textarea
-              className="fdn-input fdn-textarea"
-              rows={2}
+            <input
+              className="fdn-input"
               value={checkInRemark}
               onChange={(e) => setCheckInRemark(e.target.value)}
             />
           </label>
-        </div>
+              </div>
 
-        <div className="fdn-id-history">
-          <h3 className="fdn-h3 fdn-id-history__title">History (this reservation)</h3>
-          {idScanHistory.length === 0 ? (
-            <p className="fdn-muted">No prior scans for this confirmation.</p>
-          ) : (
-            <table className="fdn-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Manual</th>
-                  <th>Scan id</th>
-                </tr>
-              </thead>
-              <tbody>
-                {idScanHistory.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      {row.scannedAt
-                        ? new Date(row.scannedAt).toLocaleString(undefined, {
-                            dateStyle: 'medium',
-                            timeStyle: 'short',
-                          })
-                        : '—'}
-                    </td>
-                    <td>{row.manualEntry ? 'Yes' : 'No'}</td>
-                    <td className="fdn-mono">{row.id.slice(0, 8)}…</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <div className="fdn-actions">
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--primary"
-            disabled={busy || !state.auth.signedIn}
-            onClick={() => void onSave(true)}
-          >
-            Save DB &amp; PMS
-          </button>
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary"
-            disabled={busy || !state.auth.signedIn}
-            onClick={() => void onSave(false)}
-          >
-            Save DB
-          </button>
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary"
-            disabled={busy}
-            onClick={clearIdScan}
-          >
-            Clear
-          </button>
-        </div>
-        {notice && <div className="fdn-banner fdn-banner--info" style={{ marginTop: 8 }}>{notice}</div>}
-      </section>
-
-      <section className="fdn-card">
-        <h2 className="fdn-h2">Guest Data (SynXis API)</h2>
-        <div className="fdn-actions">
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary"
-            disabled={busy}
-            onClick={() => void onGetGuestData()}
-          >
-            Get Guest Data
-          </button>
-        </div>
-        {res?.pms === 'ezee' ? (
-          <p className="fdn-muted">Active reservation is from eZee — use the eZee section below for details.</p>
-        ) : !guest && !res?.confirmationNumber ? (
-          <p className="fdn-muted">Click Get Guest Data to load SynXis guest and attach ID scans to a confirmation.</p>
-        ) : (
-          <dl className="fdn-dl">
-            {guest ? (
-              <>
-                <dt>1. Last, first</dt>
-                <dd>{guest.nameLine}</dd>
-                <dt>2. Loyalty membershipId</dt>
-                <dd>{guest.membershipId ?? '—'}</dd>
-                <dt>3. Addresses</dt>
-                <dd>
-                  {guest.addresses.length === 0
-                    ? '—'
-                    : guest.addresses.map((a, i) => (
-                        <div key={i}>
-                          {a.country}, {a.city}, {a.postalCode}, type {a.type}
-                        </div>
+              <details className="fdn-details">
+                <summary>Scan history ({idScanHistory.length})</summary>
+                {idScanHistory.length === 0 ? (
+                  <p className="fdn-muted">No prior scans for this confirmation.</p>
+                ) : (
+                  <table className="fdn-table fdn-table--compact">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Man.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {idScanHistory.slice(0, 4).map((row) => (
+                        <tr key={row.id}>
+                          <td>
+                            {row.scannedAt
+                              ? new Date(row.scannedAt).toLocaleString(undefined, {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })
+                              : '—'}
+                          </td>
+                          <td>{row.manualEntry ? 'Y' : '—'}</td>
+                        </tr>
                       ))}
-                </dd>
-                <dt>4. Email</dt>
-                <dd>{guest.email ?? '—'}</dd>
-                <dt>5. Phone</dt>
-                <dd>{guest.phone ?? '—'}</dd>
-                <dt>6. pmsConfirmationCode</dt>
-                <dd>{guest.pmsConfirmationCode ?? '—'}</dd>
-                <dt>7. Stay (check-in + nights)</dt>
-                <dd>{guest.staySummary ?? '—'}</dd>
-              </>
-            ) : null}
-            {res && res.pms === 'synxis' ? (
-              <>
-                <dt>PMS</dt>
-                <dd>{res.pms}</dd>
-                <dt>Room</dt>
-                <dd>{res.roomNumber ?? '—'}</dd>
-                <dt>Restricted</dt>
-                <dd>{res.restricted ? 'Yes — proceed with caution' : 'No'}</dd>
-              </>
-            ) : null}
-          </dl>
-        )}
-      </section>
+                    </tbody>
+                  </table>
+                )}
+              </details>
 
-      <section className="fdn-card">
-        <h2 className="fdn-h2">Guest Data (eZee)</h2>
-        <div className="fdn-actions">
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary"
-            disabled={busy}
-            onClick={() => void onGetEzeeGuestData()}
-          >
-            Get Guest Data
-          </button>
-        </div>
-        {res?.pms === 'synxis' ? (
-          <p className="fdn-muted">Active reservation is from SynXis — use the SynXis section above.</p>
-        ) : !ezee && !res?.confirmationNumber ? (
-          <p className="fdn-muted">
-            Open Arrivals and select a guest so the right-side drawer opens, or click Get Guest Data with the
-            drawer visible.
-          </p>
-        ) : (
-          <dl className="fdn-dl">
-            {ezee ? (
-              <>
-                <dt>Guest</dt>
-                <dd>{ezee.nameLine ?? '—'}</dd>
-                <dt>Address</dt>
-                <dd>{ezee.addressLine ?? '—'}</dd>
-                <dt>Reservation #</dt>
-                <dd>{ezee.reservationNumber}</dd>
-                <dt>Status</dt>
-                <dd>{ezee.status ?? '—'}</dd>
-                <dt>Room</dt>
-                <dd>{ezee.roomNumber ?? '—'}</dd>
-                <dt>Stay</dt>
-                <dd>{ezee.staySummary ?? '—'}</dd>
-                <dt>Email</dt>
-                <dd>{ezee.email ?? '—'}</dd>
-                <dt>Phone</dt>
-                <dd>{ezee.phone ?? '—'}</dd>
-                <dt>Total</dt>
-                <dd>{ezee.total ?? '—'}</dd>
-                <dt>Paid</dt>
-                <dd>{ezee.paid ?? '—'}</dd>
-                <dt>Balance</dt>
-                <dd>{ezee.balance ?? '—'}</dd>
-              </>
-            ) : null}
-            {res && res.pms === 'ezee' ? (
-              <>
-                <dt>PMS</dt>
-                <dd>{res.pms}</dd>
-                <dt>Room (snapshot)</dt>
-                <dd>{res.roomNumber ?? '—'}</dd>
-                <dt>Check-in / out</dt>
-                <dd>
-                  {res.checkInDate ?? '—'} → {res.checkOutDate ?? '—'}
-                </dd>
-                <dt>Total / paid / balance (snapshot)</dt>
-                <dd>
-                  {res.reservationTotal ?? '—'} / {res.amountPaid ?? '—'} / {res.dueAmount ?? '—'}
-                </dd>
-              </>
-            ) : null}
-          </dl>
-        )}
-      </section>
+              <div className="fdn-panel__footer">
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--secondary fdn-btn--xs"
+                  disabled={busy || !state.auth.signedIn}
+                  onClick={() => void onSave(false)}
+                >
+                  Save DB only
+                </button>
+                <button type="button" className="fdn-btn fdn-btn--ghost fdn-btn--xs" disabled={busy} onClick={clearIdScan}>
+                  Clear
+                </button>
+              </div>
+            </section>
+          ) : null}
 
-      <section className="fdn-card">
-        <h2 className="fdn-h2">Key Card Encoder</h2>
+          {activeTab === 'payment' ? (
+            <section className="fdn-panel fdn-panel--payment">
+              <p className="fdn-panel__lead">Folio from {pmsLabel}. Use Sync in the header after opening the guest in PMS.</p>
+              {!res?.confirmationNumber ? (
+                <p className="fdn-muted">Load a reservation to view balance.</p>
+              ) : (
+                <dl className="fdn-dl fdn-dl--stats">
+                  <dt>Total</dt>
+                  <dd>{ezee?.total ?? res.reservationTotal ?? '—'}</dd>
+                  <dt>Paid</dt>
+                  <dd>{ezee?.paid ?? res.amountPaid ?? '—'}</dd>
+                  <dt>Balance</dt>
+                  <dd className="fdn-dl__highlight">{ezee?.balance ?? res.dueAmount ?? '—'}</dd>
+                  <dt>Stay</dt>
+                  <dd>{ezee?.staySummary ?? guest?.staySummary ?? '—'}</dd>
+                  <dt>Status</dt>
+                  <dd>{ezee?.status ?? (res.restricted ? 'Restricted' : '—')}</dd>
+                </dl>
+              )}
+              <p className="fdn-help">Card capture and payment posting will live here in a future release.</p>
+            </section>
+          ) : null}
+
+          {activeTab === 'signature' ? (
+            <section className="fdn-panel fdn-panel--signature">
+              <p className="fdn-panel__lead">Guest signature is captured on the PMS registration card.</p>
+              <ol className="fdn-steps">
+                <li>Open the guest in {pmsLabel} and print or open the registration card.</li>
+                <li>Sign on the overlay that appears on the card popup.</li>
+                <li>Tap <strong>Save Signature</strong> — it uploads to FrontDesk Nexus automatically.</li>
+              </ol>
+              {res?.confirmationNumber ? (
+                <p className="fdn-muted fdn-mono">Conf {res.confirmationNumber}</p>
+              ) : (
+                <p className="fdn-muted">Sync a reservation first so signatures attach to the correct stay.</p>
+              )}
+            </section>
+          ) : null}
+
+          {activeTab === 'key' ? (
+            <section className="fdn-panel fdn-panel--key">
+              <h2 className="fdn-h2">Key encoder</h2>
 
         {hw.rfid_encoder !== 'connected' && (
           <p className="fdn-note">
@@ -1563,47 +1524,44 @@ function App() {
           </div>
         )}
 
-        <div style={{ marginTop: 16 }}>
-          <h3 className="fdn-h3" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: '#8b949e', margin: '0 0 6px' }}>
-            Key history (this reservation)
-          </h3>
-          {keyHistory.length === 0 ? (
-            <p className="fdn-muted">No keys encoded for this reservation yet.</p>
-          ) : (
-            <table className="fdn-table">
-              <thead>
-                <tr>
-                  <th>Encoded at</th>
-                  <th>Room</th>
-                  <th>Check-in</th>
-                  <th>Check-out</th>
-                  <th>Serial</th>
-                  <th>By</th>
-                </tr>
-              </thead>
-              <tbody>
-                {keyHistory.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      {row.created_at
-                        ? new Date(row.created_at).toLocaleString(undefined, {
-                            dateStyle: 'short',
-                            timeStyle: 'short',
-                          })
-                        : '—'}
-                    </td>
-                    <td>{row.room_number}</td>
-                    <td>{formatSdkDateTime(row.checkin_time, 14)}</td>
-                    <td>{formatSdkDateTime(row.checkout_time, 12)}</td>
-                    <td>{row.card_serial}</td>
-                    <td className="fdn-mono">{row.encoded_by_username ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </section>
+              <details className="fdn-details">
+                <summary>Key history ({keyHistory.length})</summary>
+                {keyHistory.length === 0 ? (
+                  <p className="fdn-muted">No keys encoded yet.</p>
+                ) : (
+                  <table className="fdn-table fdn-table--compact">
+                    <thead>
+                      <tr>
+                        <th>When</th>
+                        <th>#</th>
+                        <th>By</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {keyHistory.slice(0, 5).map((row) => (
+                        <tr key={row.id}>
+                          <td>
+                            {row.created_at
+                              ? new Date(row.created_at).toLocaleString(undefined, {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })
+                              : '—'}
+                          </td>
+                          <td>{row.card_serial}</td>
+                          <td className="fdn-mono">{row.encoded_by_username?.slice(0, 8) ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </details>
+            </section>
+          ) : null}
+        </main>
+      </div>
 
       {showManagerModal && (
         <div className="fdn-modal-backdrop" role="dialog" aria-modal="true">
