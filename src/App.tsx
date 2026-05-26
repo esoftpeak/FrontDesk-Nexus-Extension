@@ -18,6 +18,9 @@ import { isCompleteUsZip, lookupUsZipCityState, normalizeUsZipInput } from './li
 import { guestProfileToFormState } from './lib/apply-guest-profile'
 import { isCompletePhoneForLookup } from './lib/phone-lookup'
 import { formatHotelDateTime } from './lib/hotel-dates'
+import { GuestStaySummary } from './components/GuestStaySummary'
+import { LoadingScreen } from './components/LoadingScreen'
+import { IconArrowLeft, IconId, IconKey, IconPayment, IconSignature } from './components/WorkspaceIcons'
 
 function RequiredMark() {
   return (
@@ -166,6 +169,7 @@ function App() {
   const phoneHistoryTimerRef = useRef(0)
   const lastPhoneLookupRef = useRef<string | null>(null)
   const guestFormEmptyRef = useRef(true)
+  const lastLoadedConfRef = useRef<string | null>(null)
   type WorkspaceTab = 'id' | 'payment' | 'signature' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
 
@@ -223,6 +227,15 @@ function App() {
   useEffect(() => {
     setKeyCardSerial(nextKeySerialFromHistory(keyHistory, state?.reservation?.confirmationNumber))
   }, [state?.reservation?.confirmationNumber, keyHistory])
+
+  // New PMS guest load: show full stay on Key tab and drop stale read-card UI from a prior room.
+  useEffect(() => {
+    const conf = state?.reservation?.confirmationNumber?.trim() ?? null
+    if (!conf || conf === lastLoadedConfRef.current) return
+    lastLoadedConfRef.current = conf
+    setReadCardResult(null)
+    if (state?.reservation?.roomNumber) setActiveTab('key')
+  }, [state?.reservation?.confirmationNumber, state?.reservation?.roomNumber])
 
   function clearIdScan() {
     setParsed(emptyParsed)
@@ -795,9 +808,9 @@ function App() {
 
   if (!state) {
     return (
-      <div className="fdn-root">
+      <div className="fdn-root fdn-root--loading">
         {toastBanner}
-        <p className="fdn-muted">Loading…</p>
+        <LoadingScreen />
       </div>
     )
   }
@@ -824,26 +837,40 @@ function App() {
   const confLine = res?.confirmationNumber ?? guest?.pmsConfirmationCode ?? ezee?.reservationNumber ?? null
   const idTabReady = Boolean(idDetail.firstName?.trim() && idDetail.lastName?.trim() && phone.trim())
   const transferDisabled = busy || !state.auth.signedIn || !idTabReady
-  const transferLabel = busy ? '…' : 'To PMS'
 
-  const workspaceTabs: { id: WorkspaceTab; label: string; hint: string; status: 'ready' | 'idle' | 'warn' }[] = [
+  const transferTooltip = !state.auth.signedIn
+    ? 'Sign in to send guest data to the PMS'
+    : !idTabReady
+      ? 'First name, last name, and phone are required'
+      : 'Save to database and fill the open PMS guest form'
+
+  const workspaceTabs: {
+    id: WorkspaceTab
+    label: string
+    hint: string
+    status: 'ready' | 'idle' | 'warn'
+    Icon: typeof IconId
+  }[] = [
     {
       id: 'id',
       label: 'ID',
       hint: 'Guest ID scan & details',
       status: scanImages || manualEntry || idTabReady ? 'ready' : 'idle',
+      Icon: IconId,
     },
     {
       id: 'payment',
-      label: 'Pay',
+      label: 'Payment',
       hint: 'Folio & balance',
       status: res?.dueAmount || ezee?.balance ? 'ready' : 'idle',
+      Icon: IconPayment,
     },
     {
       id: 'signature',
-      label: 'Sign',
+      label: 'Signature',
       hint: 'Registration card signature',
       status: 'idle',
+      Icon: IconSignature,
     },
     {
       id: 'key',
@@ -851,6 +878,7 @@ function App() {
       hint: 'Encode room keys',
       status:
         hw.rfid_encoder !== 'connected' ? 'warn' : keyHistory.length > 0 ? 'ready' : res?.roomNumber ? 'idle' : 'warn',
+      Icon: IconKey,
     },
   ]
 
@@ -951,38 +979,26 @@ function App() {
               ]
                 .filter(Boolean)
                 .join(' ')}
-              title={tab.hint}
+              title={`${tab.label} — ${tab.hint}`}
+              aria-label={tab.label}
               aria-current={activeTab === tab.id ? 'page' : undefined}
               onClick={() => setActiveTab(tab.id)}
             >
-              <span className="fdn-nav-btn__label">{tab.label}</span>
+              <tab.Icon className="fdn-nav-btn__icon" />
             </button>
           ))}
         </nav>
 
-        <div className="fdn-transfer-rail">
-          <button
-            type="button"
-            className="fdn-transfer-btn"
-            disabled={transferDisabled}
-            title={
-              !state.auth.signedIn
-                ? 'Sign in to send guest data to the PMS'
-                : !idTabReady
-                  ? 'First name, last name, and phone are required'
-                  : 'Save to database and fill the open PMS guest form'
-            }
-            onClick={() => void onTransferToPms()}
-          >
-            <span className="fdn-transfer-btn__arrow" aria-hidden>
-              ←
-            </span>
-            <span className="fdn-transfer-btn__text">{transferLabel}</span>
-          </button>
-        </div>
-
         <main className="fdn-main">
           {notice ? <div className="fdn-banner fdn-banner--info fdn-main__notice">{notice}</div> : null}
+
+          {res?.confirmationNumber ? (
+            <GuestStaySummary res={res} guest={guest} ezee={ezee} pmsLabel={pmsLabel} />
+          ) : (
+            <p className="fdn-stay-summary__empty">
+              Open a guest in {pmsLabel} and tap <strong>Sync {pmsLabel}</strong> to load stay details.
+            </p>
+          )}
 
           {activeTab === 'id' ? (
             <section className="fdn-panel fdn-panel--id">
@@ -1333,13 +1349,30 @@ function App() {
               <div className="fdn-panel__footer">
                 <button
                   type="button"
+                  className="fdn-btn fdn-btn--primary fdn-btn--with-icon"
+                  disabled={transferDisabled}
+                  title={transferTooltip}
+                  onClick={() => void onTransferToPms()}
+                >
+                  <IconArrowLeft className="fdn-btn__icon" />
+                  {busy ? 'Sending…' : 'To PMS'}
+                </button>
+                <button
+                  type="button"
                   className="fdn-btn fdn-btn--secondary fdn-btn--xs"
                   disabled={busy || !state.auth.signedIn}
+                  title="Save to Supabase without filling the PMS form"
                   onClick={() => void onSave(false)}
                 >
                   Save DB only
                 </button>
-                <button type="button" className="fdn-btn fdn-btn--ghost fdn-btn--xs" disabled={busy} onClick={clearIdScan}>
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--ghost fdn-btn--xs"
+                  disabled={busy}
+                  title="Clear all ID fields and scan images"
+                  onClick={clearIdScan}
+                >
                   Clear
                 </button>
               </div>
@@ -1348,23 +1381,7 @@ function App() {
 
           {activeTab === 'payment' ? (
             <section className="fdn-panel fdn-panel--payment">
-              <p className="fdn-panel__lead">Folio from {pmsLabel}. Use Sync in the header after opening the guest in PMS.</p>
-              {!res?.confirmationNumber ? (
-                <p className="fdn-muted">Load a reservation to view balance.</p>
-              ) : (
-                <dl className="fdn-dl fdn-dl--stats">
-                  <dt>Total</dt>
-                  <dd>{ezee?.total ?? res.reservationTotal ?? '—'}</dd>
-                  <dt>Paid</dt>
-                  <dd>{ezee?.paid ?? res.amountPaid ?? '—'}</dd>
-                  <dt>Balance</dt>
-                  <dd className="fdn-dl__highlight">{ezee?.balance ?? res.dueAmount ?? '—'}</dd>
-                  <dt>Stay</dt>
-                  <dd>{ezee?.staySummary ?? guest?.staySummary ?? '—'}</dd>
-                  <dt>Status</dt>
-                  <dd>{ezee?.status ?? (res.restricted ? 'Restricted' : '—')}</dd>
-                </dl>
-              )}
+              <p className="fdn-panel__lead">Folio totals are in the stay summary above.</p>
               <p className="fdn-help">Card capture and payment posting will live here in a future release.</p>
             </section>
           ) : null}
@@ -1377,11 +1394,6 @@ function App() {
                 <li>Sign on the overlay that appears on the card popup.</li>
                 <li>Tap <strong>Save Signature</strong> — it uploads to FrontDesk Nexus automatically.</li>
               </ol>
-              {res?.confirmationNumber ? (
-                <p className="fdn-muted fdn-mono">Conf {res.confirmationNumber}</p>
-              ) : (
-                <p className="fdn-muted">Sync a reservation first so signatures attach to the correct stay.</p>
-              )}
             </section>
           ) : null}
 
@@ -1401,16 +1413,7 @@ function App() {
           <p className="fdn-muted">Load a reservation first to enable key encoding.</p>
         ) : (
           <>
-            <dl className="fdn-dl">
-              <dt>Room</dt>
-              <dd>{res.roomNumber}</dd>
-              <dt>Check-in</dt>
-              <dd>{formatHotelDateTime(res.checkInDate, 14)}</dd>
-              <dt>Check-out</dt>
-              <dd>{formatHotelDateTime(res.checkOutDate, 12)}</dd>
-            </dl>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
               <span style={{ fontSize: 12, color: '#c9d1d9' }}>
                 Key #{Math.min(keyCardSerial, MAX_ROOM_KEYS)}
                 {keyCardSerial > MAX_ROOM_KEYS ? ' (max reached)' : ''}
@@ -1493,17 +1496,24 @@ function App() {
           </>
         )}
 
-        {readCardResult && (
-          <div className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
+        {readCardResult ? (
+          <div
+            className={`fdn-banner ${readCardResult.ok ? 'fdn-banner--info' : 'fdn-banner--danger'} fdn-read-card`}
+            style={{ marginTop: 8 }}
+          >
+            <p className="fdn-read-card__title">Last card read (encoder)</p>
             {readCardResult.ok ? (
               readCardResult.roomNumber ? (
-                <dl className="fdn-dl" style={{ margin: 0 }}>
+                <dl className="fdn-dl fdn-dl--compact" style={{ margin: 0 }}>
                   <dt>Room</dt>
                   <dd>
                     <strong>{readCardResult.roomNumber}</strong>
-                    {readCardResult.cardSerial && readCardResult.cardSerial > 1 && (
-                      <span style={{ marginLeft: 8, opacity: 0.7 }}>Serial {readCardResult.cardSerial}</span>
-                    )}
+                    {readCardResult.cardSerial && readCardResult.cardSerial > 1 ? (
+                      <span className="fdn-read-card__meta"> · Serial {readCardResult.cardSerial}</span>
+                    ) : null}
+                    {res?.roomNumber && readCardResult.roomNumber !== res.roomNumber ? (
+                      <span className="fdn-read-card__warn"> · Different from loaded stay (Rm {res.roomNumber})</span>
+                    ) : null}
                   </dd>
                   <dt>Check-in</dt>
                   <dd>{formatHotelDateTime(readCardResult.checkinTime, 14)}</dd>
@@ -1513,16 +1523,14 @@ function App() {
               ) : (
                 <>
                   <strong>Card detected</strong>
-                  <div style={{ marginTop: 4, fontSize: '0.75rem', opacity: 0.7 }}>
-                    Encoded by another system — room number unavailable
-                  </div>
+                  <div className="fdn-help">Encoded by another system — room number unavailable</div>
                 </>
               )
             ) : (
               `Read failed — ${readCardResult.error}`
             )}
           </div>
-        )}
+        ) : null}
 
               <details className="fdn-details">
                 <summary>Key history ({keyHistory.length})</summary>
