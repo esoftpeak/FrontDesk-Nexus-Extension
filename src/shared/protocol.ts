@@ -168,6 +168,10 @@ export type ExtensionMessage =
   | { type: 'GET_RETURNING_GUEST_HISTORY'; idNumber: string }
   /** Look up prior stays / ID profiles by phone number hash. */
   | { type: 'GET_GUEST_HISTORY_BY_PHONE'; phone: string }
+  /** Two-stage TWAIN scan: acquire front image only (no OCR). */
+  | { type: 'SCAN_FRONT' }
+  /** Two-stage TWAIN scan: acquire back image + run OCR, return parsed fields. */
+  | { type: 'SCAN_BACK' }
 
 export type ExtensionResponse =
   | {

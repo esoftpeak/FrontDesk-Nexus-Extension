@@ -168,8 +168,10 @@ function App() {
   const [formError, setFormError] = useState<string | null>(null)
   const [scanImages, setScanImages] = useState<{
     front: string
-    back: string
+    back: string | null
   } | null>(null)
+  const [scanFrontBusy, setScanFrontBusy] = useState(false)
+  const [scanBackBusy, setScanBackBusy] = useState(false)
   const [lastOcrProvider, setLastOcrProvider] = useState<string | null>(null)
   const [idDetail, setIdDetail] = useState<IdScanDetailGuru>(emptyIdDetail)
   const [guestRemark, setGuestRemark] = useState('')
@@ -286,6 +288,8 @@ function App() {
     setPhone('')
     setEmailGuest('')
     setScanImages(null)
+    setScanFrontBusy(false)
+    setScanBackBusy(false)
     setLastOcrProvider(null)
     setLastDocumentData(null)
     setLastScanReceivedAt(null)
@@ -302,6 +306,65 @@ function App() {
     setGuestHistoryNote(null)
     lastPhoneLookupRef.current = null
     void chrome.storage.local.remove('fdn_last_native_scan')
+  }
+
+  async function onScanFront() {
+    setScanFrontBusy(true)
+    setFormError(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({ type: 'SCAN_FRONT' })) as {
+        ok: boolean
+        imageBase64?: string
+        error?: string
+      }
+      if (!res.ok) {
+        setFormError(res.error ?? 'Front scan failed')
+        return
+      }
+      setScanImages({ front: res.imageBase64 ?? '', back: null })
+    } finally {
+      setScanFrontBusy(false)
+    }
+  }
+
+  async function onScanBack() {
+    setScanBackBusy(true)
+    setFormError(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({ type: 'SCAN_BACK' })) as {
+        ok: boolean
+        imageBase64?: string
+        ocrData?: Record<string, string>
+        fullName?: string | null
+        dateOfBirth?: string | null
+        idNumber?: string | null
+        idType?: string | null
+        issueDate?: string | null
+        expiryDate?: string | null
+        address?: string | null
+        error?: string
+      }
+      if (!res.ok) {
+        setFormError(res.error ?? 'Back scan failed')
+        return
+      }
+      const backB64 = res.imageBase64 ?? ''
+      setScanImages((prev) => ({ front: prev?.front ?? '', back: backB64 }))
+      const ocr = res.ocrData ?? {}
+      setParsed({
+        fullName: (typeof res.fullName === 'string' ? res.fullName : (ocr.fullName ?? null)) ?? null,
+        dateOfBirth: (typeof res.dateOfBirth === 'string' ? res.dateOfBirth : (ocr.dateOfBirth ?? null)) ?? null,
+        idNumber: (typeof res.idNumber === 'string' ? res.idNumber : (ocr.idNumber ?? null)) ?? null,
+        idType: (typeof res.idType === 'string' ? res.idType : (ocr.idType ?? null)) ?? null,
+        issueDate: (typeof res.issueDate === 'string' ? res.issueDate : (ocr.issueDate ?? null)) ?? null,
+        expiryDate: (typeof res.expiryDate === 'string' ? res.expiryDate : (ocr.expiryDate ?? null)) ?? null,
+        address: (typeof res.address === 'string' ? res.address : (ocr.address ?? null)) ?? null,
+      })
+      setLastOcrProvider('native_host')
+      setLastScanReceivedAt(new Date().toISOString())
+    } finally {
+      setScanBackBusy(false)
+    }
   }
 
   const applyGuestProfile = useCallback((record: GuestStayHistoryRecord) => {
@@ -503,7 +566,7 @@ function App() {
     try {
       return {
         front: base64ToDataUrl(scanImages.front),
-        back: base64ToDataUrl(scanImages.back),
+        back: scanImages.back ? base64ToDataUrl(scanImages.back) : null,
       }
     } catch {
       return null
@@ -1005,6 +1068,30 @@ function App() {
                     </button>
                   </div>
                 ) : null}
+                {!manualEntry ? (
+                  <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                    <button
+                      type="button"
+                      className="fdn-btn fdn-btn--secondary fdn-btn--xs"
+                      disabled={scanFrontBusy || scanBackBusy}
+                      title="Place ID face-up on scanner, then click"
+                      onClick={() => void onScanFront()}
+                    >
+                      {scanFrontBusy ? 'Scanning…' : 'Scan Front'}
+                    </button>
+                    {scanImages?.front && !scanImages.back ? (
+                      <button
+                        type="button"
+                        className="fdn-btn fdn-btn--primary fdn-btn--xs"
+                        disabled={scanBackBusy || scanFrontBusy}
+                        title="Flip ID over on scanner, then click"
+                        onClick={() => void onScanBack()}
+                      >
+                        {scanBackBusy ? 'Scanning…' : 'Scan Back'}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               {!manualEntry && scanPreviewUrls ? (
@@ -1026,14 +1113,20 @@ function App() {
                     <div className="fdn-id-preview__cell">
                       <p className="fdn-id-preview__side">Back</p>
                       <div className="fdn-id-preview__main">
-                        <img
-                          className="fdn-id-preview__img"
-                          src={scanPreviewUrls.back}
-                          alt="ID back"
-                          style={{
-                            transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
-                          }}
-                        />
+                        {scanPreviewUrls.back ? (
+                          <img
+                            className="fdn-id-preview__img"
+                            src={scanPreviewUrls.back}
+                            alt="ID back"
+                            style={{
+                              transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+                            }}
+                          />
+                        ) : (
+                          <p className="fdn-muted" style={{ fontSize: 11, padding: '8px 4px' }}>
+                            {scanBackBusy ? 'Scanning back…' : 'Flip card, then click Scan Back'}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>

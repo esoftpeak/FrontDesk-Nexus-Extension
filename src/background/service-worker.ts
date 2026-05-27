@@ -2263,6 +2263,44 @@ async function handleMessage(
     return { ok: true, state: await getState() }
   }
 
+  if (msg.type === 'SCAN_FRONT') {
+    try {
+      const raw = await sendNativeRequest({ type: 'SCAN_FRONT' }, 60_000)
+      if (raw.type === 'ERROR') {
+        return { ok: false, error: String(raw.message ?? 'Front scan failed') }
+      }
+      return { ok: true, imageBase64: String(raw.image_base64 ?? '') }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : 'Front scan failed' }
+    }
+  }
+
+  if (msg.type === 'SCAN_BACK') {
+    try {
+      const raw = await sendNativeRequest({ type: 'SCAN_BACK' }, 60_000)
+      if (raw.type === 'ERROR') {
+        return { ok: false, error: String(raw.message ?? 'Back scan failed') }
+      }
+      const ocrData = raw.ocr_data != null && typeof raw.ocr_data === 'object' && !Array.isArray(raw.ocr_data)
+        ? (raw.ocr_data as Record<string, string>)
+        : {}
+      return {
+        ok: true,
+        imageBase64: String(raw.image_base64 ?? ''),
+        ocrData,
+        fullName: typeof raw.fullName === 'string' ? raw.fullName : (ocrData.fullName ?? null),
+        dateOfBirth: typeof raw.dateOfBirth === 'string' ? raw.dateOfBirth : (ocrData.dateOfBirth ?? null),
+        idNumber: typeof raw.idNumber === 'string' ? raw.idNumber : (ocrData.idNumber ?? null),
+        idType: typeof raw.idType === 'string' ? raw.idType : (ocrData.idType ?? null),
+        issueDate: typeof raw.issueDate === 'string' ? raw.issueDate : (ocrData.issueDate ?? null),
+        expiryDate: typeof raw.expiryDate === 'string' ? raw.expiryDate : (ocrData.expiryDate ?? null),
+        address: typeof raw.address === 'string' ? raw.address : (ocrData.address ?? null),
+      }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : 'Back scan failed' }
+    }
+  }
+
   return { ok: false, error: 'Unknown message type' }
 }
 
