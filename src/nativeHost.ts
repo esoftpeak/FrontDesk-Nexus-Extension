@@ -344,6 +344,9 @@ export type NativeHostScanCallback = (payload: NativeScanSuccessPayload) => void
 
 export type NativeHostPanelDebugFn = (payload: NativeHostRxDebugBroadcast) => void
 
+/** Called when the two-pass scan thread pushes a front-only image (back not yet scanned). */
+export type NativeHostScanFrontCallback = (imageFrontBase64: string) => void
+
 function documentDataPreviewForPanel(doc: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(doc)) {
@@ -479,6 +482,7 @@ export function initNativeHost(
   onScan: NativeHostScanCallback,
   onPanelDebug?: NativeHostPanelDebugFn,
   onRfidStatus?: (connected: boolean, error: string | null) => void,
+  onScanFront?: NativeHostScanFrontCallback,
 ): void {
   const connect = () => {
     if (nativePort != null) {
@@ -668,6 +672,15 @@ export function initNativeHost(
         void Promise.resolve(onScan(payload)).catch((err) => {
           console.error(`${LOG} onScan failed`, describeUnknownError(err))
         })
+        return
+      }
+
+      if (raw.type === 'SCAN_FRONT_RESULT') {
+        const imageFront = typeof raw.image_front_base64 === 'string' ? raw.image_front_base64.trim() : ''
+        logInboundFromPython('SCAN_FRONT_RESULT', raw)
+        if (imageFront && onScanFront) {
+          onScanFront(imageFront)
+        }
         return
       }
 
