@@ -380,6 +380,7 @@ function App() {
     const next = guestProfileToFormState(record)
     setIdDetail((d) => ({
       ...next.idDetail,
+      postalCode: normalizeUsZipInput(next.idDetail.postalCode) || null,
       phoneCountryCode: d.phoneCountryCode,
       usaCaPhone: d.usaCaPhone ?? next.idDetail.usaCaPhone,
     }))
@@ -503,6 +504,7 @@ function App() {
       setIdDetail({
         ...detail,
         state: normalizeUsStateCode(detail.state) ?? detail.state,
+        postalCode: normalizeUsZipInput(detail.postalCode) || null,
       })
       lastZipLookupRef.current = normalizeUsZipInput(detail.postalCode) || null
       setZipLookupNote(null)
@@ -1241,16 +1243,18 @@ function App() {
                     className="fdn-input"
                     inputMode="numeric"
                     autoComplete="postal-code"
+                    maxLength={5}
                     value={idDetail.postalCode ?? ''}
                     onChange={(e) => {
                       const raw = e.target.value
+                      const zip = normalizeUsZipInput(raw)
                       lastZipLookupRef.current = null
-                      setIdDetail((d) => ({ ...d, postalCode: raw.trim() || null }))
-                      if (isCompleteUsZip(normalizeUsZipInput(raw))) void runZipLookup(raw)
+                      setIdDetail((d) => ({ ...d, postalCode: zip || null }))
+                      if (isCompleteUsZip(zip)) void runZipLookup(zip)
                     }}
                     onBlur={() => {
-                      const raw = idDetail.postalCode ?? ''
-                      if (isCompleteUsZip(normalizeUsZipInput(raw))) void runZipLookup(raw)
+                      const zip = normalizeUsZipInput(idDetail.postalCode)
+                      if (isCompleteUsZip(zip)) void runZipLookup(zip)
                     }}
                   />
                   {zipLookupBusy ? (
