@@ -7,6 +7,7 @@ import type {
   KeyHistoryRow,
   NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
+  ReturningGuestRecord,
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
@@ -518,6 +519,22 @@ function App() {
         setPhone(p)
         lastPhoneLookupRef.current = null
         void runPhoneHistoryLookup(p)
+      } else if (m.parsed.idNumber) {
+        void (async () => {
+          const res = (await chrome.runtime.sendMessage({
+            type: 'GET_RETURNING_GUEST_HISTORY',
+            idNumber: m.parsed.idNumber!,
+          })) as { ok?: boolean; returningGuestHistory?: ReturningGuestRecord[] }
+          const history = res.ok ? (res.returningGuestHistory ?? []) : []
+          const latest = history.find((r) => r.phone || r.email)
+          if (latest?.phone) {
+            setPhone(latest.phone)
+            lastPhoneLookupRef.current = null
+          }
+          if (latest?.email && !m.detail?.email?.trim()) {
+            setEmailGuest(latest.email)
+          }
+        })()
       }
       if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
       if (m.autoSave.ok) {
