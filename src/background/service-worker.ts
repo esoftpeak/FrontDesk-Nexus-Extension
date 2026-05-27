@@ -928,7 +928,7 @@ async function saveIdScan(args: {
   try {
     if (args.imageFrontBase64) {
       const mime = guessImageMimeFromBase64(args.imageFrontBase64)
-      const ext = mime === 'image/jpeg' ? 'jpg' : 'png'
+      const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/bmp' ? 'bmp' : 'png'
       const path = `${basePath}/front.${ext}`
       const blob = base64ToBlob(args.imageFrontBase64, mime)
       const { error: upErr } = await client.storage.from('id-images').upload(path, blob, {
@@ -940,7 +940,7 @@ async function saveIdScan(args: {
     }
     if (args.imageBackBase64) {
       const mime = guessImageMimeFromBase64(args.imageBackBase64)
-      const ext = mime === 'image/jpeg' ? 'jpg' : 'png'
+      const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/bmp' ? 'bmp' : 'png'
       const path = `${basePath}/back.${ext}`
       const blob = base64ToBlob(args.imageBackBase64, mime)
       const { error: upErr } = await client.storage.from('id-images').upload(path, blob, {

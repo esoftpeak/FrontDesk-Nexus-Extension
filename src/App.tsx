@@ -321,7 +321,11 @@ function App() {
         setFormError(res.error ?? 'Front scan failed')
         return
       }
-      setScanImages({ front: res.imageBase64 ?? '', back: null })
+      if (!res.imageBase64) {
+        setFormError('Front scan returned no image — check scanner connection')
+        return
+      }
+      setScanImages({ front: res.imageBase64, back: null })
     } finally {
       setScanFrontBusy(false)
     }
@@ -348,7 +352,11 @@ function App() {
         setFormError(res.error ?? 'Back scan failed')
         return
       }
-      const backB64 = res.imageBase64 ?? ''
+      if (!res.imageBase64) {
+        setFormError('Back scan returned no image — check scanner connection')
+        return
+      }
+      const backB64 = res.imageBase64
       setScanImages((prev) => ({ front: prev?.front ?? '', back: backB64 }))
       const ocr = res.ocrData ?? {}
       setParsed({
