@@ -514,7 +514,11 @@ body {
 }
 
 .fdn-panel--id {
-  gap: 4px;
+  gap: 2px;
+}
+
+.fdn-main:has(.fdn-panel--id) {
+  padding: 4px 8px 6px;
 }
 
 .fdn-panel__toolbar {
@@ -533,10 +537,35 @@ body {
 
 .fdn-panel__footer {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
   margin-top: auto;
   padding-top: 4px;
+}
+
+.fdn-panel--id .fdn-panel__footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 6px 0 2px;
+  background: linear-gradient(180deg, transparent 0%, #0f1419 12px, #0f1419 100%);
+  border-top: 1px solid #30363d;
+}
+
+.fdn-panel--id .fdn-panel__footer .fdn-btn {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.fdn-panel--id .fdn-panel__footer .fdn-btn--with-icon {
+  padding: 5px 8px;
+}
+
+.fdn-panel__footer-cancel {
+  margin-left: auto;
 }
 
 .fdn-check--compact {
@@ -566,6 +595,15 @@ body {
   text-transform: lowercase;
   color: #6e7681;
   letter-spacing: 0;
+}
+
+.fdn-tag--scan-time {
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 8px;
+  color: #6e7681;
 }
 
 .fdn-details {
@@ -629,19 +667,43 @@ body {
   flex-shrink: 0;
 }
 
+.fdn-id-preview--compact.fdn-id-preview--dual {
+  margin: 0;
+}
+
+.fdn-id-preview--compact .fdn-id-preview__pair {
+  gap: 4px;
+}
+
 .fdn-id-preview--compact .fdn-id-preview__main {
-  max-height: 118px;
-  min-height: 96px;
+  max-height: 72px;
+  min-height: 56px;
+  border-radius: 4px;
 }
 
 .fdn-id-preview--compact .fdn-id-preview__img {
-  max-height: 118px;
-  min-height: 88px;
+  max-height: 72px;
+  min-height: 52px;
 }
 
 .fdn-id-preview--compact .fdn-id-preview__side {
-  margin-bottom: 2px;
+  margin: 0 0 1px;
+  font-size: 8px;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+}
+
+.fdn-panel--id .fdn-id-preview__tool--xs {
+  width: 22px;
+  height: 22px;
+  font-size: 0.75rem;
+}
+
+.fdn-id-preview__empty-back {
+  margin: 0;
+  padding: 4px 2px;
   font-size: 9px;
+  text-align: center;
 }
 
 .fdn-id-preview__tools-inline {
@@ -834,8 +896,14 @@ body {
 }
 
 .fdn-btn--danger {
-  background: #b91c1c;
-  border-color: #b91c1c;
+  background: #da3633;
+  border-color: #f85149;
+  color: #fff;
+}
+
+.fdn-btn--danger:hover:not(:disabled) {
+  background: #f85149;
+  border-color: #ff7b72;
 }
 
 .fdn-help {
@@ -1145,8 +1213,70 @@ body {
   background: #30363d;
 }
 
+.fdn-panel--id .fdn-panel__toolbar {
+  gap: 4px;
+  padding-bottom: 0;
+}
+
 .fdn-panel--id .fdn-grid--idguru {
-  margin-top: 4px;
+  margin-top: 0;
+  gap: 4px;
+}
+
+.fdn-panel--id .fdn-grid--three-names,
+.fdn-panel--id .fdn-grid--two-names {
+  gap: 4px;
+}
+
+.fdn-panel--id .fdn-label {
+  gap: 1px;
+  font-size: 10px;
+}
+
+.fdn-panel--id .fdn-label__text,
+.fdn-panel--id .fdn-field__label {
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.fdn-panel--id .fdn-input {
+  padding: 3px 5px;
+  font-size: 11px;
+}
+
+.fdn-panel--id .fdn-field {
+  gap: 2px;
+  font-size: 10px;
+}
+
+.fdn-panel--id .fdn-phone-inline {
+  gap: 4px;
+}
+
+.fdn-panel--id .fdn-check--phone-flag {
+  font-size: 10px;
+  gap: 4px;
+}
+
+.fdn-panel--id .fdn-zip-hint {
+  margin-top: 1px;
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.fdn-panel--id .fdn-details {
+  font-size: 10px;
+  margin: 0;
+}
+
+.fdn-panel--id .fdn-details summary {
+  padding: 2px 0;
+}
+
+.fdn-panel--id .fdn-form-error {
+  margin-bottom: 4px;
+  padding: 4px 6px;
+  font-size: 10px;
 }
 
 .fdn-grid--idguru {

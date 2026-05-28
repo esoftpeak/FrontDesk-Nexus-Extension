@@ -1163,6 +1163,11 @@ function App() {
                     {ocrProviderShortLabel(lastOcrProvider)}
                   </span>
                 ) : null}
+                {lastScanReceivedAt && !manualEntry ? (
+                  <span className="fdn-tag fdn-tag--scan-time" title="Last ID scan received">
+                    {formatLocalFromIso(lastScanReceivedAt)}
+                  </span>
+                ) : null}
                 {!manualEntry && scanPreviewUrls ? (
                   <div className="fdn-id-preview__tools-inline" aria-label="Adjust image orientation">
                     <button
@@ -1225,7 +1230,7 @@ function App() {
                             }}
                           />
                         ) : (
-                          <p className="fdn-muted" style={{ fontSize: 11, padding: '8px 4px' }}>
+                          <p className="fdn-muted fdn-id-preview__empty-back">
                             Flip card to scan back
                           </p>
                         )}
@@ -1464,11 +1469,6 @@ function App() {
                   Age (from DOB)
                   <input className="fdn-input" readOnly value={idAgeLabel ?? ''} title="Computed from DOB" />
                 </label>
-                {lastScanReceivedAt ? (
-                  <span className="fdn-scan-time" title="Last ID scan received">
-                    Scan {formatLocalFromIso(lastScanReceivedAt)}
-                  </span>
-                ) : null}
               </div>
 
               <details className="fdn-details">
@@ -1507,15 +1507,6 @@ function App() {
               <div className="fdn-panel__footer">
                 <button
                   type="button"
-                  className="fdn-btn fdn-btn--ghost fdn-btn--xs"
-                  disabled={busy}
-                  title={cancelTooltip}
-                  onClick={onCancelGuest}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
                   className="fdn-btn fdn-btn--secondary fdn-btn--with-icon"
                   disabled={guestActionsDisabled}
                   title={transferTooltip}
@@ -1526,12 +1517,21 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className="fdn-btn fdn-btn--primary fdn-btn--xs"
+                  className="fdn-btn fdn-btn--primary"
                   disabled={guestActionsDisabled}
                   title={saveAndClearTooltip}
                   onClick={() => void onSaveAndClear()}
                 >
                   {busy ? 'Saving…' : 'Save & Clear'}
+                </button>
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--danger fdn-panel__footer-cancel"
+                  disabled={busy}
+                  title={cancelTooltip}
+                  onClick={onCancelGuest}
+                >
+                  Cancel
                 </button>
               </div>
             </section>
