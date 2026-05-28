@@ -871,68 +871,6 @@ async function patchLastScanResultContact(args: {
   })
 }
 
-/** When the same ID is already on file, refresh contact + PII on existing rows instead of skipping. */
-async function updateExistingIdScansByHash(
-  client: SupabaseClient,
-  id_number_hash: string,
-  patch: {
-    pii_encrypted: Record<string, unknown>
-    phone_encrypted: Record<string, unknown> | null
-    email_encrypted: Record<string, unknown> | null
-    phone_number_hash: string | null
-    /** Bumps ID Data list sort/filter (web uses `scanned_at` as last activity). */
-    scanned_at: string
-    scanned_by: string
-    imageFrontPath?: string | null
-    imageBackPath?: string | null
-  },
-): Promise<{ ok: true; latestId: string } | { ok: false; error: string }> {
-  const { data: existing, error: selErr } = await client
-    .from('id_scans')
-    .select('id')
-    .eq('id_number_hash', id_number_hash)
-    .order('created_at', { ascending: false })
-
-  if (selErr) return { ok: false, error: selErr.message }
-  if (!existing?.length) return { ok: false, error: 'No existing ID scan row to update.' }
-
-  const rowPatch: Record<string, unknown> = {
-    pii_encrypted: patch.pii_encrypted,
-    phone_encrypted: patch.phone_encrypted,
-    email_encrypted: patch.email_encrypted,
-    phone_number_hash: patch.phone_number_hash,
-    scanned_at: patch.scanned_at,
-    scanned_by: patch.scanned_by,
-  }
-
-  let updErr = (
-    await client.from('id_scans').update(rowPatch).eq('id_number_hash', id_number_hash)
-  ).error
-
-  if (
-    updErr?.message?.includes('phone_number_hash') ||
-    updErr?.message?.includes('id_number_hash')
-  ) {
-    const { phone_number_hash: _ph, ...withoutHash } = rowPatch
-    updErr = (await client.from('id_scans').update(withoutHash).eq('id_number_hash', id_number_hash))
-      .error
-  }
-
-  if (updErr) return { ok: false, error: updErr.message }
-
-  const latestId = String(existing[0]!.id)
-  if (patch.imageFrontPath || patch.imageBackPath) {
-    const imgPatch: Record<string, unknown> = {}
-    if (patch.imageFrontPath) imgPatch.image_front_path = patch.imageFrontPath
-    if (patch.imageBackPath) imgPatch.image_back_path = patch.imageBackPath
-    const { error: imgErr } = await client.from('id_scans').update(imgPatch).eq('id', latestId)
-    if (imgErr) console.warn('[FDN SW] id_scans image update', imgErr.message)
-  }
-
-  return { ok: true, latestId }
-}
-
-
 async function saveIdScan(args: {
   parsed: ParsedIdFields
   phone: string | null
@@ -1066,62 +1004,13 @@ async function saveIdScan(args: {
     email_encrypted = (await encryptJson({ value: emailTrim })) as unknown as Record<string, unknown>
   }
 
-  // Same ID already on file — update contact/PII (and latest images) instead of inserting a duplicate.
-  if (id_number_hash) {
-    const { data: existing } = await client
-      .from('id_scans')
-      .select('id')
-      .eq('id_number_hash', id_number_hash)
-      .limit(1)
-    if (existing && existing.length > 0) {
-      const touchedAt = new Date().toISOString()
-      const upd = await updateExistingIdScansByHash(client, id_number_hash, {
-        pii_encrypted: pii_encrypted as unknown as Record<string, unknown>,
-        phone_encrypted,
-        email_encrypted,
-        phone_number_hash,
-        scanned_at: touchedAt,
-        scanned_by: user.id,
-        imageFrontPath,
-        imageBackPath,
-      })
-      if (upd.ok === false) {
-        lastError = upd.error
-        return { ok: false, error: upd.error }
-      }
-
-      const { error: audErr } = await client.from('audit_log').insert({
-        user_id: user.id,
-        username: user.email,
-        user_role: cachedRole,
-        terminal_id: terminalId,
-        action_type: 'ID_SCAN_UPDATE',
-        confirmation_number: conf,
-        description: args.manualEntry
-          ? 'ID contact/PII updated (MANUAL_ENTRY)'
-          : 'ID contact/PII updated (returning guest)',
-        new_value: {
-          id_scan_id: upd.latestId,
-          manager_override: args.managerOverride,
-        },
-      })
-      if (audErr) console.warn('audit_log insert', audErr.message)
-
-      await patchLastScanResultContact({
-        phone: phoneTrim || null,
-        email: emailTrim || null,
-        parsed: args.parsed,
-      })
-
-      console.log('[FDN SW] Updated existing ID scan(s) for returning guest')
-      return { ok: true, state: await getState() }
-    }
-  }
+  const scannedAt = new Date().toISOString()
 
   const insertBase = {
     id: scanId,
     reservation_id: resRow.id,
     confirmation_number: conf,
+    scanned_at: scannedAt,
     scanned_by: user.id,
     terminal_id: terminalId,
     manual_entry: args.manualEntry,
@@ -1671,7 +1560,7 @@ async function fetchReturningGuestHistory(idNumber: string): Promise<ExtensionRe
     .select(GUEST_HISTORY_SCAN_SELECT)
     .eq('id_number_hash', hash)
     .order('scanned_at', { ascending: false })
-    .limit(5)
+    .limit(25)
 
   data = (byHash.data ?? []) as Record<string, unknown>[]
   error = byHash.error
@@ -1682,7 +1571,7 @@ async function fetchReturningGuestHistory(idNumber: string): Promise<ExtensionRe
       .select(GUEST_HISTORY_SCAN_SELECT)
       .eq('id_number_hash', hash)
       .order('created_at', { ascending: false })
-      .limit(5)
+      .limit(25)
     data = (fallback.data ?? []) as Record<string, unknown>[]
     error = fallback.error
   }
@@ -1727,7 +1616,7 @@ async function fetchGuestHistoryByPhone(phone: string): Promise<ExtensionRespons
       .select(GUEST_HISTORY_SCAN_SELECT)
       .eq('phone_number_hash', phoneHash)
       .order('scanned_at', { ascending: false })
-      .limit(10)
+      .limit(25)
     data = (res.data ?? []) as Record<string, unknown>[]
     error = res.error
     if (error?.message?.includes('phone_number_hash') || error?.message?.includes('scanned_at')) {
@@ -1737,7 +1626,7 @@ async function fetchGuestHistoryByPhone(phone: string): Promise<ExtensionRespons
           .select(GUEST_HISTORY_SCAN_SELECT)
           .eq('phone_number_hash', phoneHash)
           .order('created_at', { ascending: false })
-          .limit(10)
+          .limit(25)
         data = (retry.data ?? []) as Record<string, unknown>[]
         error = retry.error
       }
@@ -1768,7 +1657,7 @@ async function fetchGuestHistoryByPhone(phone: string): Promise<ExtensionRespons
       return { ok: true, guestStayHistory: [] }
     }
     const records = await filterRecordsByPhone((res.data ?? []) as Record<string, unknown>[], phone)
-    return { ok: true, guestStayHistory: records.slice(0, 10) }
+    return { ok: true, guestStayHistory: records.slice(0, 25) }
   }
 
   if (error) {
@@ -1780,7 +1669,7 @@ async function fetchGuestHistoryByPhone(phone: string): Promise<ExtensionRespons
     await Promise.all((data ?? []).map((r) => guestStayRecordFromScanRow(r)))
   ).filter((r): r is GuestStayHistoryRecord => r != null)
 
-  return { ok: true, guestStayHistory: records }
+  return { ok: true, guestStayHistory: records.slice(0, 25) }
 }
 
 async function fetchKeyHistoryForCurrentReservation(): Promise<ExtensionResponse> {
