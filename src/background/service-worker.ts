@@ -851,6 +851,88 @@ function normalizeIdNumber(n: string | null): string {
   return (n ?? '').replace(/\s+/g, '').toUpperCase()
 }
 
+async function patchLastScanResultContact(args: {
+  phone: string | null
+  email: string | null
+  parsed: ParsedIdFields
+}): Promise<void> {
+  const stored = await chrome.storage.local.get('lastScanResult')
+  const prev = (stored.lastScanResult ?? {}) as Record<string, unknown>
+  await chrome.storage.local.set({
+    lastScanResult: {
+      ...prev,
+      phone: args.phone?.trim() || null,
+      email: args.email?.trim() || null,
+      id_number: args.parsed.idNumber?.trim() || (prev.id_number as string | null) || null,
+      expiry_date: args.parsed.expiryDate?.trim() || (prev.expiry_date as string | null) || null,
+      issue_date: args.parsed.issueDate?.trim() || (prev.issue_date as string | null) || null,
+      document_type: args.parsed.idType?.trim() || (prev.document_type as string | null) || null,
+      dob: args.parsed.dateOfBirth?.trim() || (prev.dob as string | null) || null,
+    },
+  })
+}
+
+/** When the same ID is already on file, refresh contact + PII on existing rows instead of skipping. */
+async function updateExistingIdScansByHash(
+  client: SupabaseClient,
+  id_number_hash: string,
+  patch: {
+    pii_encrypted: Record<string, unknown>
+    phone_encrypted: Record<string, unknown> | null
+    email_encrypted: Record<string, unknown> | null
+    phone_number_hash: string | null
+    /** Bumps ID Data list sort/filter (web uses `scanned_at` as last activity). */
+    scanned_at: string
+    scanned_by: string
+    imageFrontPath?: string | null
+    imageBackPath?: string | null
+  },
+): Promise<{ ok: true; latestId: string } | { ok: false; error: string }> {
+  const { data: existing, error: selErr } = await client
+    .from('id_scans')
+    .select('id')
+    .eq('id_number_hash', id_number_hash)
+    .order('created_at', { ascending: false })
+
+  if (selErr) return { ok: false, error: selErr.message }
+  if (!existing?.length) return { ok: false, error: 'No existing ID scan row to update.' }
+
+  const rowPatch: Record<string, unknown> = {
+    pii_encrypted: patch.pii_encrypted,
+    phone_encrypted: patch.phone_encrypted,
+    email_encrypted: patch.email_encrypted,
+    phone_number_hash: patch.phone_number_hash,
+    scanned_at: patch.scanned_at,
+    scanned_by: patch.scanned_by,
+  }
+
+  let updErr = (
+    await client.from('id_scans').update(rowPatch).eq('id_number_hash', id_number_hash)
+  ).error
+
+  if (
+    updErr?.message?.includes('phone_number_hash') ||
+    updErr?.message?.includes('id_number_hash')
+  ) {
+    const { phone_number_hash: _ph, ...withoutHash } = rowPatch
+    updErr = (await client.from('id_scans').update(withoutHash).eq('id_number_hash', id_number_hash))
+      .error
+  }
+
+  if (updErr) return { ok: false, error: updErr.message }
+
+  const latestId = String(existing[0]!.id)
+  if (patch.imageFrontPath || patch.imageBackPath) {
+    const imgPatch: Record<string, unknown> = {}
+    if (patch.imageFrontPath) imgPatch.image_front_path = patch.imageFrontPath
+    if (patch.imageBackPath) imgPatch.image_back_path = patch.imageBackPath
+    const { error: imgErr } = await client.from('id_scans').update(imgPatch).eq('id', latestId)
+    if (imgErr) console.warn('[FDN SW] id_scans image update', imgErr.message)
+  }
+
+  return { ok: true, latestId }
+}
+
 
 async function saveIdScan(args: {
   parsed: ParsedIdFields
@@ -972,27 +1054,70 @@ async function saveIdScan(args: {
   }
   const pii_encrypted = await encryptJson(piiPayload)
   const id_number_hash = rawId ? await hashIdNumber(rawId) : null
-  const phone_number_hash = args.phone?.trim() ? await hashPhoneNumber(args.phone.trim()) : null
+  const phoneTrim = args.phone?.trim() ?? ''
+  const emailTrim = args.email?.trim() ?? ''
+  const phone_number_hash = phoneTrim ? await hashPhoneNumber(phoneTrim) : null
 
-  // Dedup guard: same ID already exists in the database — skip forever.
-  // Prevents duplicates regardless of when the first scan was, or what confirmation it was under.
-  // Returning guests will silently skip the insert (their data is already on file).
-  if (id_number_hash && !args.manualEntry) {
+  let phone_encrypted: Record<string, unknown> | null = null
+  let email_encrypted: Record<string, unknown> | null = null
+  if (phoneTrim) {
+    phone_encrypted = (await encryptJson({ value: phoneTrim })) as unknown as Record<string, unknown>
+  }
+  if (emailTrim) {
+    email_encrypted = (await encryptJson({ value: emailTrim })) as unknown as Record<string, unknown>
+  }
+
+  // Same ID already on file — update contact/PII (and latest images) instead of inserting a duplicate.
+  if (id_number_hash) {
     const { data: existing } = await client
       .from('id_scans')
       .select('id')
       .eq('id_number_hash', id_number_hash)
       .limit(1)
     if (existing && existing.length > 0) {
-      console.log('[FDN SW] Dedup: same ID already exists in database — skipping duplicate')
-      return { ok: true }
+      const touchedAt = new Date().toISOString()
+      const upd = await updateExistingIdScansByHash(client, id_number_hash, {
+        pii_encrypted: pii_encrypted as unknown as Record<string, unknown>,
+        phone_encrypted,
+        email_encrypted,
+        phone_number_hash,
+        scanned_at: touchedAt,
+        scanned_by: user.id,
+        imageFrontPath,
+        imageBackPath,
+      })
+      if (upd.ok === false) {
+        lastError = upd.error
+        return { ok: false, error: upd.error }
+      }
+
+      const { error: audErr } = await client.from('audit_log').insert({
+        user_id: user.id,
+        username: user.email,
+        user_role: cachedRole,
+        terminal_id: terminalId,
+        action_type: 'ID_SCAN_UPDATE',
+        confirmation_number: conf,
+        description: args.manualEntry
+          ? 'ID contact/PII updated (MANUAL_ENTRY)'
+          : 'ID contact/PII updated (returning guest)',
+        new_value: {
+          id_scan_id: upd.latestId,
+          manager_override: args.managerOverride,
+        },
+      })
+      if (audErr) console.warn('audit_log insert', audErr.message)
+
+      await patchLastScanResultContact({
+        phone: phoneTrim || null,
+        email: emailTrim || null,
+        parsed: args.parsed,
+      })
+
+      console.log('[FDN SW] Updated existing ID scan(s) for returning guest')
+      return { ok: true, state: await getState() }
     }
   }
-
-  let phone_encrypted: Record<string, unknown> | null = null
-  let email_encrypted: Record<string, unknown> | null = null
-  if (args.phone?.trim()) phone_encrypted = (await encryptJson({ value: args.phone.trim() })) as unknown as Record<string, unknown>
-  if (args.email?.trim()) email_encrypted = (await encryptJson({ value: args.email.trim() })) as unknown as Record<string, unknown>
 
   const insertBase = {
     id: scanId,
@@ -1056,20 +1181,10 @@ async function saveIdScan(args: {
   })
   if (audErr) console.warn('audit_log insert', audErr.message)
 
-  // Patch lastScanResult with manually-entered phone/email so content scripts can read them.
-  const stored = await chrome.storage.local.get('lastScanResult')
-  const prev = (stored.lastScanResult ?? {}) as Record<string, unknown>
-  await chrome.storage.local.set({
-    lastScanResult: {
-      ...prev,
-      phone: args.phone?.trim() || prev.phone || null,
-      email: args.email?.trim() || prev.email || null,
-      id_number: args.parsed.idNumber?.trim() || (prev.id_number as string | null) || null,
-      expiry_date: args.parsed.expiryDate?.trim() || (prev.expiry_date as string | null) || null,
-      issue_date: args.parsed.issueDate?.trim() || (prev.issue_date as string | null) || null,
-      document_type: args.parsed.idType?.trim() || (prev.document_type as string | null) || null,
-      dob: args.parsed.dateOfBirth?.trim() || (prev.dob as string | null) || null,
-    },
+  await patchLastScanResultContact({
+    phone: phoneTrim || null,
+    email: emailTrim || null,
+    parsed: args.parsed,
   })
 
   return { ok: true, state: await getState() }
