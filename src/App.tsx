@@ -299,7 +299,7 @@ function App() {
     idPanelRef.current?.scrollTo({ top: 0 })
   }, [activeTab, scanImages, lastScanReceivedAt])
 
-  function clearIdScan() {
+  const clearIdScan = useCallback(() => {
     setParsed(emptyParsed)
     setIdDetail(emptyIdDetail)
     setPhone('')
@@ -324,7 +324,17 @@ function App() {
     lastPhoneLookupRef.current = null
     window.clearTimeout(phoneHistoryTimerRef.current)
     void chrome.storage.local.remove(['fdn_last_native_scan', 'lastScanResult'])
-  }
+  }, [])
+
+  const prevSignedInRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (!state) return
+    const signedIn = state.auth.signedIn
+    if (prevSignedInRef.current === true && !signedIn) {
+      clearIdScan()
+    }
+    prevSignedInRef.current = signedIn
+  }, [state, clearIdScan])
 
   const applyGuestProfile = useCallback((record: GuestStayHistoryRecord) => {
     const next = guestProfileToFormState(record)
@@ -643,6 +653,7 @@ function App() {
   async function onLogout() {
     setBusy(true)
     await chrome.runtime.sendMessage({ type: 'AUTH_LOGOUT' })
+    clearIdScan()
     setManagerOverride(false)
     setBusy(false)
     void refresh()
