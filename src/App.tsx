@@ -350,7 +350,7 @@ function App() {
     setPhoneTouched(false)
     lastZipLookupRef.current = normalizeUsZipInput(next.idDetail.postalCode)
     setGuestHistoryNote(
-      'Prior guest details loaded. Edit as needed, then Save — prior check-ins are not changed.',
+      'Prior guest details loaded. Edit as needed — prior check-ins are not changed until Save & Clear.',
     )
   }, [])
 
@@ -570,7 +570,7 @@ function App() {
       }
       showChromeNotification(
         'FrontDesk Nexus',
-        'ID scan received — review fields, then Save or Transfer to PMS.',
+        'ID scan received — use To PMS, then Save & Clear when check-in is done.',
       )
       void refresh()
       void refreshIdScanHistory()
@@ -659,32 +659,121 @@ function App() {
     void refresh()
   }
 
-  async function onSave(fillTab = false) {
+  function buildGuestFormPayload(): {
+    detailForSave: IdScanDetailGuru
+    mergedParsed: ParsedIdFields
+  } | null {
     const requiredErr = validateRequiredGuestFields(idDetail, phone)
     if (requiredErr) {
       setFormError(requiredErr)
-      return
+      return null
     }
+    const detailForSave: IdScanDetailGuru = {
+      ...idDetail,
+      phone: phone.trim() || idDetail.phone,
+      email: emailGuest.trim() || idDetail.email,
+    }
+    const mergedParsed = mergeParsedWithGuru(parsed, detailForSave)
+    return { detailForSave, mergedParsed }
+  }
+
+  async function prepareScanImagesForPersist(): Promise<
+    { front: string | null; back: string | null } | { error: string }
+  > {
+    let frontB64 = scanImages?.front ?? null
+    let backB64 = scanImages?.back ?? null
+    if ((frontB64 || backB64) && (rotationDeg !== 0 || flipH)) {
+      try {
+        if (frontB64) frontB64 = await transformBase64ImageSync(frontB64, rotationDeg, flipH)
+        if (backB64) backB64 = await transformBase64ImageSync(backB64, rotationDeg, flipH)
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : 'Could not apply image rotation.' }
+      }
+    }
+    return { front: frontB64, back: backB64 }
+  }
+
+  async function fillOpenPmsTab(
+    detailForSave: IdScanDetailGuru,
+    mergedParsed: ParsedIdFields,
+    phoneTrim: string,
+    emailTrim: string,
+  ): Promise<void> {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+    const tabId = tabs[0]?.id
+    if (!tabId) {
+      throw new Error('No active browser tab — open the PMS guest page first.')
+    }
+    const docData = lastDocumentData ?? {}
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'FDN_FILL_GUEST_FORM',
+      payload: {
+        first_name: detailForSave.firstName ?? null,
+        middle_name: detailForSave.middleName ?? null,
+        last_name: detailForSave.lastName ?? null,
+        address: detailForSave.streetAddress ?? null,
+        city: detailForSave.city ?? null,
+        state: detailForSave.state ?? null,
+        postal_code: detailForSave.postalCode ?? null,
+        phone: phoneTrim || null,
+        email: emailTrim || null,
+        gender:
+          typeof docData.gender === 'string'
+            ? docData.gender
+            : typeof (docData as Record<string, unknown>).sex === 'string'
+              ? ((docData as Record<string, unknown>).sex as string)
+              : null,
+        dob: mergedParsed.dateOfBirth ?? null,
+        id_number: mergedParsed.idNumber ?? null,
+        expiry_date: mergedParsed.expiryDate ?? null,
+        issue_date: mergedParsed.issueDate ?? null,
+        document_type: mergedParsed.idType ?? null,
+      },
+    })
+  }
+
+  async function onTransferToPms() {
+    const built = buildGuestFormPayload()
+    if (!built) return
     setBusy(true)
     setFormError(null)
     try {
-      let frontB64 = scanImages?.front ?? null
-      let backB64 = scanImages?.back ?? null
-      if ((frontB64 || backB64) && (rotationDeg !== 0 || flipH)) {
-        try {
-          if (frontB64) frontB64 = await transformBase64ImageSync(frontB64, rotationDeg, flipH)
-          if (backB64) backB64 = await transformBase64ImageSync(backB64, rotationDeg, flipH)
-        } catch (e) {
-          setFormError(e instanceof Error ? e.message : 'Could not apply image rotation.')
-          return
-        }
+      await fillOpenPmsTab(
+        built.detailForSave,
+        built.mergedParsed,
+        phone.trim(),
+        emailGuest.trim(),
+      )
+      showChromeNotification(
+        'FrontDesk Nexus',
+        'Guest data sent to PMS. Use Save & Clear when check-in is complete.',
+      )
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not fill PMS form.'
+      setFormError(msg)
+      void chrome.notifications.create({
+        type: 'basic',
+        title: 'FrontDesk Nexus — PMS fill failed',
+        message: msg,
+        iconUrl: chrome.runtime.getURL('icon.png'),
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onSaveAndClear() {
+    const built = buildGuestFormPayload()
+    if (!built) return
+    setBusy(true)
+    setFormError(null)
+    try {
+      const images = await prepareScanImagesForPersist()
+      if ('error' in images) {
+        setFormError(images.error)
+        return
       }
-      const detailForSave: IdScanDetailGuru = {
-        ...idDetail,
-        phone: phone.trim() || idDetail.phone,
-        email: emailGuest.trim() || idDetail.email,
-      }
-      const mergedParsed = mergeParsedWithGuru(parsed, detailForSave)
+      const { detailForSave, mergedParsed } = built
       const res = (await chrome.runtime.sendMessage({
         type: 'SAVE_ID_SCAN',
         parsed: mergedParsed,
@@ -692,8 +781,8 @@ function App() {
         email: emailGuest.trim() || null,
         manualEntry,
         managerOverride,
-        imageFrontBase64: frontB64,
-        imageBackBase64: backB64,
+        imageFrontBase64: images.front,
+        imageBackBase64: images.back,
         ocrProvider: manualEntry ? null : lastOcrProvider,
         detail: detailForSave,
         documentData: manualEntry ? null : lastDocumentData,
@@ -711,55 +800,21 @@ function App() {
         if (err.includes('DNR')) setShowManagerModal(true)
         return
       }
-      showChromeNotification('FrontDesk Nexus', 'Guest ID saved to Supabase.')
+      showChromeNotification('FrontDesk Nexus', 'Guest ID saved — form cleared for next guest.')
       setManagerOverride(false)
       setShowManagerModal(false)
       void refresh()
       void refreshIdScanHistory()
-
-      if (fillTab) {
-        try {
-          const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-          const tabId = tabs[0]?.id
-          if (tabId) {
-            const docData = lastDocumentData ?? {}
-            await chrome.tabs.sendMessage(tabId, {
-              type: 'FDN_FILL_GUEST_FORM',
-              payload: {
-                first_name: detailForSave.firstName ?? null,
-                middle_name: detailForSave.middleName ?? null,
-                last_name: detailForSave.lastName ?? null,
-                address: detailForSave.streetAddress ?? null,
-                city: detailForSave.city ?? null,
-                state: detailForSave.state ?? null,
-                postal_code: detailForSave.postalCode ?? null,
-                phone: phone.trim() || null,
-                email: emailGuest.trim() || null,
-                gender: (typeof docData.gender === 'string' ? docData.gender
-                  : typeof (docData as Record<string, unknown>).sex === 'string'
-                    ? (docData as Record<string, unknown>).sex as string
-                    : null),
-                dob: mergedParsed.dateOfBirth ?? null,
-                id_number: mergedParsed.idNumber ?? null,
-                expiry_date: mergedParsed.expiryDate ?? null,
-                issue_date: mergedParsed.issueDate ?? null,
-                document_type: mergedParsed.idType ?? null,
-              },
-            })
-          }
-        } catch (e) {
-          console.warn('[FDN] Could not send fill command to tab:', e)
-        }
-      }
-
       clearIdScan()
     } finally {
       setBusy(false)
     }
   }
 
-  async function onTransferToPms() {
-    await onSave(true)
+  function onCancelGuest() {
+    clearIdScan()
+    setManagerOverride(false)
+    setShowManagerModal(false)
   }
 
   async function onVerifyManager(e: React.FormEvent) {
@@ -952,13 +1007,21 @@ function App() {
   const idAgeLabel = ageLabelFromDobString(parsed.dateOfBirth)
   const pmsLabel = res?.pms === 'ezee' ? 'eZee' : res?.pms === 'synxis' ? 'SynXis' : 'PMS'
   const idTabReady = Boolean(idDetail.firstName?.trim() && idDetail.lastName?.trim() && phone.trim())
-  const transferDisabled = busy || !state.auth.signedIn || !idTabReady
+  const guestActionsDisabled = busy || !state.auth.signedIn || !idTabReady
 
   const transferTooltip = !state.auth.signedIn
     ? 'Sign in to send guest data to the PMS'
     : !idTabReady
       ? 'First name, last name, and phone are required'
-      : 'Save to database and fill the open PMS guest form'
+      : 'Fill the open PMS guest form only — does not save to ID Data'
+
+  const saveAndClearTooltip = !state.auth.signedIn
+    ? 'Sign in to save ID Data'
+    : !idTabReady
+      ? 'First name, last name, and phone are required'
+      : 'Save to ID Data and clear the form for the next guest'
+
+  const cancelTooltip = 'Discard this guest — nothing is saved to ID Data'
 
   const workspaceTabs: {
     id: WorkspaceTab
@@ -1444,8 +1507,17 @@ function App() {
               <div className="fdn-panel__footer">
                 <button
                   type="button"
-                  className="fdn-btn fdn-btn--primary fdn-btn--with-icon"
-                  disabled={transferDisabled}
+                  className="fdn-btn fdn-btn--ghost fdn-btn--xs"
+                  disabled={busy}
+                  title={cancelTooltip}
+                  onClick={onCancelGuest}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--secondary fdn-btn--with-icon"
+                  disabled={guestActionsDisabled}
                   title={transferTooltip}
                   onClick={() => void onTransferToPms()}
                 >
@@ -1454,21 +1526,12 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className="fdn-btn fdn-btn--secondary fdn-btn--xs"
-                  disabled={busy || !state.auth.signedIn}
-                  title="Save to Supabase without filling the PMS form"
-                  onClick={() => void onSave(false)}
+                  className="fdn-btn fdn-btn--primary fdn-btn--xs"
+                  disabled={guestActionsDisabled}
+                  title={saveAndClearTooltip}
+                  onClick={() => void onSaveAndClear()}
                 >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  className="fdn-btn fdn-btn--ghost fdn-btn--xs"
-                  disabled={busy}
-                  title="Clear all ID fields and scan images"
-                  onClick={clearIdScan}
-                >
-                  Clear
+                  {busy ? 'Saving…' : 'Save & Clear'}
                 </button>
               </div>
             </section>
