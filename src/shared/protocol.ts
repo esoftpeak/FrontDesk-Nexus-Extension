@@ -206,8 +206,6 @@ export type NativeIdScanBroadcast = {
   images: { front_image_base64: string; back_image_base64: string }
   imageBase64Length: number
   ocrProvider: 'native_host'
-  /** Result of automatic save (reservation + auth + DNR rules). */
-  autoSave: { ok: true } | { ok: false; error: string }
   /** Structured fields from Python `document_data` / AUTO_SCAN_RESULT. */
   detail?: IdScanDetailGuru | null
   /** Raw snapshot for debugging / future use (not shown by default in UI). */

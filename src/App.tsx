@@ -16,6 +16,7 @@ import { ID_DOCUMENT_TYPES, normalizeIdDocumentType } from './lib/id-document-ty
 import { normalizeUsStateCode, US_STATE_SELECT_OPTIONS } from './lib/us-states'
 import { isCompleteUsZip, lookupUsZipCityState, normalizeUsZipInput } from './lib/zip-lookup'
 import { guestProfileToFormState } from './lib/apply-guest-profile'
+import { mergeHistoryRecordWithLatestContact } from './lib/guest-stay-history'
 import {
   formatUsPhoneDisplay,
   isCompletePhoneForLookup,
@@ -313,6 +314,7 @@ function App() {
     setCheckInRemark('')
     setFormError(null)
     setPhoneTouched(false)
+    setManualEntry(false)
     zipLookupAbortRef.current?.abort()
     lastZipLookupRef.current = null
     setZipLookupBusy(false)
@@ -320,7 +322,8 @@ function App() {
     setGuestHistoryBusy(false)
     setGuestHistoryNote(null)
     lastPhoneLookupRef.current = null
-    void chrome.storage.local.remove('fdn_last_native_scan')
+    window.clearTimeout(phoneHistoryTimerRef.current)
+    void chrome.storage.local.remove(['fdn_last_native_scan', 'lastScanResult'])
   }
 
   const applyGuestProfile = useCallback((record: GuestStayHistoryRecord) => {
@@ -348,12 +351,16 @@ function App() {
     ) => {
       let filled = false
       if (!opts.currentPhone.trim() && record.phone?.trim()) {
-        setPhone(record.phone.trim())
+        const p = record.phone.trim()
+        setPhone(p)
+        setIdDetail((d) => ({ ...d, phone: p }))
         lastPhoneLookupRef.current = null
         filled = true
       }
       if (!opts.currentEmail.trim() && record.email?.trim()) {
-        setEmailGuest(record.email.trim())
+        const e = record.email.trim()
+        setEmailGuest(e)
+        setIdDetail((d) => ({ ...d, email: e }))
         filled = true
       }
       if (filled) {
@@ -386,7 +393,9 @@ function App() {
           []
         if (rows.length === 0) return
 
-        const record = rows[0]!
+        const record = mergeHistoryRecordWithLatestContact(rows)
+        if (!record) return
+
         const currentPhone = scanContact?.phone?.trim() || contactFieldsRef.current.phone
         const currentEmail = scanContact?.email?.trim() || contactFieldsRef.current.email
 
@@ -424,7 +433,8 @@ function App() {
           setGuestHistoryNote(null)
           return
         }
-        const record = rows[0]!
+        const record = mergeHistoryRecordWithLatestContact(rows)
+        if (!record) return
         if (guestFormEmptyRef.current) {
           applyGuestProfile(record)
           return
@@ -548,16 +558,10 @@ function App() {
       if (m.detail?.phone?.trim()) {
         void runPhoneHistoryLookup(m.detail.phone.trim())
       }
-      if (m.autoSave.ok) {
-        showChromeNotification('FrontDesk Nexus', 'Thales scan received — saved to Supabase.')
-      } else if ('ok' in m.autoSave && !m.autoSave.ok && 'error' in m.autoSave && m.autoSave.error) {
-        showChromeNotification(
-          'FrontDesk Nexus — Scan not saved',
-          `Thales scan received — ${m.autoSave.error}`,
-        )
-      } else {
-        showChromeNotification('FrontDesk Nexus — Scan not saved', 'Thales scan received — unknown error')
-      }
+      showChromeNotification(
+        'FrontDesk Nexus',
+        'ID scan received — review fields, then Save or Transfer to PMS.',
+      )
       void refresh()
       void refreshIdScanHistory()
     },
@@ -736,6 +740,8 @@ function App() {
           console.warn('[FDN] Could not send fill command to tab:', e)
         }
       }
+
+      clearIdScan()
     } finally {
       setBusy(false)
     }

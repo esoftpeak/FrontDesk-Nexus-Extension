@@ -6,6 +6,36 @@ import { normalizePhoneForLookup } from './phone-lookup'
 
 export type { GuestStayHistoryRecord }
 
+/** Newest-first rows may include the just-saved scan with no contact yet — walk for latest phone/email. */
+export function pickLatestContactFromHistory(rows: GuestStayHistoryRecord[]): {
+  phone: string | null
+  email: string | null
+} {
+  let phone: string | null = null
+  let email: string | null = null
+  for (const r of rows) {
+    if (!phone && r.phone?.trim()) phone = r.phone.trim()
+    if (!email && r.email?.trim()) email = r.email.trim()
+    if (phone && email) break
+  }
+  return { phone, email }
+}
+
+/** Best row for form fill: identity from a substantive row, contact from latest visit that has it. */
+export function mergeHistoryRecordWithLatestContact(
+  rows: GuestStayHistoryRecord[],
+): GuestStayHistoryRecord | null {
+  if (!rows.length) return null
+  const { phone, email } = pickLatestContactFromHistory(rows)
+  const profile =
+    rows.find((r) => r.firstName?.trim() || r.lastName?.trim() || r.fullName?.trim()) ?? rows[0]!
+  return {
+    ...profile,
+    phone: phone ?? profile.phone,
+    email: email ?? profile.email,
+  }
+}
+
 type StoredPii = {
   fullName?: string | null
   dateOfBirth?: string | null

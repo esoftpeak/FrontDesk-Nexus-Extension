@@ -1461,28 +1461,11 @@ async function handleThalesNativeScan(payload: NativeScanSuccessPayload) {
   const b64Front = images.front_image_base64
   const b64Back = images.back_image_base64
   const detail = payload.detail ?? null
-  const phone = detail?.phone?.trim() ? detail.phone.trim() : null
-  const email = detail?.email?.trim() ? detail.email.trim() : null
-  const saveRes = await saveIdScan({
-    parsed: payload.parsed,
-    phone,
-    email,
-    manualEntry: false,
-    managerOverride: false,
-    imageFrontBase64: b64Front,
-    imageBackBase64: b64Back,
-    ocrProvider: 'native_host',
-    detail,
-    documentData: payload.documentData ?? null,
-  })
-  const autoSave: NativeIdScanBroadcast['autoSave'] =
-    saveRes.ok === true ? { ok: true } : { ok: false, error: saveRes.error }
   await broadcastNativeIdScan({
     parsed: payload.parsed,
     images,
     imageBase64Length: b64Front.length + b64Back.length,
     ocrProvider: 'native_host',
-    autoSave,
     detail,
     documentData: payload.documentData ?? null,
   })
@@ -1574,6 +1557,26 @@ async function fetchReturningGuestHistory(idNumber: string): Promise<ExtensionRe
       .limit(25)
     data = (fallback.data ?? []) as Record<string, unknown>[]
     error = fallback.error
+  }
+
+  if (error?.message?.includes('id_number_hash')) {
+    const recent = await client
+      .from('id_scans')
+      .select(GUEST_HISTORY_SCAN_SELECT)
+      .order('scanned_at', { ascending: false })
+      .limit(120)
+    if (!recent.error) {
+      const want = norm
+      const matched: Record<string, unknown>[] = []
+      for (const row of (recent.data ?? []) as Record<string, unknown>[]) {
+        const rec = await guestStayRecordFromScanRow(row)
+        if (!rec?.idNumber) continue
+        if (normalizeIdNumber(rec.idNumber) === want) matched.push(row)
+        if (matched.length >= 25) break
+      }
+      data = matched
+      error = null
+    }
   }
 
   if (error) {

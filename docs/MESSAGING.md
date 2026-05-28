@@ -20,15 +20,15 @@ Messages use `chrome.runtime.sendMessage` unless noted. Payloads are JSON-serial
 
 | `type` | Body |
 |--------|------|
-| `FDN_NATIVE_ID_SCAN` | `{ parsed, images, imageBase64Length, ocrProvider, autoSave }` — Thales/SDK host sent `SCAN_RESULT` over native messaging; worker may have auto-saved (see `autoSave`). Also stored under `chrome.storage.local` key `fdn_last_native_scan`. |
+| `FDN_NATIVE_ID_SCAN` | `{ parsed, images, imageBase64Length, ocrProvider, detail?, documentData? }` — Thales/SDK host sent `SCAN_RESULT`; fills the panel only (no DB write until `SAVE_ID_SCAN`). Stored under `chrome.storage.local` key `fdn_last_native_scan`. |
 
 ## ID scan & save lifecycle
 
 1. **Service worker** starts **`connectNative('com.frontdesk.nexus')`** and sends **`{ type: 'SCAN_ID' }`** once per connection (handshake / ready).
 2. **Python host** (Thales SDK): when a scan completes, sends **`SCAN_RESULT`** (or **`ERROR`**) over stdout framing.
-3. **Service worker** maps fields, attempts **automatic** `id_scans` save (same rules as manual save: signed in, reservation context, DNR, etc.).
-4. **Side panel** receives **`FDN_NATIVE_ID_SCAN`** and shows fields + preview; notice reflects save outcome.
-5. **Manual** **`SAVE_ID_SCAN`** remains for edits, guest phone/email, manager override, or retry after a failed auto-save.
+3. **Service worker** maps fields and broadcasts **`FDN_NATIVE_ID_SCAN`** (no database write).
+4. **Side panel** receives the broadcast, fills the form, and loads prior phone/email from history when available.
+5. **`SAVE_ID_SCAN`** (Save / Transfer to PMS) persists the scan, images, and guest contact to Supabase.
 6. **PMS**: **`INJECT_PMS`** — separate from native messaging.
 
 ### `ReservationSnapshot` (extension state `reservation`)
