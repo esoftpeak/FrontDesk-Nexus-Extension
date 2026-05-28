@@ -49,10 +49,16 @@ export async function guestStayRecordFromScanRow(
   }
 
   const guru = pii?.idGuru
+  if (!phone?.trim() && guru?.phone?.trim()) phone = guru.phone.trim()
+  if (!email?.trim() && guru?.email?.trim()) email = guru.email.trim()
+
   return {
     id: String(r.id),
     confirmationNumber: String(r.confirmation_number ?? ''),
-    scannedAt: typeof r.created_at === 'string' ? r.created_at : '',
+    scannedAt:
+      (typeof r.scanned_at === 'string' ? r.scanned_at : null) ||
+      (typeof r.created_at === 'string' ? r.created_at : '') ||
+      '',
     manualEntry: Boolean(r.manual_entry),
     phone,
     email,

@@ -20,13 +20,12 @@ import type {
   ReservationSnapshot,
   SynxisGuestDisplay,
 } from '../shared/pms-types'
-import { decryptJson, encryptBinary, encryptJson, hashIdNumber, hashPhoneNumber } from '../lib/encryption'
+import { encryptBinary, encryptJson, hashIdNumber, hashPhoneNumber } from '../lib/encryption'
 import {
   filterRecordsByPhone,
   guestStayRecordFromScanRow,
 } from '../lib/guest-stay-history'
 import { isCompletePhoneForLookup } from '../lib/phone-lookup'
-import type { EncryptedPayload } from '../lib/encryption'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
 import { pingNativeHost } from '../lib/native-scan'
@@ -1664,49 +1663,52 @@ async function fetchReturningGuestHistory(idNumber: string): Promise<ExtensionRe
   if (!sess.session) return { ok: true, returningGuestHistory: [] }
 
   const hash = await hashIdNumber(norm)
-  const { data, error } = await client
+  let data: Record<string, unknown>[] | null = null
+  let error: { message: string } | null = null
+
+  const byHash = await client
     .from('id_scans')
-    .select('id, confirmation_number, created_at, phone_encrypted, email_encrypted')
+    .select(GUEST_HISTORY_SCAN_SELECT)
     .eq('id_number_hash', hash)
-    .order('created_at', { ascending: false })
+    .order('scanned_at', { ascending: false })
     .limit(5)
+
+  data = (byHash.data ?? []) as Record<string, unknown>[]
+  error = byHash.error
+
+  if (error?.message?.includes('scanned_at')) {
+    const fallback = await client
+      .from('id_scans')
+      .select(GUEST_HISTORY_SCAN_SELECT)
+      .eq('id_number_hash', hash)
+      .order('created_at', { ascending: false })
+      .limit(5)
+    data = (fallback.data ?? []) as Record<string, unknown>[]
+    error = fallback.error
+  }
 
   if (error) {
     console.warn('[FDN] returning guest query', error.message)
-    return { ok: true, returningGuestHistory: [] }
+    return { ok: true, returningGuestHistory: [], guestStayHistory: [] }
   }
 
-  const records: ReturningGuestRecord[] = await Promise.all(
-    (data ?? []).map(async (r: Record<string, unknown>) => {
-      let phone: string | null = null
-      let email: string | null = null
-      try {
-        if (r.phone_encrypted) {
-          const dec = await decryptJson<{ value: string }>(r.phone_encrypted as EncryptedPayload)
-          phone = dec.value ?? null
-        }
-      } catch { /* decryption key mismatch — skip */ }
-      try {
-        if (r.email_encrypted) {
-          const dec = await decryptJson<{ value: string }>(r.email_encrypted as EncryptedPayload)
-          email = dec.value ?? null
-        }
-      } catch { /* decryption key mismatch — skip */ }
-      return {
-        id: String(r.id),
-        confirmationNumber: String(r.confirmation_number ?? ''),
-        scannedAt: typeof r.created_at === 'string' ? r.created_at : '',
-        phone,
-        email,
-      }
-    }),
-  )
+  const records = (
+    await Promise.all((data ?? []).map((r) => guestStayRecordFromScanRow(r)))
+  ).filter((r): r is GuestStayHistoryRecord => r != null)
 
-  return { ok: true, returningGuestHistory: records }
+  const returningGuestHistory: ReturningGuestRecord[] = records.map((r) => ({
+    id: r.id,
+    confirmationNumber: r.confirmationNumber,
+    scannedAt: r.scannedAt,
+    phone: r.phone,
+    email: r.email,
+  }))
+
+  return { ok: true, returningGuestHistory, guestStayHistory: records }
 }
 
 const GUEST_HISTORY_SCAN_SELECT =
-  'id, confirmation_number, created_at, manual_entry, phone_encrypted, email_encrypted, pii_encrypted'
+  'id, confirmation_number, created_at, scanned_at, manual_entry, phone_encrypted, email_encrypted, pii_encrypted'
 
 async function fetchGuestHistoryByPhone(phone: string): Promise<ExtensionResponse> {
   if (!isCompletePhoneForLookup(phone)) return { ok: true, guestStayHistory: [] }
@@ -1724,23 +1726,43 @@ async function fetchGuestHistoryByPhone(phone: string): Promise<ExtensionRespons
       .from('id_scans')
       .select(GUEST_HISTORY_SCAN_SELECT)
       .eq('phone_number_hash', phoneHash)
-      .order('created_at', { ascending: false })
+      .order('scanned_at', { ascending: false })
       .limit(10)
     data = (res.data ?? []) as Record<string, unknown>[]
     error = res.error
-    if (error?.message?.includes('phone_number_hash')) {
-      data = null
-      error = null
+    if (error?.message?.includes('phone_number_hash') || error?.message?.includes('scanned_at')) {
+      if (error?.message?.includes('scanned_at') && phoneHash) {
+        const retry = await client
+          .from('id_scans')
+          .select(GUEST_HISTORY_SCAN_SELECT)
+          .eq('phone_number_hash', phoneHash)
+          .order('created_at', { ascending: false })
+          .limit(10)
+        data = (retry.data ?? []) as Record<string, unknown>[]
+        error = retry.error
+      }
+      if (error?.message?.includes('phone_number_hash')) {
+        data = null
+        error = null
+      }
     }
   }
 
   if (!data) {
-    const res = await client
+    let res = await client
       .from('id_scans')
       .select(GUEST_HISTORY_SCAN_SELECT)
       .not('phone_encrypted', 'is', null)
-      .order('created_at', { ascending: false })
+      .order('scanned_at', { ascending: false })
       .limit(60)
+    if (res.error?.message?.includes('scanned_at')) {
+      res = await client
+        .from('id_scans')
+        .select(GUEST_HISTORY_SCAN_SELECT)
+        .not('phone_encrypted', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(60)
+    }
     if (res.error) {
       console.warn('[FDN] guest phone history fallback', res.error.message)
       return { ok: true, guestStayHistory: [] }

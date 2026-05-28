@@ -7,7 +7,6 @@ import type {
   KeyHistoryRow,
   NativeHostRxDebugBroadcast,
   NativeIdScanBroadcast,
-  ReturningGuestRecord,
   ScanFrontBroadcast,
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
@@ -17,7 +16,11 @@ import { ID_DOCUMENT_TYPES, normalizeIdDocumentType } from './lib/id-document-ty
 import { normalizeUsStateCode, US_STATE_SELECT_OPTIONS } from './lib/us-states'
 import { isCompleteUsZip, lookupUsZipCityState, normalizeUsZipInput } from './lib/zip-lookup'
 import { guestProfileToFormState } from './lib/apply-guest-profile'
-import { isCompletePhoneForLookup } from './lib/phone-lookup'
+import {
+  formatUsPhoneDisplay,
+  isCompletePhoneForLookup,
+  validatePhoneNumber,
+} from './lib/phone-lookup'
 import { formatHotelDateTime } from './lib/hotel-dates'
 import { GuestStaySummary } from './components/GuestStaySummary'
 import { LoadingScreen } from './components/LoadingScreen'
@@ -100,8 +103,7 @@ function validateRequiredGuestFields(
 ): string | null {
   if (!idDetail.firstName?.trim()) return 'First name is required.'
   if (!idDetail.lastName?.trim()) return 'Last name is required.'
-  if (!phone.trim()) return 'Phone number is required.'
-  return null
+  return validatePhoneNumber(phone, { usaCa: idDetail.usaCaPhone !== false })
 }
 import { transformBase64ImageSync } from './lib/imageTransform'
 import './sidepanel.css'
@@ -208,6 +210,8 @@ function App() {
   const phoneHistoryTimerRef = useRef(0)
   const lastPhoneLookupRef = useRef<string | null>(null)
   const guestFormEmptyRef = useRef(true)
+  const contactFieldsRef = useRef({ phone: '', email: '' })
+  const [phoneTouched, setPhoneTouched] = useState(false)
   const lastLoadedConfRef = useRef<string | null>(null)
   const idPanelRef = useRef<HTMLElement>(null)
   type WorkspaceTab = 'id' | 'payment' | 'signature' | 'key'
@@ -256,6 +260,18 @@ function App() {
   }, [idDetail.firstName, idDetail.lastName])
 
   useEffect(() => {
+    contactFieldsRef.current = { phone, email: emailGuest }
+  }, [phone, emailGuest])
+
+  const phoneValidationError = useMemo(
+    () =>
+      phoneTouched || formError
+        ? validatePhoneNumber(phone, { usaCa: idDetail.usaCaPhone !== false })
+        : null,
+    [phone, phoneTouched, formError, idDetail.usaCaPhone],
+  )
+
+  useEffect(() => {
     void refreshIdScanHistory()
   }, [refreshIdScanHistory, state?.reservation?.confirmationNumber])
 
@@ -296,6 +312,7 @@ function App() {
     setGuestRemark('')
     setCheckInRemark('')
     setFormError(null)
+    setPhoneTouched(false)
     zipLookupAbortRef.current?.abort()
     lastZipLookupRef.current = null
     setZipLookupBusy(false)
@@ -317,11 +334,74 @@ function App() {
     setParsed(next.parsed)
     setPhone(next.phone)
     setEmailGuest(next.emailGuest)
+    setPhoneTouched(false)
     lastZipLookupRef.current = normalizeUsZipInput(next.idDetail.postalCode)
     setGuestHistoryNote(
       'Prior guest details loaded. Edit as needed, then Save — prior check-ins are not changed.',
     )
   }, [])
+
+  const applyContactFromRecord = useCallback(
+    (
+      record: GuestStayHistoryRecord,
+      opts: { currentPhone: string; currentEmail: string },
+    ) => {
+      let filled = false
+      if (!opts.currentPhone.trim() && record.phone?.trim()) {
+        setPhone(record.phone.trim())
+        lastPhoneLookupRef.current = null
+        filled = true
+      }
+      if (!opts.currentEmail.trim() && record.email?.trim()) {
+        setEmailGuest(record.email.trim())
+        filled = true
+      }
+      if (filled) {
+        setGuestHistoryNote('Prior guest phone/email loaded from ID Data.')
+      }
+      return filled
+    },
+    [],
+  )
+
+  const loadReturningGuestById = useCallback(
+    async (
+      idNumber: string | null | undefined,
+      scanContact?: { phone?: string; email?: string },
+    ) => {
+      const raw = idNumber?.trim()
+      if (!raw) return
+
+      try {
+        const res = (await chrome.runtime.sendMessage({
+          type: 'GET_RETURNING_GUEST_HISTORY',
+          idNumber: raw,
+        })) as {
+          ok?: boolean
+          guestStayHistory?: GuestStayHistoryRecord[]
+          returningGuestHistory?: { phone: string | null; email: string | null }[]
+        }
+        const rows =
+          (res.ok ? res.guestStayHistory : undefined) ??
+          []
+        if (rows.length === 0) return
+
+        const record = rows[0]!
+        const currentPhone = scanContact?.phone?.trim() || contactFieldsRef.current.phone
+        const currentEmail = scanContact?.email?.trim() || contactFieldsRef.current.email
+
+        if (guestFormEmptyRef.current) {
+          applyGuestProfile(record)
+          return
+        }
+
+        applyContactFromRecord(record, { currentPhone, currentEmail })
+      } catch {
+        setGuestHistoryNote('Could not load prior guest contact from ID number.')
+      }
+    },
+    [applyContactFromRecord, applyGuestProfile],
+  )
 
   const runPhoneHistoryLookup = useCallback(
     async (phoneInput: string) => {
@@ -344,18 +424,23 @@ function App() {
           setGuestHistoryNote(null)
           return
         }
+        const record = rows[0]!
         if (guestFormEmptyRef.current) {
-          applyGuestProfile(rows[0])
-        } else {
-          setGuestHistoryNote(null)
+          applyGuestProfile(record)
+          return
         }
+        const filled = applyContactFromRecord(record, {
+          currentPhone: contactFieldsRef.current.phone,
+          currentEmail: contactFieldsRef.current.email,
+        })
+        if (!filled) setGuestHistoryNote(null)
       } catch {
         setGuestHistoryNote('Could not load prior guest details.')
       } finally {
         setGuestHistoryBusy(false)
       }
     },
-    [applyGuestProfile],
+    [applyContactFromRecord, applyGuestProfile],
   )
 
   const schedulePhoneHistoryLookup = useCallback(
@@ -450,25 +535,19 @@ function App() {
         const p = m.detail.phone.trim()
         setPhone(p)
         lastPhoneLookupRef.current = null
-        void runPhoneHistoryLookup(p)
-      } else if (m.parsed.idNumber) {
-        void (async () => {
-          const res = (await chrome.runtime.sendMessage({
-            type: 'GET_RETURNING_GUEST_HISTORY',
-            idNumber: m.parsed.idNumber!,
-          })) as { ok?: boolean; returningGuestHistory?: ReturningGuestRecord[] }
-          const history = res.ok ? (res.returningGuestHistory ?? []) : []
-          const latest = history.find((r) => r.phone || r.email)
-          if (latest?.phone) {
-            setPhone(latest.phone)
-            lastPhoneLookupRef.current = null
-          }
-          if (latest?.email && !m.detail?.email?.trim()) {
-            setEmailGuest(latest.email)
-          }
-        })()
       }
       if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
+
+      if (m.parsed.idNumber?.trim()) {
+        void loadReturningGuestById(m.parsed.idNumber, {
+          phone: m.detail?.phone?.trim(),
+          email: m.detail?.email?.trim(),
+        })
+      }
+
+      if (m.detail?.phone?.trim()) {
+        void runPhoneHistoryLookup(m.detail.phone.trim())
+      }
       if (m.autoSave.ok) {
         showChromeNotification('FrontDesk Nexus', 'Thales scan received — saved to Supabase.')
       } else if ('ok' in m.autoSave && !m.autoSave.ok && 'error' in m.autoSave && m.autoSave.error) {
@@ -482,7 +561,7 @@ function App() {
       void refresh()
       void refreshIdScanHistory()
     },
-    [refresh, refreshIdScanHistory, runPhoneHistoryLookup],
+    [refresh, refreshIdScanHistory, loadReturningGuestById, runPhoneHistoryLookup],
   )
 
   useEffect(() => {
@@ -1203,24 +1282,39 @@ function App() {
                       }
                     />
                     <input
-                      className="fdn-input"
+                      className={[
+                        'fdn-input',
+                        phoneValidationError ? 'fdn-input--invalid' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
                       inputMode="tel"
                       autoComplete="tel"
                       required
                       aria-required="true"
+                      aria-invalid={phoneValidationError ? true : undefined}
                       placeholder="(555) 555-5555"
                       value={phone}
                       onChange={(e) => {
                         const v = e.target.value
                         setPhone(v)
+                        setPhoneTouched(true)
                         schedulePhoneHistoryLookup(v)
                       }}
                       onBlur={() => {
+                        setPhoneTouched(true)
+                        if (idDetail.usaCaPhone !== false && isCompletePhoneForLookup(phone)) {
+                          setPhone(formatUsPhoneDisplay(phone))
+                        }
                         if (isCompletePhoneForLookup(phone)) void runPhoneHistoryLookup(phone)
                       }}
                     />
                   </div>
-                  {guestHistoryBusy ? (
+                  {phoneValidationError ? (
+                    <span className="fdn-zip-hint fdn-zip-hint--warn" role="alert">
+                      {phoneValidationError}
+                    </span>
+                  ) : guestHistoryBusy ? (
                     <span className="fdn-zip-hint">Looking up prior guest…</span>
                   ) : guestHistoryNote ? (
                     <span className="fdn-zip-hint">{guestHistoryNote}</span>
@@ -1257,6 +1351,9 @@ function App() {
                     className="fdn-input"
                     value={parsed.idNumber ?? ''}
                     onChange={(e) => setParsed({ ...parsed, idNumber: e.target.value || null })}
+                    onBlur={() => {
+                      if (parsed.idNumber?.trim()) void loadReturningGuestById(parsed.idNumber)
+                    }}
                   />
                 </label>
                 <label className="fdn-label">

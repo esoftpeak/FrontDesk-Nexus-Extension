@@ -799,6 +799,11 @@ body {
   box-sizing: border-box;
 }
 
+.fdn-input--invalid {
+  border-color: #f85149;
+  box-shadow: 0 0 0 1px rgba(248, 81, 73, 0.35);
+}
+
 .fdn-btn {
   padding: 8px 12px;
   border-radius: 6px;
