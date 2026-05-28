@@ -1448,7 +1448,7 @@ function App() {
                   title="Save to Supabase without filling the PMS form"
                   onClick={() => void onSave(false)}
                 >
-                  Save DB only
+                  Save
                 </button>
                 <button
                   type="button"
