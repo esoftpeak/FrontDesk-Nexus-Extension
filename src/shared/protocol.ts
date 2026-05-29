@@ -8,6 +8,29 @@ import type {
 
 export type { IdScanDetailGuru }
 
+/** Minimum time guest draft must sit before passive logout auto-save (portal bridge / session end). */
+export const GUEST_DRAFT_AUTOSAVE_MIN_MS = 2 * 60 * 1000
+
+/** Side panel → service worker: guest ID draft for logout auto-save. */
+export type PendingGuestDraft = {
+  canceled: boolean
+  draftStartedAtMs: number
+  parsed: ParsedIdFields
+  phone: string | null
+  email: string | null
+  manualEntry: boolean
+  managerOverride: boolean
+  imageFrontBase64: string | null
+  imageBackBase64: string | null
+  ocrProvider?: string | null
+  detail?: IdScanDetailGuru | null
+  documentData?: Record<string, unknown> | null
+  guestRemark?: string | null
+  checkInRemark?: string | null
+}
+
+export const FDN_PENDING_GUEST_DRAFT_KEY = 'fdn_pending_guest_draft' as const
+
 /** chrome.runtime / Port message contracts (see docs/MESSAGING.md) */
 /** Prior scans for the current reservation confirmation (Supabase `id_scans`). */
 export type IdScanHistoryRow = {

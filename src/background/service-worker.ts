@@ -10,8 +10,13 @@ import type {
   NativeIdScanBroadcast,
   PanelToastBroadcast,
   GuestStayHistoryRecord,
+  PendingGuestDraft,
   ReturningGuestRecord,
   ScanFrontBroadcast,
+} from '../shared/protocol'
+import {
+  FDN_PENDING_GUEST_DRAFT_KEY,
+  GUEST_DRAFT_AUTOSAVE_MIN_MS,
 } from '../shared/protocol'
 import type {
   EzeeGuestDisplay,
@@ -869,6 +874,50 @@ async function patchLastScanResultContact(args: {
       dob: args.parsed.dateOfBirth?.trim() || (prev.dob as string | null) || null,
     },
   })
+}
+
+async function flushPendingGuestDraftIfPresent(options: {
+  ignoreMinAge?: boolean
+}): Promise<void> {
+  const stored = await chrome.storage.local.get(FDN_PENDING_GUEST_DRAFT_KEY)
+  const raw = stored[FDN_PENDING_GUEST_DRAFT_KEY]
+  if (!raw || typeof raw !== 'object') return
+
+  const draft = raw as PendingGuestDraft
+  if (draft.canceled) {
+    await chrome.storage.local.remove(FDN_PENDING_GUEST_DRAFT_KEY)
+    return
+  }
+  if (
+    !options.ignoreMinAge &&
+    Date.now() - draft.draftStartedAtMs < GUEST_DRAFT_AUTOSAVE_MIN_MS
+  ) {
+    return
+  }
+
+  try {
+    const res = await saveIdScan({
+      parsed: draft.parsed,
+      phone: draft.phone,
+      email: draft.email,
+      manualEntry: draft.manualEntry,
+      managerOverride: draft.managerOverride,
+      imageFrontBase64: draft.imageFrontBase64,
+      imageBackBase64: draft.imageBackBase64,
+      ocrProvider: draft.ocrProvider ?? null,
+      detail: draft.detail ?? null,
+      documentData: draft.documentData ?? null,
+      guestRemark: draft.guestRemark ?? null,
+      checkInRemark: draft.checkInRemark ?? null,
+    })
+    if (res.ok === false) {
+      console.warn('[FrontDesk Nexus] Auto-save guest draft on logout failed:', res.error)
+    }
+  } catch (e) {
+    console.warn('[FrontDesk Nexus] Auto-save guest draft on logout error:', e)
+  } finally {
+    await chrome.storage.local.remove(FDN_PENDING_GUEST_DRAFT_KEY)
+  }
 }
 
 async function saveIdScan(args: {
@@ -2076,6 +2125,7 @@ async function handleMessage(
   }
 
   if (msg.type === 'AUTH_LOGOUT') {
+    await flushPendingGuestDraftIfPresent({ ignoreMinAge: true })
     await client.auth.signOut()
     cachedRole = null
     reservation = null
@@ -2342,8 +2392,11 @@ void (async () => {
 void chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return
   if (changes.fdn_bridge_revoked) {
-    void getClient().auth.signOut()
-    cachedRole = null
+    void (async () => {
+      await flushPendingGuestDraftIfPresent({ ignoreMinAge: false })
+      await getClient().auth.signOut()
+      cachedRole = null
+    })()
   }
 })
 

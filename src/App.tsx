@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type {
-  ExtensionResponse,
-  ExtensionState,
-  GuestStayHistoryRecord,
-  IdScanHistoryRow,
-  KeyHistoryRow,
-  NativeHostRxDebugBroadcast,
-  NativeIdScanBroadcast,
-  ScanFrontBroadcast,
+import {
+  FDN_PENDING_GUEST_DRAFT_KEY,
+  GUEST_DRAFT_AUTOSAVE_MIN_MS,
+  type ExtensionResponse,
+  type ExtensionState,
+  type GuestStayHistoryRecord,
+  type IdScanHistoryRow,
+  type KeyHistoryRow,
+  type NativeHostRxDebugBroadcast,
+  type NativeIdScanBroadcast,
+  type PendingGuestDraft,
+  type ScanFrontBroadcast,
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
@@ -105,6 +108,23 @@ function validateRequiredGuestFields(
   if (!idDetail.firstName?.trim()) return 'First name is required.'
   if (!idDetail.lastName?.trim()) return 'Last name is required.'
   return validatePhoneNumber(phone, { usaCa: idDetail.usaCaPhone !== false })
+}
+
+function hasUnsavedGuestDraft(
+  idDetail: IdScanDetailGuru,
+  phone: string,
+  emailGuest: string,
+  parsed: ParsedIdFields,
+  scanImages: { front: string; back: string | null } | null,
+  guestRemark: string,
+  checkInRemark: string,
+): boolean {
+  if (scanImages?.front) return true
+  if (idDetail.firstName?.trim() || idDetail.lastName?.trim()) return true
+  if (phone.trim() || emailGuest.trim()) return true
+  if (parsed.idNumber?.trim()) return true
+  if (guestRemark.trim() || checkInRemark.trim()) return true
+  return false
 }
 import { transformBase64ImageSync } from './lib/imageTransform'
 import './sidepanel.css'
@@ -211,6 +231,8 @@ function App() {
   const phoneHistoryTimerRef = useRef(0)
   const lastPhoneLookupRef = useRef<string | null>(null)
   const guestFormEmptyRef = useRef(true)
+  const guestDraftCanceledRef = useRef(false)
+  const guestDraftStartedAtRef = useRef<number | null>(null)
   const contactFieldsRef = useRef({ phone: '', email: '' })
   const [phoneTouched, setPhoneTouched] = useState(false)
   const lastLoadedConfRef = useRef<string | null>(null)
@@ -323,18 +345,15 @@ function App() {
     setGuestHistoryNote(null)
     lastPhoneLookupRef.current = null
     window.clearTimeout(phoneHistoryTimerRef.current)
-    void chrome.storage.local.remove(['fdn_last_native_scan', 'lastScanResult'])
+    guestDraftStartedAtRef.current = null
+    void chrome.storage.local.remove([
+      'fdn_last_native_scan',
+      'lastScanResult',
+      FDN_PENDING_GUEST_DRAFT_KEY,
+    ])
   }, [])
 
   const prevSignedInRef = useRef<boolean | null>(null)
-  useEffect(() => {
-    if (!state) return
-    const signedIn = state.auth.signedIn
-    if (prevSignedInRef.current === true && !signedIn) {
-      clearIdScan()
-    }
-    prevSignedInRef.current = signedIn
-  }, [state, clearIdScan])
 
   const applyGuestProfile = useCallback((record: GuestStayHistoryRecord) => {
     const next = guestProfileToFormState(record)
@@ -530,6 +549,7 @@ function App() {
 
   const applyNativeIdScan = useCallback(
     (m: NativeIdScanBroadcast) => {
+      guestDraftCanceledRef.current = false
       const detail = m.detail ?? emptyIdDetail
       setParsed({
         ...m.parsed,
@@ -650,15 +670,6 @@ function App() {
     }
   }
 
-  async function onLogout() {
-    setBusy(true)
-    await chrome.runtime.sendMessage({ type: 'AUTH_LOGOUT' })
-    clearIdScan()
-    setManagerOverride(false)
-    setBusy(false)
-    void refresh()
-  }
-
   function buildGuestFormPayload(): {
     detailForSave: IdScanDetailGuru
     mergedParsed: ParsedIdFields
@@ -762,18 +773,24 @@ function App() {
     }
   }
 
-  async function onSaveAndClear() {
-    const built = buildGuestFormPayload()
-    if (!built) return
-    setBusy(true)
-    setFormError(null)
-    try {
+  const persistGuestIdScan = useCallback(
+    async (opts: { clearAfter: boolean; silent: boolean }): Promise<{ ok: boolean; error?: string }> => {
+      const requiredErr = validateRequiredGuestFields(idDetail, phone)
+      if (requiredErr) return { ok: false, error: requiredErr }
+
+      const detailForSave: IdScanDetailGuru = {
+        ...idDetail,
+        phone: phone.trim() || idDetail.phone,
+        email: emailGuest.trim() || idDetail.email,
+      }
+      const mergedParsed = mergeParsedWithGuru(parsed, detailForSave)
+
       const images = await prepareScanImagesForPersist()
       if ('error' in images) {
-        setFormError(images.error)
-        return
+        if (!opts.silent) setFormError(images.error)
+        return { ok: false, error: images.error }
       }
-      const { detailForSave, mergedParsed } = built
+
       const res = (await chrome.runtime.sendMessage({
         type: 'SAVE_ID_SCAN',
         parsed: mergedParsed,
@@ -789,6 +806,190 @@ function App() {
         guestRemark: guestRemark.trim() || null,
         checkInRemark: checkInRemark.trim() || null,
       })) as { ok: boolean; error?: string }
+
+      if (!res.ok) return { ok: false, error: res.error ?? 'Save failed' }
+
+      guestDraftCanceledRef.current = false
+      guestDraftStartedAtRef.current = null
+      void chrome.storage.local.remove([FDN_PENDING_GUEST_DRAFT_KEY])
+
+      if (!opts.silent) {
+        showChromeNotification('FrontDesk Nexus', 'Guest ID saved — form cleared for next guest.')
+      } else {
+        showChromeNotification(
+          'FrontDesk Nexus',
+          'Guest check-in saved automatically before sign-out.',
+        )
+      }
+      setManagerOverride(false)
+      setShowManagerModal(false)
+      void refresh()
+      void refreshIdScanHistory()
+      if (opts.clearAfter) clearIdScan()
+      return { ok: true }
+    },
+    [
+      idDetail,
+      phone,
+      emailGuest,
+      parsed,
+      scanImages,
+      rotationDeg,
+      flipH,
+      manualEntry,
+      managerOverride,
+      lastOcrProvider,
+      lastDocumentData,
+      guestRemark,
+      checkInRemark,
+      clearIdScan,
+      refresh,
+      refreshIdScanHistory,
+    ],
+  )
+
+  const tryAutoSaveGuestDraftBeforeLogout = useCallback(
+    async (requireMinAge: boolean): Promise<void> => {
+      if (guestDraftCanceledRef.current) return
+      if (
+        !hasUnsavedGuestDraft(
+          idDetail,
+          phone,
+          emailGuest,
+          parsed,
+          scanImages,
+          guestRemark,
+          checkInRemark,
+        )
+      ) {
+        return
+      }
+      if (requireMinAge) {
+        const started = guestDraftStartedAtRef.current
+        if (!started || Date.now() - started < GUEST_DRAFT_AUTOSAVE_MIN_MS) return
+      }
+      if (validateRequiredGuestFields(idDetail, phone)) return
+
+      const res = await persistGuestIdScan({ clearAfter: true, silent: true })
+      if (!res.ok && res.error?.includes('DNR')) setShowManagerModal(true)
+    },
+    [
+      idDetail,
+      phone,
+      emailGuest,
+      parsed,
+      scanImages,
+      guestRemark,
+      checkInRemark,
+      persistGuestIdScan,
+    ],
+  )
+
+  useEffect(() => {
+    if (!state) return
+    const signedIn = state.auth.signedIn
+    if (prevSignedInRef.current === true && !signedIn) {
+      void tryAutoSaveGuestDraftBeforeLogout(true).finally(() => clearIdScan())
+    }
+    prevSignedInRef.current = signedIn
+  }, [state, clearIdScan, tryAutoSaveGuestDraftBeforeLogout])
+
+  useEffect(() => {
+    const dirty = hasUnsavedGuestDraft(
+      idDetail,
+      phone,
+      emailGuest,
+      parsed,
+      scanImages,
+      guestRemark,
+      checkInRemark,
+    )
+    if (dirty && !guestDraftCanceledRef.current) {
+      if (!guestDraftStartedAtRef.current) guestDraftStartedAtRef.current = Date.now()
+    } else if (!dirty) {
+      guestDraftStartedAtRef.current = null
+    }
+  }, [idDetail, phone, emailGuest, parsed, scanImages, guestRemark, checkInRemark])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (guestDraftCanceledRef.current) {
+          await chrome.storage.local.remove([FDN_PENDING_GUEST_DRAFT_KEY])
+          return
+        }
+        if (
+          !hasUnsavedGuestDraft(
+            idDetail,
+            phone,
+            emailGuest,
+            parsed,
+            scanImages,
+            guestRemark,
+            checkInRemark,
+          )
+        ) {
+          await chrome.storage.local.remove([FDN_PENDING_GUEST_DRAFT_KEY])
+          return
+        }
+        if (validateRequiredGuestFields(idDetail, phone)) return
+
+        const detailForSave: IdScanDetailGuru = {
+          ...idDetail,
+          phone: phone.trim() || idDetail.phone,
+          email: emailGuest.trim() || idDetail.email,
+        }
+        const mergedParsed = mergeParsedWithGuru(parsed, detailForSave)
+
+        const images = await prepareScanImagesForPersist()
+        if ('error' in images) return
+
+        const draft: PendingGuestDraft = {
+          canceled: false,
+          draftStartedAtMs: guestDraftStartedAtRef.current ?? Date.now(),
+          parsed: mergedParsed,
+          phone: phone.trim() || null,
+          email: emailGuest.trim() || null,
+          manualEntry,
+          managerOverride,
+          imageFrontBase64: images.front,
+          imageBackBase64: images.back,
+          ocrProvider: manualEntry ? null : lastOcrProvider,
+          detail: detailForSave,
+          documentData: manualEntry ? null : lastDocumentData,
+          guestRemark: guestRemark.trim() || null,
+          checkInRemark: checkInRemark.trim() || null,
+        }
+        await chrome.storage.local.set({ [FDN_PENDING_GUEST_DRAFT_KEY]: draft })
+      })()
+    }, 1500)
+    return () => window.clearTimeout(timer)
+  }, [
+    idDetail,
+    phone,
+    emailGuest,
+    parsed,
+    scanImages,
+    rotationDeg,
+    flipH,
+    manualEntry,
+    managerOverride,
+    lastOcrProvider,
+    lastDocumentData,
+    guestRemark,
+    checkInRemark,
+  ])
+
+  async function onSaveAndClear() {
+    const requiredErr = validateRequiredGuestFields(idDetail, phone)
+    if (requiredErr) {
+      setFormError(requiredErr)
+      return
+    }
+    setBusy(true)
+    setFormError(null)
+    try {
+      const res = await persistGuestIdScan({ clearAfter: true, silent: false })
       if (!res.ok) {
         const err = res.error ?? 'Save failed'
         void chrome.notifications.create({
@@ -798,23 +999,30 @@ function App() {
           iconUrl: chrome.runtime.getURL('icon.png'),
         })
         if (err.includes('DNR')) setShowManagerModal(true)
-        return
+        else if (err !== 'Save failed') setFormError(err)
       }
-      showChromeNotification('FrontDesk Nexus', 'Guest ID saved — form cleared for next guest.')
-      setManagerOverride(false)
-      setShowManagerModal(false)
-      void refresh()
-      void refreshIdScanHistory()
-      clearIdScan()
     } finally {
       setBusy(false)
     }
   }
 
   function onCancelGuest() {
+    guestDraftCanceledRef.current = true
+    guestDraftStartedAtRef.current = null
+    void chrome.storage.local.remove([FDN_PENDING_GUEST_DRAFT_KEY])
     clearIdScan()
     setManagerOverride(false)
     setShowManagerModal(false)
+  }
+
+  async function onLogout() {
+    setBusy(true)
+    await tryAutoSaveGuestDraftBeforeLogout(false)
+    await chrome.runtime.sendMessage({ type: 'AUTH_LOGOUT' })
+    clearIdScan()
+    setManagerOverride(false)
+    setBusy(false)
+    void refresh()
   }
 
   async function onVerifyManager(e: React.FormEvent) {
@@ -1168,61 +1376,85 @@ function App() {
                     {formatLocalFromIso(lastScanReceivedAt)}
                   </span>
                 ) : null}
-                {!manualEntry && scanPreviewUrls ? (
-                  <div className="fdn-id-preview__tools-inline" aria-label="Adjust image orientation">
-                    <button
-                      type="button"
-                      className="fdn-id-preview__tool fdn-id-preview__tool--xs"
-                      title="Rotate clockwise"
-                      onClick={() => setRotationDeg((d) => (d + 90) % 360)}
-                    >
-                      ↻
-                    </button>
-                    <button
-                      type="button"
-                      className="fdn-id-preview__tool fdn-id-preview__tool--xs"
-                      title="Flip horizontal"
-                      onClick={() => setFlipH((f) => !f)}
-                    >
-                      ⇄
-                    </button>
-                    <button
-                      type="button"
-                      className="fdn-id-preview__tool fdn-id-preview__tool--xs"
-                      title="Reset orientation"
-                      onClick={() => {
-                        setRotationDeg(0)
-                        setFlipH(false)
-                      }}
-                    >
-                      ⊡
-                    </button>
-                  </div>
-                ) : null}
               </div>
 
-              {!manualEntry && scanPreviewUrls ? (
-                <div className="fdn-id-preview fdn-id-preview--dual fdn-id-preview--compact">
-                  <div className="fdn-id-preview__pair">
-                    <div className="fdn-id-preview__cell">
-                      <p className="fdn-id-preview__side">Front</p>
-                      <div className="fdn-id-preview__main">
-                        <img
-                          className="fdn-id-preview__img"
-                          src={scanPreviewUrls.front}
-                          alt="ID front"
-                          style={{
-                            transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+              {!manualEntry ? (
+                <div
+                  className="fdn-id-preview-dock fdn-id-preview-dock--top"
+                  aria-label="ID card scan preview"
+                >
+                  <div className="fdn-id-preview-dock__head">
+                    <span className="fdn-id-preview-dock__title">ID card</span>
+                    {scanPreviewUrls ? (
+                      <div className="fdn-id-preview__tools-inline" aria-label="Adjust image orientation">
+                        <button
+                          type="button"
+                          className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                          title="Rotate clockwise"
+                          onClick={() => setRotationDeg((d) => (d + 90) % 360)}
+                        >
+                          ↻
+                        </button>
+                        <button
+                          type="button"
+                          className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                          title="Flip horizontal"
+                          onClick={() => setFlipH((f) => !f)}
+                        >
+                          ⇄
+                        </button>
+                        <button
+                          type="button"
+                          className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                          title="Reset orientation"
+                          onClick={() => {
+                            setRotationDeg(0)
+                            setFlipH(false)
                           }}
-                        />
+                        >
+                          ⊡
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="fdn-id-preview-dock__pair">
+                    <div className="fdn-id-preview-slot">
+                      <p className="fdn-id-preview-slot__label">Front</p>
+                      <div
+                        className={[
+                          'fdn-id-preview-slot__frame',
+                          scanPreviewUrls?.front ? 'fdn-id-preview-slot__frame--filled' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                      >
+                        {scanPreviewUrls?.front ? (
+                          <img
+                            className="fdn-id-preview-slot__img"
+                            src={scanPreviewUrls.front}
+                            alt="ID front"
+                            style={{
+                              transform: `rotate(${rotationDeg}deg) scaleX(${flipH ? -1 : 1})`,
+                            }}
+                          />
+                        ) : (
+                          <span className="fdn-id-preview-slot__placeholder">Waiting for front scan…</span>
+                        )}
                       </div>
                     </div>
-                    <div className="fdn-id-preview__cell">
-                      <p className="fdn-id-preview__side">Back</p>
-                      <div className="fdn-id-preview__main">
-                        {scanPreviewUrls.back ? (
+                    <div className="fdn-id-preview-slot">
+                      <p className="fdn-id-preview-slot__label">Back</p>
+                      <div
+                        className={[
+                          'fdn-id-preview-slot__frame',
+                          scanPreviewUrls?.back ? 'fdn-id-preview-slot__frame--filled' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                      >
+                        {scanPreviewUrls?.back ? (
                           <img
-                            className="fdn-id-preview__img"
+                            className="fdn-id-preview-slot__img"
                             src={scanPreviewUrls.back}
                             alt="ID back"
                             style={{
@@ -1230,9 +1462,11 @@ function App() {
                             }}
                           />
                         ) : (
-                          <p className="fdn-muted fdn-id-preview__empty-back">
-                            Flip card to scan back
-                          </p>
+                          <span className="fdn-id-preview-slot__placeholder">
+                            {scanPreviewUrls?.front
+                              ? 'Flip card — scan back…'
+                              : 'Waiting for back scan…'}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -1240,6 +1474,7 @@ function App() {
                 </div>
               ) : null}
 
+              <div className="fdn-id-form-body">
               <div className="fdn-grid fdn-grid--idguru fdn-grid--dense">
                 <div className="fdn-grid--three-names">
                   <label className="fdn-label">
@@ -1503,6 +1738,7 @@ function App() {
                   </table>
                 )}
               </details>
+              </div>
 
               <div className="fdn-panel__footer">
                 <button
