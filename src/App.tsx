@@ -19,7 +19,11 @@ import { ID_DOCUMENT_TYPES, normalizeIdDocumentType } from './lib/id-document-ty
 import { normalizeUsStateCode, US_STATE_SELECT_OPTIONS } from './lib/us-states'
 import { isCompleteUsZip, lookupUsZipCityState, normalizeUsZipInput } from './lib/zip-lookup'
 import { guestProfileToFormState } from './lib/apply-guest-profile'
-import { mergeHistoryRecordWithLatestContact } from './lib/guest-stay-history'
+import {
+  mergeHistoryRecordWithLatestContact,
+  priorGuestStaysForConfirmation,
+} from './lib/guest-stay-history'
+import { ReturningGuestPanel } from './components/ReturningGuestPanel'
 import {
   formatUsPhoneDisplay,
   isCompletePhoneForLookup,
@@ -236,6 +240,13 @@ function App() {
   const lastZipLookupRef = useRef<string | null>(null)
   const [guestHistoryBusy, setGuestHistoryBusy] = useState(false)
   const [guestHistoryNote, setGuestHistoryNote] = useState<string | null>(null)
+  const [returningGuestRows, setReturningGuestRows] = useState<GuestStayHistoryRecord[]>([])
+  const [returningGuestBusy, setReturningGuestBusy] = useState(false)
+  const [returningGuestExpanded, setReturningGuestExpanded] = useState(false)
+  const priorReturningGuestStays = useMemo(
+    () => priorGuestStaysForConfirmation(returningGuestRows, state?.reservation?.confirmationNumber),
+    [returningGuestRows, state?.reservation?.confirmationNumber],
+  )
   const phoneHistoryTimerRef = useRef(0)
   const lastPhoneLookupRef = useRef<string | null>(null)
   const guestFormEmptyRef = useRef(true)
@@ -351,6 +362,9 @@ function App() {
     setZipLookupNote(null)
     setGuestHistoryBusy(false)
     setGuestHistoryNote(null)
+    setReturningGuestRows([])
+    setReturningGuestBusy(false)
+    setReturningGuestExpanded(false)
     lastPhoneLookupRef.current = null
     window.clearTimeout(phoneHistoryTimerRef.current)
     guestDraftStartedAtRef.current = null
@@ -414,8 +428,14 @@ function App() {
       scanContact?: { phone?: string; email?: string },
     ) => {
       const raw = idNumber?.trim()
-      if (!raw) return
+      if (!raw) {
+        setReturningGuestRows([])
+        setReturningGuestExpanded(false)
+        return
+      }
 
+      setReturningGuestBusy(true)
+      setReturningGuestExpanded(false)
       try {
         const res = (await chrome.runtime.sendMessage({
           type: 'GET_RETURNING_GUEST_HISTORY',
@@ -423,11 +443,10 @@ function App() {
         })) as {
           ok?: boolean
           guestStayHistory?: GuestStayHistoryRecord[]
-          returningGuestHistory?: { phone: string | null; email: string | null }[]
         }
-        const rows =
-          (res.ok ? res.guestStayHistory : undefined) ??
-          []
+        const rows = res.ok ? (res.guestStayHistory ?? []) : []
+        setReturningGuestRows(rows)
+
         if (rows.length === 0) return
 
         const record = mergeHistoryRecordWithLatestContact(rows)
@@ -443,7 +462,10 @@ function App() {
 
         applyContactFromRecord(record, { currentPhone, currentEmail })
       } catch {
+        setReturningGuestRows([])
         setGuestHistoryNote('Could not load prior guest contact from ID number.')
+      } finally {
+        setReturningGuestBusy(false)
       }
     },
     [applyContactFromRecord, applyGuestProfile],
@@ -1391,7 +1413,21 @@ function App() {
                     {formatLocalFromIso(lastScanReceivedAt)}
                   </span>
                 ) : null}
+                {priorReturningGuestStays.length > 0 ? (
+                  <span className="fdn-tag fdn-tag--returning" title="This ID was used on a prior stay">
+                    Returning guest
+                  </span>
+                ) : null}
               </div>
+
+              {parsed.idNumber?.trim() || returningGuestBusy || priorReturningGuestStays.length > 0 ? (
+                <ReturningGuestPanel
+                  stays={priorReturningGuestStays}
+                  busy={returningGuestBusy}
+                  expanded={returningGuestExpanded}
+                  onToggleExpanded={() => setReturningGuestExpanded((open) => !open)}
+                />
+              ) : null}
 
               {!manualEntry ? (
                 <div
@@ -1685,7 +1721,14 @@ function App() {
                   <input
                     className="fdn-input"
                     value={parsed.idNumber ?? ''}
-                    onChange={(e) => setParsed({ ...parsed, idNumber: e.target.value || null })}
+                    onChange={(e) => {
+                      const idNumber = e.target.value.trim() || null
+                      setParsed({ ...parsed, idNumber })
+                      if (!idNumber) {
+                        setReturningGuestRows([])
+                        setReturningGuestExpanded(false)
+                      }
+                    }}
                     onBlur={() => {
                       if (parsed.idNumber?.trim()) void loadReturningGuestById(parsed.idNumber)
                     }}

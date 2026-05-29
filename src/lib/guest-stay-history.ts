@@ -22,6 +22,24 @@ export function pickLatestContactFromHistory(rows: GuestStayHistoryRecord[]): {
 }
 
 /** Best row for form fill: identity from a substantive row, contact from latest visit that has it. */
+/** Prior stays on other confirmations (excludes the active reservation). */
+export function priorGuestStaysForConfirmation(
+  rows: GuestStayHistoryRecord[],
+  currentConfirmation: string | null | undefined,
+): GuestStayHistoryRecord[] {
+  const conf = currentConfirmation?.trim()
+  if (!conf) return rows
+  return rows.filter((r) => r.confirmationNumber.trim() !== conf)
+}
+
+export function guestStayDisplayName(record: GuestStayHistoryRecord): string {
+  const fromParts = [record.firstName, record.middleName, record.lastName]
+    .filter((p) => p?.trim())
+    .join(' ')
+    .trim()
+  return fromParts || record.fullName?.trim() || '—'
+}
+
 export function mergeHistoryRecordWithLatestContact(
   rows: GuestStayHistoryRecord[],
 ): GuestStayHistoryRecord | null {
