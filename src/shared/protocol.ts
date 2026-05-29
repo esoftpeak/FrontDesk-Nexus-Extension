@@ -279,9 +279,12 @@ export type NativeIdScanBroadcast = {
   /** ISO time when the extension received this scan (for UI + audit). */
   receivedAt?: string
   parsed: ParsedIdFields
+  /** May be empty when {@link imagesInStorage} is true (images in chrome.storage.local). */
   images: { front_image_base64: string; back_image_base64: string }
   imageBase64Length: number
   ocrProvider: 'native_host'
+  /** When true, load images via `fdn_scan_image_front` / `fdn_scan_image_back` keys. */
+  imagesInStorage?: boolean
   /** Structured fields from Python `document_data` / AUTO_SCAN_RESULT. */
   detail?: IdScanDetailGuru | null
   /** Raw snapshot for debugging / future use (not shown by default in UI). */
@@ -323,7 +326,9 @@ export type ExtensionState = {
 /** Service worker → side panel: two-pass DL scan, front image received (back not yet scanned). */
 export type ScanFrontBroadcast = {
   type: 'FDN_SCAN_FRONT_RESULT'
+  /** Empty when {@link imagesInStorage} is true. */
   imageFrontBase64: string
+  imagesInStorage?: boolean
 }
 
 /** Native Messaging host id — must match Windows registry + host manifest `name`. */

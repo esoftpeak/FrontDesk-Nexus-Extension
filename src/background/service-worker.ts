@@ -42,6 +42,7 @@ import {
   type ReservationLite,
 } from '../lib/id-scan-log'
 import { isCompletePhoneForLookup } from '../lib/phone-lookup'
+import { writeScanImagesToStorage } from '../lib/scan-image-storage'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
 import { pingNativeHost } from '../lib/native-scan'
@@ -775,11 +776,21 @@ async function buildHardwareStatus(): Promise<ExtensionState['hardware']> {
 
 let cachedExtensionHotelSettings = DEFAULT_EXTENSION_HOTEL_SETTINGS
 let extensionHotelSettingsFetchedAt = 0
+let extensionHotelSettingsUnavailable = false
+let extensionHotelSettingsWarned = false
 const EXTENSION_HOTEL_SETTINGS_TTL_MS = 60_000
+
+function isAppSettingsTableMissing(message: string): boolean {
+  const m = message.toLowerCase()
+  return m.includes('app_settings') && (m.includes('schema cache') || m.includes('does not exist'))
+}
 
 async function loadExtensionHotelSettings(
   client: SupabaseClient,
 ): Promise<typeof cachedExtensionHotelSettings> {
+  if (extensionHotelSettingsUnavailable) {
+    return DEFAULT_EXTENSION_HOTEL_SETTINGS
+  }
   if (
     extensionHotelSettingsFetchedAt > 0 &&
     Date.now() - extensionHotelSettingsFetchedAt < EXTENSION_HOTEL_SETTINGS_TTL_MS
@@ -792,11 +803,22 @@ async function loadExtensionHotelSettings(
     .eq('key', 'hotel')
     .maybeSingle()
   if (error) {
-    console.warn('[FDN SW] hotel settings load failed', error.message)
-    return cachedExtensionHotelSettings
+    extensionHotelSettingsFetchedAt = Date.now()
+    if (isAppSettingsTableMissing(error.message)) {
+      extensionHotelSettingsUnavailable = true
+    }
+    if (!extensionHotelSettingsWarned) {
+      extensionHotelSettingsWarned = true
+      console.warn(
+        '[FDN SW] hotel settings unavailable — using defaults (minimumCheckInAge=18).',
+        error.message,
+      )
+    }
+    return DEFAULT_EXTENSION_HOTEL_SETTINGS
   }
   cachedExtensionHotelSettings = parseHotelSettingsValue(data?.value)
   extensionHotelSettingsFetchedAt = Date.now()
+  extensionHotelSettingsUnavailable = false
   return cachedExtensionHotelSettings
 }
 
@@ -1605,25 +1627,56 @@ function forwardNativeHostRxToPanel(payload: NativeHostRxDebugBroadcast) {
 }
 
 function broadcastScanFrontResult(imageFrontBase64: string): void {
-  const msg: ScanFrontBroadcast = { type: 'FDN_SCAN_FRONT_RESULT', imageFrontBase64 }
-  void chrome.runtime.sendMessage(msg).catch(() => { /* side panel may be closed */ })
+  void (async () => {
+    try {
+      await writeScanImagesToStorage(imageFrontBase64, null)
+    } catch (e) {
+      console.warn('[FDN ID scan] front image storage failed', e)
+    }
+    const msg: ScanFrontBroadcast = {
+      type: 'FDN_SCAN_FRONT_RESULT',
+      imageFrontBase64: '',
+      imagesInStorage: true,
+    }
+    try {
+      await chrome.runtime.sendMessage(msg)
+    } catch {
+      /* side panel may be closed */
+    }
+  })()
 }
 
-async function broadcastNativeIdScan(payload: Omit<NativeIdScanBroadcast, 'type' | 'receivedAt'>) {
+async function broadcastNativeIdScan(payload: Omit<NativeIdScanBroadcast, 'type' | 'receivedAt' | 'imagesInStorage'>) {
+  const receivedAt = new Date().toISOString()
+  const front = payload.images.front_image_base64
+  const back = payload.images.back_image_base64
+
+  try {
+    await writeScanImagesToStorage(front, back ?? null)
+  } catch (e) {
+    console.warn('[FDN ID scan] image storage failed', e)
+  }
+
   const msg: NativeIdScanBroadcast = {
     type: 'FDN_NATIVE_ID_SCAN',
-    receivedAt: new Date().toISOString(),
-    ...payload,
+    receivedAt,
+    parsed: payload.parsed,
+    images: { front_image_base64: '', back_image_base64: '' },
+    imageBase64Length: front.length + (back?.length ?? 0),
+    ocrProvider: payload.ocrProvider,
+    detail: payload.detail,
+    documentData: payload.documentData,
+    imagesInStorage: true,
   }
   try {
     await chrome.storage.local.set({ fdn_last_native_scan: msg })
   } catch (e) {
-    console.warn('[FDN ID scan] storage set failed', e)
+    console.warn('[FDN ID scan] metadata storage failed', e)
   }
   try {
     await chrome.runtime.sendMessage(msg)
   } catch {
-    /* side panel may not be listening */
+    /* side panel may not be listening — reads storage on change */
   }
 }
 
