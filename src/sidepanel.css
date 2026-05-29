@@ -771,15 +771,44 @@ body {
   height: 16px;
 }
 
-.fdn-dnr-banner {
+.fdn-tag--underage {
+  border-color: #d29922;
+  color: #e3b341;
+  background: #2a2208;
+  font-weight: 600;
+}
+
+.fdn-id-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin: 0 0 8px;
+}
+
+.fdn-id-alert {
+  margin: 0;
   padding: 8px 10px;
   border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.fdn-id-alert--pending {
+  border: 1px solid #484f58;
+  background: #21262d;
+  color: #8b949e;
+}
+
+.fdn-id-alert--underage {
+  border: 1px solid #d29922;
+  background: #2a2208;
+  color: #e3b341;
+}
+
+.fdn-id-alert--dnr {
   border: 1px solid #f85149;
   background: #2d1515;
   color: #ff7b72;
-  font-size: 11px;
-  line-height: 1.45;
 }
 
 .fdn-dnr-summary {

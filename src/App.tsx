@@ -14,7 +14,9 @@ import {
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
+import { IdScanAlerts } from './components/IdScanAlerts'
 import { ageLabelFromDobString, mergeParsedWithGuru } from './lib/id-guru-fields'
+import { ageYearsFromDobString, isGuestUnderMinimumAge } from './lib/id-age'
 import { ID_DOCUMENT_TYPES, normalizeIdDocumentType } from './lib/id-document-types'
 import { normalizeUsStateCode, US_STATE_SELECT_OPTIONS } from './lib/us-states'
 import { isCompleteUsZip, lookupUsZipCityState, normalizeUsZipInput } from './lib/zip-lookup'
@@ -406,7 +408,7 @@ function App() {
     const id = idNumber?.trim()
     if (!id) {
       setDnrActive(false)
-      return
+      return false
     }
     setDnrCheckBusy(true)
     try {
@@ -414,13 +416,60 @@ function App() {
         type: 'CHECK_DNR',
         idNumber: id,
       })) as ExtensionResponse
-      if (res.ok) setDnrActive(!!res.dnrActive)
+      if (res.ok) {
+        const active = !!res.dnrActive
+        setDnrActive(active)
+        return active
+      }
     } catch {
       /* ignore */
     } finally {
       setDnrCheckBusy(false)
     }
+    return false
   }, [])
+
+  const minimumCheckInAge = state?.minimumCheckInAge ?? 18
+  const guestAgeYears = useMemo(
+    () => ageYearsFromDobString(parsed.dateOfBirth),
+    [parsed.dateOfBirth],
+  )
+  const guestUnderage = useMemo(
+    () => isGuestUnderMinimumAge(parsed.dateOfBirth, minimumCheckInAge),
+    [parsed.dateOfBirth, minimumCheckInAge],
+  )
+
+  const notifyIdScanAlerts = useCallback(
+    (opts: { dnr: boolean; underage: boolean; ageYears: number | null }) => {
+      const parts: string[] = []
+      if (opts.dnr) parts.push('Guest is blacklisted (Do Not Rent)')
+      if (opts.underage && minimumCheckInAge > 0) {
+        parts.push(
+          opts.ageYears !== null
+            ? `Underage: ${opts.ageYears} yrs (minimum ${minimumCheckInAge})`
+            : `May be under minimum age (${minimumCheckInAge})`,
+        )
+      }
+      if (parts.length === 0) return
+      showChromeNotification('FrontDesk Nexus — ID scan alert', parts.join('. '))
+    },
+    [minimumCheckInAge],
+  )
+
+  const runIdScanAlertChecks = useCallback(
+    async (idNumber: string | null | undefined, dob: string | null | undefined) => {
+      const underage = isGuestUnderMinimumAge(dob, minimumCheckInAge)
+      const ageYears = ageYearsFromDobString(dob)
+      let dnr = false
+      if (idNumber?.trim() && state?.auth.signedIn) {
+        dnr = await refreshDnrStatus(idNumber)
+      } else {
+        setDnrActive(false)
+      }
+      notifyIdScanAlerts({ dnr, underage, ageYears })
+    },
+    [minimumCheckInAge, state?.auth.signedIn, refreshDnrStatus, notifyIdScanAlerts],
+  )
 
   useEffect(() => {
     if (!state?.auth.signedIn) {
@@ -438,6 +487,9 @@ function App() {
     }, 400)
     return () => window.clearTimeout(dnrCheckTimerRef.current)
   }, [parsed.idNumber, state?.auth.signedIn, refreshDnrStatus])
+
+  const hasIdScanContext =
+    !!parsed.idNumber?.trim() || !!parsed.dateOfBirth?.trim() || !!lastScanReceivedAt
 
   const applyGuestProfile = useCallback((record: GuestStayHistoryRecord) => {
     const next = guestProfileToFormState(record)
@@ -680,14 +732,24 @@ function App() {
       if (m.detail?.phone?.trim()) {
         void runPhoneHistoryLookup(m.detail.phone.trim())
       }
-      showChromeNotification(
-        'FrontDesk Nexus',
-        'ID scan received — use To PMS, then Save & Clear when check-in is done.',
-      )
+      void runIdScanAlertChecks(m.parsed.idNumber, m.parsed.dateOfBirth)
+      if (!isGuestUnderMinimumAge(m.parsed.dateOfBirth, minimumCheckInAge)) {
+        showChromeNotification(
+          'FrontDesk Nexus',
+          'ID scan received — use To PMS, then Save & Clear when check-in is done.',
+        )
+      }
       void refresh()
       void refreshIdScanHistory()
     },
-    [refresh, refreshIdScanHistory, loadReturningGuestById, runPhoneHistoryLookup],
+    [
+      refresh,
+      refreshIdScanHistory,
+      loadReturningGuestById,
+      runPhoneHistoryLookup,
+      runIdScanAlertChecks,
+      minimumCheckInAge,
+    ],
   )
 
   useEffect(() => {
@@ -1184,7 +1246,7 @@ function App() {
         managerEmail: dnrManagerEmail.trim(),
         managerPassword: dnrManagerPassword,
       })) as ExtensionResponse
-      if (!res.ok) {
+      if (res.ok === false) {
         setFormError(res.error ?? 'Could not add DNR')
         return
       }
@@ -1549,7 +1611,15 @@ function App() {
                   </span>
                 ) : dnrActive ? (
                   <span className="fdn-tag fdn-tag--dnr" title="Guest is on the Do Not Rent list">
-                    DNR — Do not rent
+                    Blacklisted
+                  </span>
+                ) : null}
+                {guestUnderage && minimumCheckInAge > 0 ? (
+                  <span
+                    className="fdn-tag fdn-tag--underage"
+                    title={`Guest is under minimum check-in age (${minimumCheckInAge})`}
+                  >
+                    Underage
                   </span>
                 ) : null}
                 <button
@@ -1578,11 +1648,15 @@ function App() {
                 </button>
               </div>
 
-              {dnrActive ? (
-                <p className="fdn-dnr-banner" role="status">
-                  This guest is on the <strong>Do Not Rent</strong> list. Do not check them in unless a
-                  manager approves — use manager verification to save an ID record with override.
-                </p>
+              {hasIdScanContext ? (
+                <IdScanAlerts
+                  dnrCheckBusy={dnrCheckBusy}
+                  dnrActive={dnrActive}
+                  underage={guestUnderage}
+                  guestAgeYears={guestAgeYears}
+                  minimumCheckInAge={minimumCheckInAge}
+                  hasDob={!!parsed.dateOfBirth?.trim()}
+                />
               ) : null}
 
               {parsed.idNumber?.trim() || returningGuestBusy || priorReturningGuestStays.length > 0 ? (

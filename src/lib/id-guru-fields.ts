@@ -1,4 +1,5 @@
 import type { IdScanDetailGuru, ParsedIdFields } from '../shared/pms-types'
+import { ageYearsFromDobString } from './id-age'
 
 /** AAMVA PDF417 uses these sentinel strings to indicate an absent field. */
 const AAMVA_SENTINELS = new Set(['NONE', 'UNAVAILABLE', 'N/A', 'NA'])
@@ -80,27 +81,6 @@ export function mergeParsedWithGuru(parsed: ParsedIdFields, g: IdScanDetailGuru)
 
 /** Best-effort age label from DOB string (M/D/Y, Y-M-D, etc.). */
 export function ageLabelFromDobString(dob: string | null): string | null {
-  if (!dob?.trim()) return null
-  const t = Date.parse(dob)
-  if (!Number.isNaN(t)) {
-    const d = new Date(t)
-    if (Number.isNaN(d.getTime())) return null
-    let age = new Date().getFullYear() - d.getFullYear()
-    const m = new Date().getMonth() - d.getMonth()
-    if (m < 0 || (m === 0 && new Date().getDate() < d.getDate())) age--
-    return age >= 0 ? `${age} Year(s)` : null
-  }
-  const us = dob.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
-  if (us) {
-    const month = Number(us[1])
-    const day = Number(us[2])
-    const year = Number(us[3])
-    const d = new Date(year, month - 1, day)
-    if (Number.isNaN(d.getTime())) return null
-    let age = new Date().getFullYear() - year
-    const bd = new Date(new Date().getFullYear(), month - 1, day)
-    if (new Date() < bd) age--
-    return age >= 0 ? `${age} Year(s)` : null
-  }
-  return null
+  const age = ageYearsFromDobString(dob)
+  return age !== null ? `${age} Year(s)` : null
 }

@@ -27,6 +27,10 @@ import type {
   SynxisGuestDisplay,
 } from '../shared/pms-types'
 import { checkActiveDnr, idVariantsForDnrLookup, normalizeIdNumber } from '../lib/dnr'
+import {
+  DEFAULT_EXTENSION_HOTEL_SETTINGS,
+  parseHotelSettingsValue,
+} from '../lib/hotel-settings'
 import { encryptBinary, encryptJson, hashIdNumber, hashPhoneNumber } from '../lib/encryption'
 import {
   filterRecordsByPhone,
@@ -769,6 +773,33 @@ async function buildHardwareStatus(): Promise<ExtensionState['hardware']> {
   }
 }
 
+let cachedExtensionHotelSettings = DEFAULT_EXTENSION_HOTEL_SETTINGS
+let extensionHotelSettingsFetchedAt = 0
+const EXTENSION_HOTEL_SETTINGS_TTL_MS = 60_000
+
+async function loadExtensionHotelSettings(
+  client: SupabaseClient,
+): Promise<typeof cachedExtensionHotelSettings> {
+  if (
+    extensionHotelSettingsFetchedAt > 0 &&
+    Date.now() - extensionHotelSettingsFetchedAt < EXTENSION_HOTEL_SETTINGS_TTL_MS
+  ) {
+    return cachedExtensionHotelSettings
+  }
+  const { data, error } = await client
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'hotel')
+    .maybeSingle()
+  if (error) {
+    console.warn('[FDN SW] hotel settings load failed', error.message)
+    return cachedExtensionHotelSettings
+  }
+  cachedExtensionHotelSettings = parseHotelSettingsValue(data?.value)
+  extensionHotelSettingsFetchedAt = Date.now()
+  return cachedExtensionHotelSettings
+}
+
 async function restorePersistedReservationState(): Promise<void> {
   const stored = await chrome.storage.local.get(['fdn_active_reservation', 'fdn_ezee_guest_display'])
   if (!reservation && stored.fdn_active_reservation) {
@@ -789,6 +820,9 @@ async function getState(): Promise<ExtensionState> {
 
   if (user && !cachedRole) await refreshRole(client)
 
+  const hotelSettings = user
+    ? await loadExtensionHotelSettings(client)
+    : DEFAULT_EXTENSION_HOTEL_SETTINGS
   const dnrHit = false
 
   return {
@@ -811,6 +845,7 @@ async function getState(): Promise<ExtensionState> {
     rfidError,
     terminalId: typeof terminalId === 'string' ? terminalId : null,
     dnrHit,
+    minimumCheckInAge: hotelSettings.minimumCheckInAge,
     lastError,
   }
 }

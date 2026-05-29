@@ -315,6 +315,8 @@ export type ExtensionState = {
   rfidError: string | null
   terminalId: string | null
   dnrHit: boolean
+  /** From `app_settings` key `hotel`; 0 = no underage warning. */
+  minimumCheckInAge: number
   lastError: string | null
 }
 
