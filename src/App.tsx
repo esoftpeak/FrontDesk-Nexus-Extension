@@ -36,6 +36,7 @@ import { LoadingScreen } from './components/LoadingScreen'
 import { PanelHeader } from './components/PanelHeader'
 import {
   IconArrowLeft,
+  IconBan,
   IconHistory,
   IconId,
   IconKey,
@@ -64,6 +65,19 @@ function formatRoleLabel(role: string | null | undefined): string {
 function ocrProviderShortLabel(provider: string): string {
   if (provider === 'native_host') return 'scan'
   return provider.length > 8 ? `${provider.slice(0, 7)}…` : provider
+}
+
+function guestNameFromIdForm(
+  idDetail: IdScanDetailGuru,
+  parsed: ParsedIdFields,
+): string {
+  const parts = [idDetail.firstName, idDetail.middleName, idDetail.lastName]
+    .map((p) => p?.trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+  if (parts) return parts
+  return parsed.fullName?.trim() ?? ''
 }
 
 function accountDisplayName(email: string | null | undefined): string {
@@ -201,6 +215,12 @@ function App() {
   const [managerEmail, setManagerEmail] = useState('')
   const [managerPassword, setManagerPassword] = useState('')
   const [showManagerModal, setShowManagerModal] = useState(false)
+  const [showAddDnrModal, setShowAddDnrModal] = useState(false)
+  const [dnrActive, setDnrActive] = useState(false)
+  const [dnrCheckBusy, setDnrCheckBusy] = useState(false)
+  const [dnrReason, setDnrReason] = useState('')
+  const [dnrManagerEmail, setDnrManagerEmail] = useState('')
+  const [dnrManagerPassword, setDnrManagerPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [scanImages, setScanImages] = useState<{
@@ -365,6 +385,10 @@ function App() {
     setReturningGuestRows([])
     setReturningGuestBusy(false)
     setReturningGuestExpanded(false)
+    setDnrActive(false)
+    setDnrCheckBusy(false)
+    setShowAddDnrModal(false)
+    setDnrReason('')
     lastPhoneLookupRef.current = null
     window.clearTimeout(phoneHistoryTimerRef.current)
     guestDraftStartedAtRef.current = null
@@ -376,6 +400,44 @@ function App() {
   }, [])
 
   const prevSignedInRef = useRef<boolean | null>(null)
+  const dnrCheckTimerRef = useRef(0)
+
+  const refreshDnrStatus = useCallback(async (idNumber: string | null | undefined) => {
+    const id = idNumber?.trim()
+    if (!id) {
+      setDnrActive(false)
+      return
+    }
+    setDnrCheckBusy(true)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'CHECK_DNR',
+        idNumber: id,
+      })) as ExtensionResponse
+      if (res.ok) setDnrActive(!!res.dnrActive)
+    } catch {
+      /* ignore */
+    } finally {
+      setDnrCheckBusy(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!state?.auth.signedIn) {
+      setDnrActive(false)
+      return
+    }
+    const id = parsed.idNumber?.trim()
+    if (!id) {
+      setDnrActive(false)
+      return
+    }
+    window.clearTimeout(dnrCheckTimerRef.current)
+    dnrCheckTimerRef.current = window.setTimeout(() => {
+      void refreshDnrStatus(id)
+    }, 400)
+    return () => window.clearTimeout(dnrCheckTimerRef.current)
+  }, [parsed.idNumber, state?.auth.signedIn, refreshDnrStatus])
 
   const applyGuestProfile = useCallback((record: GuestStayHistoryRecord) => {
     const next = guestProfileToFormState(record)
@@ -1077,6 +1139,69 @@ function App() {
     }
   }
 
+  function openAddDnrModal() {
+    const id = parsed.idNumber?.trim()
+    if (!id) {
+      setFormError('Scan or enter an ID number before adding to DNR.')
+      return
+    }
+    if (dnrActive) {
+      setFormError('This guest is already on the active DNR list.')
+      return
+    }
+    setFormError(null)
+    setDnrReason('')
+    setDnrManagerEmail('')
+    setDnrManagerPassword('')
+    setShowAddDnrModal(true)
+  }
+
+  async function onAddDnrSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const id = parsed.idNumber?.trim()
+    const guestName = guestNameFromIdForm(idDetail, parsed)
+    if (!id) {
+      setFormError('ID number is required.')
+      return
+    }
+    if (!guestName) {
+      setFormError('Guest name is required (first/last name or full name on ID).')
+      return
+    }
+    if (!dnrReason.trim()) {
+      setFormError('DNR reason is required.')
+      return
+    }
+    setBusy(true)
+    setFormError(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'ADD_DNR',
+        guestName,
+        idNumber: id,
+        dateOfBirth: parsed.dateOfBirth?.trim() || null,
+        reason: dnrReason.trim(),
+        managerEmail: dnrManagerEmail.trim(),
+        managerPassword: dnrManagerPassword,
+      })) as ExtensionResponse
+      if (!res.ok) {
+        setFormError(res.error ?? 'Could not add DNR')
+        return
+      }
+      setDnrActive(true)
+      setShowAddDnrModal(false)
+      setDnrReason('')
+      setDnrManagerEmail('')
+      setDnrManagerPassword('')
+      showChromeNotification(
+        'FrontDesk Nexus',
+        `${guestName} added to Do Not Rent list.`,
+      )
+      void refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
 
   /** Encode one key (portal: IN time = encode moment; checkout from stay). */
   async function runEncodeKey(serial: number): Promise<boolean> {
@@ -1418,7 +1543,47 @@ function App() {
                     Returning guest
                   </span>
                 ) : null}
+                {dnrCheckBusy ? (
+                  <span className="fdn-tag fdn-tag--dnr-pending" title="Checking DNR list">
+                    DNR…
+                  </span>
+                ) : dnrActive ? (
+                  <span className="fdn-tag fdn-tag--dnr" title="Guest is on the Do Not Rent list">
+                    DNR — Do not rent
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  className={[
+                    'fdn-dnr-btn',
+                    dnrActive ? 'fdn-dnr-btn--active' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  title={
+                    dnrActive
+                      ? 'Guest is already on the DNR list'
+                      : 'Add guest to Do Not Rent (manager/admin password required)'
+                  }
+                  aria-label="Add to Do Not Rent list"
+                  disabled={
+                    !state.auth.signedIn ||
+                    busy ||
+                    dnrActive ||
+                    !parsed.idNumber?.trim()
+                  }
+                  onClick={() => openAddDnrModal()}
+                >
+                  <IconBan className="fdn-dnr-btn__icon" />
+                </button>
               </div>
+
+              {dnrActive ? (
+                <p className="fdn-dnr-banner" role="status">
+                  This guest is on the <strong>Do Not Rent</strong> list. Do not check them in unless a
+                  manager approves — use manager verification to save an ID record with override.
+                </p>
+              ) : null}
 
               {parsed.idNumber?.trim() || returningGuestBusy || priorReturningGuestStays.length > 0 ? (
                 <ReturningGuestPanel
@@ -2034,6 +2199,82 @@ function App() {
           ) : null}
         </main>
       </div>
+
+      {showAddDnrModal ? (
+        <div className="fdn-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="fdn-modal">
+            <h3 className="fdn-h3">Add to Do Not Rent</h3>
+            <p className="fdn-help">
+              Flag this guest on the property DNR list. A manager or admin must confirm with their
+              password. This does not save the current ID scan.
+            </p>
+            <dl className="fdn-dnr-summary">
+              <div>
+                <dt>Guest</dt>
+                <dd>{guestNameFromIdForm(idDetail, parsed) || '—'}</dd>
+              </div>
+              <div>
+                <dt>ID number</dt>
+                <dd className="fdn-mono">{parsed.idNumber?.trim() ?? '—'}</dd>
+              </div>
+              {parsed.dateOfBirth?.trim() ? (
+                <div>
+                  <dt>DOB</dt>
+                  <dd>{parsed.dateOfBirth}</dd>
+                </div>
+              ) : null}
+            </dl>
+            <form className="fdn-form" onSubmit={(e) => void onAddDnrSubmit(e)}>
+              <label className="fdn-label">
+                Reason
+                <textarea
+                  className="fdn-input fdn-textarea"
+                  required
+                  rows={3}
+                  value={dnrReason}
+                  onChange={(e) => setDnrReason(e.target.value)}
+                  placeholder="Why should this guest not be rented?"
+                />
+              </label>
+              <label className="fdn-label">
+                Manager or admin email
+                <input
+                  className="fdn-input"
+                  type="email"
+                  autoComplete="username"
+                  required
+                  value={dnrManagerEmail}
+                  onChange={(e) => setDnrManagerEmail(e.target.value)}
+                />
+              </label>
+              <label className="fdn-label">
+                Password
+                <input
+                  className="fdn-input"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={dnrManagerPassword}
+                  onChange={(e) => setDnrManagerPassword(e.target.value)}
+                />
+              </label>
+              <div className="fdn-actions">
+                <button type="submit" className="fdn-btn fdn-btn--danger" disabled={busy}>
+                  {busy ? 'Adding…' : 'Add to DNR'}
+                </button>
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--ghost"
+                  disabled={busy}
+                  onClick={() => setShowAddDnrModal(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
 
       {showManagerModal && (
         <div className="fdn-modal-backdrop" role="dialog" aria-modal="true">

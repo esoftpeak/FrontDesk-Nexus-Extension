@@ -723,6 +723,88 @@ body {
   font-weight: 600;
 }
 
+.fdn-tag--dnr {
+  border-color: #f85149;
+  color: #ff7b72;
+  background: #2d1515;
+  font-weight: 600;
+}
+
+.fdn-tag--dnr-pending {
+  border-color: #484f58;
+  color: #8b949e;
+}
+
+.fdn-dnr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #8b949e;
+  cursor: pointer;
+}
+
+.fdn-dnr-btn:hover:not(:disabled) {
+  border-color: #f85149;
+  color: #ff7b72;
+  background: #2d1515;
+}
+
+.fdn-dnr-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.fdn-dnr-btn--active {
+  border-color: #f85149;
+  color: #ff7b72;
+}
+
+.fdn-dnr-btn__icon {
+  width: 16px;
+  height: 16px;
+}
+
+.fdn-dnr-banner {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #f85149;
+  background: #2d1515;
+  color: #ff7b72;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.fdn-dnr-summary {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.fdn-dnr-summary div {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: 8px;
+}
+
+.fdn-dnr-summary dt {
+  color: #8b949e;
+  font-weight: 500;
+}
+
+.fdn-dnr-summary dd {
+  margin: 0;
+  color: #e6edf3;
+}
+
 .fdn-details {
   flex-shrink: 0;
   font-size: 11px;

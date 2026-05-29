@@ -14,6 +14,8 @@ Messages use `chrome.runtime.sendMessage` unless noted. Payloads are JSON-serial
 | `BRIDGE_SET_SESSION`      | `{ accessToken, refreshToken, expiresAt? }` | `{ ok, state? \| error }` |
 | `SAVE_ID_SCAN`            | `{ parsed, phone, email, manualEntry, managerOverride, imageFrontBase64, imageBackBase64, ocrProvider? }` | `{ ok, state? \| error }` — DNR gate, storage, `id_scans`, `audit_log` (no PMS inject here) |
 | `VERIFY_MANAGER`          | `{ email, password }` | `{ ok \| error }` |
+| `CHECK_DNR`               | `{ idNumber }` | `{ ok, dnrActive }` — active row in `dnr_entries` |
+| `ADD_DNR`                 | `{ guestName, idNumber, dateOfBirth?, reason, managerEmail, managerPassword }` | `{ ok, dnrActive?, state? \| error }` — manager/admin password + audit |
 | `INJECT_PMS`              | `{ fields: Record<string,string> }` | `{ ok, inject?, error }` |
 
 ## Service worker → Side panel (push)

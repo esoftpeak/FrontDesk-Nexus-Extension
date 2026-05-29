@@ -184,6 +184,18 @@ export type ExtensionMessage =
     }
   | { type: 'INJECT_PMS'; fields: Record<string, string> }
   | { type: 'VERIFY_MANAGER'; email: string; password: string }
+  /** Active DNR row for scanned / typed ID number (normalized + raw variants). */
+  | { type: 'CHECK_DNR'; idNumber: string }
+  /** Manager/admin adds guest to DNR after password verification (extension side panel). */
+  | {
+      type: 'ADD_DNR'
+      guestName: string
+      idNumber: string
+      dateOfBirth: string | null
+      reason: string
+      managerEmail: string
+      managerPassword: string
+    }
   | {
       type: 'SAVE_SIGNATURE'
       /** Base64-encoded signed PDF bytes (from pdf-lib save()). */
@@ -239,6 +251,8 @@ export type ExtensionResponse =
       signaturePath?: string
       returningGuestHistory?: ReturningGuestRecord[]
       guestStayHistory?: GuestStayHistoryRecord[]
+      /** Present after `CHECK_DNR` or `ADD_DNR`. */
+      dnrActive?: boolean
     }
   | { ok: false; error: string }
 

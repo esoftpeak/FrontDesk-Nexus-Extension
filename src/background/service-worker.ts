@@ -26,6 +26,7 @@ import type {
   ReservationSnapshot,
   SynxisGuestDisplay,
 } from '../shared/pms-types'
+import { checkActiveDnr, idVariantsForDnrLookup, normalizeIdNumber } from '../lib/dnr'
 import { encryptBinary, encryptJson, hashIdNumber, hashPhoneNumber } from '../lib/encryption'
 import {
   filterRecordsByPhone,
@@ -814,7 +815,19 @@ async function getState(): Promise<ExtensionState> {
   }
 }
 
-async function verifyManager(email: string, password: string): Promise<ExtensionResponse> {
+type ManagerVerifyOk = {
+  ok: true
+  userId: string
+  email: string
+  role: string
+}
+
+type ManagerVerifyFail = { ok: false; error: string }
+
+async function verifyManagerRole(
+  email: string,
+  password: string,
+): Promise<ManagerVerifyOk | ManagerVerifyFail> {
   const url = import.meta.env.VITE_SUPABASE_URL
   const key = import.meta.env.VITE_SUPABASE_ANON_KEY
   if (!url || !key) return { ok: false, error: 'Supabase env not configured' }
@@ -854,11 +867,87 @@ async function verifyManager(email: string, password: string): Promise<Extension
   if (role !== 'manager' && role !== 'admin') {
     return { ok: false, error: 'User is not a manager or admin' }
   }
+  return {
+    ok: true,
+    userId: data.user.id,
+    email: data.user.email ?? email,
+    role,
+  }
+}
+
+async function verifyManager(email: string, password: string): Promise<ExtensionResponse> {
+  const r = await verifyManagerRole(email, password)
+  if (!r.ok) return r
   return { ok: true }
 }
 
-function normalizeIdNumber(n: string | null): string {
-  return (n ?? '').replace(/\s+/g, '').toUpperCase()
+async function addDnrEntry(args: {
+  guestName: string
+  idNumber: string
+  dateOfBirth: string | null
+  reason: string
+  managerEmail: string
+  managerPassword: string
+}): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+
+  const gn = args.guestName.trim()
+  const idStored = normalizeIdNumber(args.idNumber)
+  const rr = args.reason.trim()
+  if (!gn) return { ok: false, error: 'Guest name required' }
+  if (!idStored) return { ok: false, error: 'ID number required' }
+  if (!rr) return { ok: false, error: 'Reason required' }
+
+  const mgr = await verifyManagerRole(args.managerEmail, args.managerPassword)
+  if (!mgr.ok) return mgr
+
+  const variants = idVariantsForDnrLookup(args.idNumber)
+  const { data: existing } = await client
+    .from('dnr_entries')
+    .select('id')
+    .eq('status', 'active')
+    .in('id_number', variants)
+
+  if (existing && existing.length > 0) {
+    return { ok: false, error: 'Guest is already on the active DNR list.' }
+  }
+
+  const dob = args.dateOfBirth?.trim() ? args.dateOfBirth.trim() : null
+  const terminalId = await ensureTerminal(client)
+
+  const { data: inserted, error } = await client
+    .from('dnr_entries')
+    .insert({
+      guest_name: gn,
+      id_number: idStored,
+      date_of_birth: dob,
+      reason: rr,
+      status: 'active',
+      flagged_by: mgr.userId,
+    })
+    .select('id')
+    .single()
+
+  if (error) {
+    lastError = error.message
+    return { ok: false, error: error.message }
+  }
+
+  const { error: audErr } = await client.from('audit_log').insert({
+    user_id: mgr.userId,
+    username: mgr.email,
+    user_role: mgr.role,
+    terminal_id: terminalId,
+    action_type: 'dnr_added',
+    description: `DNR added for id_number ${idStored} (extension)`,
+    new_value: { dnr_entry_id: inserted?.id, id_number: idStored, guest_name: gn },
+  })
+  if (audErr) console.warn('[FDN SW] audit_log (dnr_added)', audErr.message)
+
+  return { ok: true, dnrActive: true, state: await getState() }
 }
 
 async function patchLastScanResultContact(args: {
@@ -950,16 +1039,8 @@ async function saveIdScan(args: {
 
   const rawId = (args.parsed.idNumber ?? '').trim()
   if (rawId && !args.managerOverride) {
-    const norm = normalizeIdNumber(args.parsed.idNumber)
-    const idVariants = [...new Set([rawId, norm].filter((x) => x.length > 0))]
-    const { data: hits, error: dnrErr } = await client
-      .from('dnr_entries')
-      .select('id')
-      .eq('status', 'active')
-      .in('id_number', idVariants)
-
-    if (dnrErr) console.warn('DNR check failed', dnrErr.message)
-    if (hits && hits.length > 0) {
+    const onDnr = await checkActiveDnr(client, rawId)
+    if (onDnr) {
       return {
         ok: false,
         error: 'DNR match — manager approval required before saving.',
@@ -2206,6 +2287,25 @@ async function handleMessage(
 
   if (msg.type === 'VERIFY_MANAGER') {
     return verifyManager(msg.email, msg.password)
+  }
+
+  if (msg.type === 'CHECK_DNR') {
+    const client = getClient()
+    const { data: sess } = await client.auth.getSession()
+    if (!sess.session) return { ok: false, error: 'Not signed in' }
+    const dnrActive = await checkActiveDnr(client, msg.idNumber)
+    return { ok: true, dnrActive }
+  }
+
+  if (msg.type === 'ADD_DNR') {
+    return addDnrEntry({
+      guestName: msg.guestName,
+      idNumber: msg.idNumber,
+      dateOfBirth: msg.dateOfBirth,
+      reason: msg.reason,
+      managerEmail: msg.managerEmail,
+      managerPassword: msg.managerPassword,
+    })
   }
 
   if (msg.type === 'SAVE_ID_SCAN') {

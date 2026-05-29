@@ -78,6 +78,17 @@ export function IconKey({ className, title }: IconProps) {
   )
 }
 
+/** Do Not Rent — `Ban` (portal DNR nav) */
+export function IconBan({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className} aria-hidden={title ? undefined : true}>
+      {title ? <title>{title}</title> : null}
+      <circle cx="12" cy="12" r="10" />
+      <path d="m4.9 4.9 14.2 14.2" />
+    </svg>
+  )
+}
+
 /** Send guest data to PMS — `ArrowLeft` */
 export function IconArrowLeft({ className, title }: IconProps) {
   return (
