@@ -19,6 +19,7 @@ import {
   clearScanImagesFromStorage,
   FDN_SCAN_IMAGE_BACK_KEY,
   FDN_SCAN_IMAGE_FRONT_KEY,
+  isCompleteTwoSidedScan,
   readScanImagesFromStorage,
   resolveScanImages,
 } from './lib/scan-image-storage'
@@ -287,6 +288,8 @@ function App() {
   const lastScanReceivedAtRef = useRef<string | null>(null)
   const scanImagesRef = useRef<{ front: string; back: string | null } | null>(null)
   const lastAppliedNativeScanAtRef = useRef<string | null>(null)
+  /** `front` = first side captured; `complete` = both sides + OCR applied. */
+  const idScanPassRef = useRef<'idle' | 'front' | 'complete'>('idle')
   const idPanelRef = useRef<HTMLElement>(null)
   type WorkspaceTab = 'id' | 'history' | 'payment' | 'signature' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
@@ -384,6 +387,7 @@ function App() {
     lastScanReceivedAtRef.current = null
     scanImagesRef.current = null
     lastAppliedNativeScanAtRef.current = null
+    idScanPassRef.current = 'idle'
     setRotationDeg(0)
     setFlipH(false)
     setGuestRemark('')
@@ -711,68 +715,121 @@ function App() {
     }
   }, [cancelZipLookup])
 
+  const applyScanFrontPreview = useCallback(async (frontB64: string) => {
+    const b64 = frontB64.trim()
+    if (!b64) return
+
+    const prev = scanImagesRef.current
+    if (
+      idScanPassRef.current === 'complete' &&
+      lastScanReceivedAtRef.current &&
+      prev?.back?.trim() &&
+      prev.front === b64
+    ) {
+      return
+    }
+
+    lastAppliedNativeScanAtRef.current = null
+    lastScanReceivedAtRef.current = null
+    idScanPassRef.current = 'front'
+    scanImagesRef.current = { front: b64, back: null }
+    setActiveTab('id')
+    setScanImages({ front: b64, back: null })
+    setRotationDeg(0)
+    setFlipH(false)
+    setParsed(emptyParsed)
+    setIdDetail(emptyIdDetail)
+    setPhone('')
+    setEmailGuest('')
+    setLastOcrProvider(null)
+    setLastScanReceivedAt(null)
+    setLastDocumentData(null)
+    setFormError(null)
+    setGuestHistoryNote(null)
+    setReturningGuestRows([])
+    setReturningGuestExpanded(false)
+  }, [])
+
   const applyNativeIdScan = useCallback(
     async (m: NativeIdScanBroadcast) => {
       const receivedAt = m.receivedAt ?? new Date().toISOString()
       if (lastAppliedNativeScanAtRef.current === receivedAt) return
-      lastAppliedNativeScanAtRef.current = receivedAt
 
       const resolvedImages = await resolveScanImages(m.images)
-      if (!resolvedImages?.front?.trim()) {
-        console.warn('[FrontDesk Nexus] ID scan received without front image in message or storage')
+      const front = resolvedImages?.front?.trim() ?? m.images.front_image_base64?.trim() ?? ''
+      const back = resolvedImages?.back?.trim() ?? m.images.back_image_base64?.trim() ?? null
+
+      if (!isCompleteTwoSidedScan(front, back)) {
+        if (front) {
+          await applyScanFrontPreview(front)
+        }
+        return
       }
 
-      guestDraftCanceledRef.current = false
-      const detail = m.detail ?? emptyIdDetail
-      const nextImages = {
-        front: resolvedImages?.front ?? m.images.front_image_base64 ?? '',
-        back: resolvedImages?.back ?? m.images.back_image_base64 ?? null,
-      }
+      lastAppliedNativeScanAtRef.current = receivedAt
+      idScanPassRef.current = 'complete'
+
+      const nextImages = { front, back }
       lastScanReceivedAtRef.current = receivedAt
       scanImagesRef.current = nextImages
       setActiveTab('id')
-      setParsed({
-        ...m.parsed,
-        idType: normalizeIdDocumentType(m.parsed.idType),
-      })
-      setLastOcrProvider(m.ocrProvider)
-      setIdDetail({
-        ...detail,
-        state: normalizeUsStateCode(detail.state) ?? detail.state,
-        postalCode: normalizeUsZipInput(detail.postalCode) || null,
-      })
-      lastZipLookupRef.current = normalizeUsZipInput(detail.postalCode) || null
-      setZipLookupNote(null)
       setScanImages(nextImages)
-      setLastDocumentData(m.documentData ?? null)
-      setLastScanReceivedAt(receivedAt)
       setRotationDeg(0)
       setFlipH(false)
-      if (m.detail?.phone?.trim()) {
-        const p = m.detail.phone.trim()
-        setPhone(p)
-        lastPhoneLookupRef.current = null
-      }
-      if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
 
-      if (m.parsed.idNumber?.trim()) {
-        void loadReturningGuestById(
-          m.parsed.idNumber,
-          {
-            phone: m.detail?.phone?.trim(),
-            email: m.detail?.email?.trim(),
-          },
-          { fromLiveScan: true },
+      guestDraftCanceledRef.current = false
+      const detail = m.detail ?? emptyIdDetail
+
+      try {
+        setParsed({
+          ...m.parsed,
+          idType: normalizeIdDocumentType(m.parsed.idType),
+        })
+        setLastOcrProvider(m.ocrProvider)
+        setIdDetail({
+          ...detail,
+          state: normalizeUsStateCode(detail.state) ?? detail.state,
+          postalCode: normalizeUsZipInput(detail.postalCode) || null,
+        })
+        lastZipLookupRef.current = normalizeUsZipInput(detail.postalCode) || null
+        setZipLookupNote(null)
+        setLastDocumentData(m.documentData ?? null)
+        setLastScanReceivedAt(receivedAt)
+        if (m.detail?.phone?.trim()) {
+          const p = m.detail.phone.trim()
+          setPhone(p)
+          lastPhoneLookupRef.current = null
+        }
+        if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
+
+        if (m.parsed.idNumber?.trim()) {
+          void loadReturningGuestById(
+            m.parsed.idNumber,
+            {
+              phone: m.detail?.phone?.trim(),
+              email: m.detail?.email?.trim(),
+            },
+            { fromLiveScan: true },
+          )
+        }
+
+        void runIdScanAlertChecks(m.parsed.idNumber, m.parsed.dateOfBirth)
+        if (!isGuestUnderMinimumAge(m.parsed.dateOfBirth, minimumCheckInAge)) {
+          showChromeNotification(
+            'FrontDesk Nexus',
+            'ID scan received — use To PMS, then Save & Clear when check-in is done.',
+          )
+        }
+      } catch (err) {
+        console.warn(
+          '[FrontDesk Nexus] ID auto-fill failed — images kept for manual entry',
+          err,
         )
+        setLastScanReceivedAt(receivedAt)
+        setLastOcrProvider(m.ocrProvider)
+        setLastDocumentData(m.documentData ?? null)
       }
 
-      void runIdScanAlertChecks(m.parsed.idNumber, m.parsed.dateOfBirth)
-      if (!isGuestUnderMinimumAge(m.parsed.dateOfBirth, minimumCheckInAge)) {
-        showChromeNotification(
-          'FrontDesk Nexus',
-          'ID scan received — use To PMS, then Save & Clear when check-in is done.',
-        )
-      }
       void refresh()
       void refreshIdScanHistory()
     },
@@ -782,6 +839,7 @@ function App() {
       loadReturningGuestById,
       runIdScanAlertChecks,
       minimumCheckInAge,
+      applyScanFrontPreview,
     ],
   )
 
@@ -790,33 +848,25 @@ function App() {
     applyNativeIdScanRef.current = applyNativeIdScan
   }, [applyNativeIdScan])
 
-  const applyScanFrontResult = useCallback(async (d: ScanFrontBroadcast) => {
-    let b64 = d.imageFrontBase64?.trim() ?? ''
-    if (!b64 && d.imagesInStorage) {
-      const stored = await readScanImagesFromStorage()
-      b64 = stored?.front?.trim() ?? ''
-    }
-    if (!b64) return
-
-    const prev = scanImagesRef.current
-    if (
-      lastScanReceivedAtRef.current &&
-      prev?.back?.trim() &&
-      prev.front === b64
-    ) {
-      return
-    }
-
-    lastScanReceivedAtRef.current = null
-    scanImagesRef.current = { front: b64, back: null }
-    setActiveTab('id')
-    setScanImages({ front: b64, back: null })
-    setParsed(emptyParsed)
-    setIdDetail(emptyIdDetail)
-    setLastOcrProvider(null)
-    setLastScanReceivedAt(null)
-    setLastDocumentData(null)
-  }, [])
+  const applyScanFrontResult = useCallback(
+    async (d: ScanFrontBroadcast) => {
+      let b64 = d.imageFrontBase64?.trim() ?? ''
+      if (!b64 && d.imagesInStorage) {
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const stored = await readScanImagesFromStorage()
+          b64 = stored?.front?.trim() ?? ''
+          if (b64) break
+          await new Promise((r) => window.setTimeout(r, 50 * (attempt + 1)))
+        }
+      }
+      if (!b64) {
+        console.warn('[FrontDesk Nexus] front scan — no image in message or storage')
+        return
+      }
+      await applyScanFrontPreview(b64)
+    },
+    [applyScanFrontPreview],
+  )
 
   useEffect(() => {
     const onRuntimeMessage = (msg: unknown) => {
@@ -855,22 +905,36 @@ function App() {
       area: string,
     ) => {
       if (area !== 'local') return
-      if (changes.fdn_last_native_scan?.newValue) {
-        const last = changes.fdn_last_native_scan.newValue as NativeIdScanBroadcast
-        if (last?.type === 'FDN_NATIVE_ID_SCAN') void applyNativeIdScanRef.current(last)
-        return
-      }
       if (
         changes[FDN_SCAN_IMAGE_FRONT_KEY]?.newValue ||
         changes[FDN_SCAN_IMAGE_BACK_KEY]?.newValue
       ) {
         void readScanImagesFromStorage().then((stored) => {
           if (!stored?.front?.trim()) return
-          if (lastScanReceivedAtRef.current) return
-          scanImagesRef.current = stored
-          setScanImages(stored)
+          if (idScanPassRef.current === 'complete' && lastScanReceivedAtRef.current) return
+
+          const front = stored.front.trim()
+          const back = stored.back?.trim() || null
+
+          if (!isCompleteTwoSidedScan(front, back)) {
+            if (idScanPassRef.current !== 'complete') {
+              scanImagesRef.current = { front, back: null }
+              setScanImages({ front, back: null })
+              setActiveTab('id')
+              idScanPassRef.current = 'front'
+            }
+            return
+          }
+
+          scanImagesRef.current = { front, back }
+          setScanImages({ front, back })
           setActiveTab('id')
         })
+      }
+
+      if (changes.fdn_last_native_scan?.newValue) {
+        const last = changes.fdn_last_native_scan.newValue as NativeIdScanBroadcast
+        if (last?.type === 'FDN_NATIVE_ID_SCAN') void applyNativeIdScanRef.current(last)
       }
     }
     chrome.storage.onChanged.addListener(onStorageChanged)

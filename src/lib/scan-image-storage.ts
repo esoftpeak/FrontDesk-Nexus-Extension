@@ -7,14 +7,33 @@ export type StoredScanImages = {
   back: string | null
 }
 
+/** True when both sides have image data (required before OCR auto-fill). */
+export function isCompleteTwoSidedScan(
+  front: string | null | undefined,
+  back: string | null | undefined,
+): boolean {
+  return Boolean(front?.trim() && back?.trim())
+}
+
 export async function writeScanImagesToStorage(
   front: string,
   back: string | null,
 ): Promise<void> {
-  await chrome.storage.local.set({
-    [FDN_SCAN_IMAGE_FRONT_KEY]: front,
-    [FDN_SCAN_IMAGE_BACK_KEY]: back,
-  })
+  const f = front.trim()
+  const b = back?.trim() || null
+  if (!f && !b) {
+    await clearScanImagesFromStorage()
+    return
+  }
+  if (b) {
+    await chrome.storage.local.set({
+      [FDN_SCAN_IMAGE_FRONT_KEY]: f,
+      [FDN_SCAN_IMAGE_BACK_KEY]: b,
+    })
+    return
+  }
+  await chrome.storage.local.set({ [FDN_SCAN_IMAGE_FRONT_KEY]: f })
+  await chrome.storage.local.remove(FDN_SCAN_IMAGE_BACK_KEY)
 }
 
 export async function readScanImagesFromStorage(): Promise<StoredScanImages | null> {

@@ -42,7 +42,10 @@ import {
   type ReservationLite,
 } from '../lib/id-scan-log'
 import { isCompletePhoneForLookup } from '../lib/phone-lookup'
-import { writeScanImagesToStorage } from '../lib/scan-image-storage'
+import {
+  isCompleteTwoSidedScan,
+  writeScanImagesToStorage,
+} from '../lib/scan-image-storage'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
 import { pingNativeHost } from '../lib/native-scan'
@@ -1635,7 +1638,7 @@ function broadcastScanFrontResult(imageFrontBase64: string): void {
     }
     const msg: ScanFrontBroadcast = {
       type: 'FDN_SCAN_FRONT_RESULT',
-      imageFrontBase64: '',
+      imageFrontBase64,
       imagesInStorage: true,
     }
     try {
@@ -1682,8 +1685,19 @@ async function broadcastNativeIdScan(payload: Omit<NativeIdScanBroadcast, 'type'
 
 async function handleThalesNativeScan(payload: NativeScanSuccessPayload) {
   const images = payload.images
-  const b64Front = images.front_image_base64
-  const b64Back = images.back_image_base64
+  const b64Front = images.front_image_base64?.trim() ?? ''
+  const b64Back = images.back_image_base64?.trim() ?? ''
+
+  if (b64Front && !b64Back) {
+    broadcastScanFrontResult(b64Front)
+    return
+  }
+
+  if (!isCompleteTwoSidedScan(b64Front, b64Back)) {
+    console.warn('[FDN ID scan] ignored — no front image in scan payload')
+    return
+  }
+
   const detail = payload.detail ?? null
   await broadcastNativeIdScan({
     parsed: payload.parsed,

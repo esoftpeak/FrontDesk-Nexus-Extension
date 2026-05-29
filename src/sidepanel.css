@@ -745,16 +745,16 @@ body {
   margin-left: auto;
   padding: 0;
   border-radius: 6px;
-  border: 1px solid #30363d;
-  background: #21262d;
-  color: #8b949e;
+  border: 1px solid #da3633;
+  background: #f85149;
+  color: #ffffff;
   cursor: pointer;
 }
 
 .fdn-dnr-btn:hover:not(:disabled) {
-  border-color: #f85149;
-  color: #ff7b72;
-  background: #2d1515;
+  border-color: #ff7b72;
+  color: #ffffff;
+  background: #ff6b63;
 }
 
 .fdn-dnr-btn:disabled {
@@ -763,8 +763,10 @@ body {
 }
 
 .fdn-dnr-btn--active {
-  border-color: #f85149;
-  color: #ff7b72;
+  border-color: #ff7b72;
+  color: #ffffff;
+  background: #da3633;
+  box-shadow: 0 0 0 1px #f8514966;
 }
 
 .fdn-dnr-btn__icon {

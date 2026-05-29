@@ -607,7 +607,16 @@ export function initNativeHost(
         const detail = idGuruDetailFromAutoScan(raw, document_data)
         logAutoScanPrimaryImageStats(raw)
         const cardImages = extractIdCardImages(raw)!
-        if (cardImages.front === cardImages.back) {
+        const frontB64 = cardImages.front.trim()
+        const backB64 = cardImages.back.trim()
+
+        if (frontB64 && !backB64) {
+          console.log(`${LOG} AUTO_SCAN_RESULT front pass only — preview (${frontB64.length} chars), waiting for back`)
+          if (onScanFront) onScanFront(frontB64)
+          return
+        }
+
+        if (cardImages.front === cardImages.back && frontB64 && backB64) {
           console.warn(
             `${LOG} AUTO_SCAN_RESULT: front and back payloads are the same string (${cardImages.front.length} chars). ` +
               'The native host must assign a different image to image_front_base64 / image_back_base64 (or nested images.* / document_data.*).',
