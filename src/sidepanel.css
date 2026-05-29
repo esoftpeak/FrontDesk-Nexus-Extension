@@ -515,7 +515,8 @@ body {
 
 .fdn-panel--id {
   gap: 4px;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .fdn-main:has(.fdn-panel--id) {

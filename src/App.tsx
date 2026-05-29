@@ -14,6 +14,8 @@ import {
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToDataUrl } from './lib/imageDataUrl'
+import { transformBase64ImageSync } from './lib/imageTransform'
+import './sidepanel.css'
 import { IdScanAlerts } from './components/IdScanAlerts'
 import { ageLabelFromDobString, mergeParsedWithGuru } from './lib/id-guru-fields'
 import { ageYearsFromDobString, isGuestUnderMinimumAge } from './lib/id-age'
@@ -154,8 +156,6 @@ function hasUnsavedGuestDraft(
   if (guestRemark.trim() || checkInRemark.trim()) return true
   return false
 }
-import { transformBase64ImageSync } from './lib/imageTransform'
-import './sidepanel.css'
 
 const emptyParsed: ParsedIdFields = {
   fullName: null,
@@ -277,6 +277,9 @@ function App() {
   const contactFieldsRef = useRef({ phone: '', email: '' })
   const [phoneTouched, setPhoneTouched] = useState(false)
   const lastLoadedConfRef = useRef<string | null>(null)
+  const lastScanReceivedAtRef = useRef<string | null>(null)
+  const scanImagesRef = useRef<{ front: string; back: string | null } | null>(null)
+  const lastAppliedNativeScanAtRef = useRef<string | null>(null)
   const idPanelRef = useRef<HTMLElement>(null)
   type WorkspaceTab = 'id' | 'history' | 'payment' | 'signature' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
@@ -371,6 +374,9 @@ function App() {
     setLastOcrProvider(null)
     setLastDocumentData(null)
     setLastScanReceivedAt(null)
+    lastScanReceivedAtRef.current = null
+    scanImagesRef.current = null
+    lastAppliedNativeScanAtRef.current = null
     setRotationDeg(0)
     setFlipH(false)
     setGuestRemark('')
@@ -540,6 +546,7 @@ function App() {
     async (
       idNumber: string | null | undefined,
       scanContact?: { phone?: string; email?: string },
+      opts?: { fromLiveScan?: boolean },
     ) => {
       const raw = idNumber?.trim()
       if (!raw) {
@@ -568,6 +575,11 @@ function App() {
 
         const currentPhone = scanContact?.phone?.trim() || contactFieldsRef.current.phone
         const currentEmail = scanContact?.email?.trim() || contactFieldsRef.current.email
+
+        if (opts?.fromLiveScan) {
+          applyContactFromRecord(record, { currentPhone, currentEmail })
+          return
+        }
 
         if (guestFormEmptyRef.current) {
           applyGuestProfile(record)
@@ -693,8 +705,19 @@ function App() {
 
   const applyNativeIdScan = useCallback(
     (m: NativeIdScanBroadcast) => {
+      const receivedAt = m.receivedAt ?? new Date().toISOString()
+      if (lastAppliedNativeScanAtRef.current === receivedAt) return
+      lastAppliedNativeScanAtRef.current = receivedAt
+
       guestDraftCanceledRef.current = false
       const detail = m.detail ?? emptyIdDetail
+      const nextImages = {
+        front: m.images.front_image_base64,
+        back: m.images.back_image_base64,
+      }
+      lastScanReceivedAtRef.current = receivedAt
+      scanImagesRef.current = nextImages
+      setActiveTab('id')
       setParsed({
         ...m.parsed,
         idType: normalizeIdDocumentType(m.parsed.idType),
@@ -707,12 +730,9 @@ function App() {
       })
       lastZipLookupRef.current = normalizeUsZipInput(detail.postalCode) || null
       setZipLookupNote(null)
-      setScanImages({
-        front: m.images.front_image_base64,
-        back: m.images.back_image_base64,
-      })
+      setScanImages(nextImages)
       setLastDocumentData(m.documentData ?? null)
-      setLastScanReceivedAt(m.receivedAt ?? new Date().toISOString())
+      setLastScanReceivedAt(receivedAt)
       setRotationDeg(0)
       setFlipH(false)
       if (m.detail?.phone?.trim()) {
@@ -723,15 +743,16 @@ function App() {
       if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
 
       if (m.parsed.idNumber?.trim()) {
-        void loadReturningGuestById(m.parsed.idNumber, {
-          phone: m.detail?.phone?.trim(),
-          email: m.detail?.email?.trim(),
-        })
+        void loadReturningGuestById(
+          m.parsed.idNumber,
+          {
+            phone: m.detail?.phone?.trim(),
+            email: m.detail?.email?.trim(),
+          },
+          { fromLiveScan: true },
+        )
       }
 
-      if (m.detail?.phone?.trim()) {
-        void runPhoneHistoryLookup(m.detail.phone.trim())
-      }
       void runIdScanAlertChecks(m.parsed.idNumber, m.parsed.dateOfBirth)
       if (!isGuestUnderMinimumAge(m.parsed.dateOfBirth, minimumCheckInAge)) {
         showChromeNotification(
@@ -773,7 +794,22 @@ function App() {
       }
       if (m.type === 'FDN_SCAN_FRONT_RESULT') {
         const d = msg as ScanFrontBroadcast
-        setScanImages({ front: d.imageFrontBase64, back: null })
+        const b64 = d.imageFrontBase64?.trim()
+        if (!b64) return
+
+        const prev = scanImagesRef.current
+        if (
+          lastScanReceivedAtRef.current &&
+          prev?.back?.trim() &&
+          prev.front === b64
+        ) {
+          return
+        }
+
+        lastScanReceivedAtRef.current = null
+        scanImagesRef.current = { front: b64, back: null }
+        setActiveTab('id')
+        setScanImages({ front: b64, back: null })
         setParsed(emptyParsed)
         setIdDetail(emptyIdDetail)
         setLastOcrProvider(null)
@@ -790,20 +826,30 @@ function App() {
       const last = r.fdn_last_native_scan as NativeIdScanBroadcast | undefined
       if (last?.type === 'FDN_NATIVE_ID_SCAN') applyNativeIdScan(last)
     })
+    const onStorageChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string,
+    ) => {
+      if (area !== 'local' || !changes.fdn_last_native_scan?.newValue) return
+      const last = changes.fdn_last_native_scan.newValue as NativeIdScanBroadcast
+      if (last?.type === 'FDN_NATIVE_ID_SCAN') applyNativeIdScan(last)
+    }
+    chrome.storage.onChanged.addListener(onStorageChanged)
     return () => {
       chrome.runtime.onMessage.removeListener(onRuntimeMessage)
+      chrome.storage.onChanged.removeListener(onStorageChanged)
     }
   }, [refresh, applyNativeIdScan])
 
   const scanPreviewUrls = useMemo(() => {
-    if (!scanImages) return null
+    if (!scanImages) return { front: null, back: null }
     try {
       return {
-        front: base64ToDataUrl(scanImages.front),
-        back: scanImages.back ? base64ToDataUrl(scanImages.back) : null,
+        front: scanImages.front?.trim() ? base64ToDataUrl(scanImages.front) : null,
+        back: scanImages.back?.trim() ? base64ToDataUrl(scanImages.back) : null,
       }
     } catch {
-      return null
+      return { front: null, back: null }
     }
   }, [scanImages])
 
@@ -1668,14 +1714,13 @@ function App() {
                 />
               ) : null}
 
-              {!manualEntry ? (
-                <div
-                  className="fdn-id-preview-dock fdn-id-preview-dock--top"
-                  aria-label="ID card scan preview"
-                >
+              <div
+                className="fdn-id-preview-dock fdn-id-preview-dock--top"
+                aria-label="ID card scan preview"
+              >
                   <div className="fdn-id-preview-dock__head">
                     <span className="fdn-id-preview-dock__title">ID card</span>
-                    {scanPreviewUrls ? (
+                    {!manualEntry && (scanPreviewUrls.front || scanPreviewUrls.back) ? (
                       <div className="fdn-id-preview__tools-inline" aria-label="Adjust image orientation">
                         <button
                           type="button"
@@ -1713,12 +1758,12 @@ function App() {
                       <div
                         className={[
                           'fdn-id-preview-slot__frame',
-                          scanPreviewUrls?.front ? 'fdn-id-preview-slot__frame--filled' : '',
+                          scanPreviewUrls.front ? 'fdn-id-preview-slot__frame--filled' : '',
                         ]
                           .filter(Boolean)
                           .join(' ')}
                       >
-                        {scanPreviewUrls?.front ? (
+                        {scanPreviewUrls.front ? (
                           <img
                             className="fdn-id-preview-slot__img"
                             src={scanPreviewUrls.front}
@@ -1728,7 +1773,9 @@ function App() {
                             }}
                           />
                         ) : (
-                          <span className="fdn-id-preview-slot__placeholder">Waiting for front scan…</span>
+                          <span className="fdn-id-preview-slot__placeholder">
+                            {manualEntry ? 'Manual entry — no scan' : 'Waiting for front scan…'}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -1737,12 +1784,12 @@ function App() {
                       <div
                         className={[
                           'fdn-id-preview-slot__frame',
-                          scanPreviewUrls?.back ? 'fdn-id-preview-slot__frame--filled' : '',
+                          scanPreviewUrls.back ? 'fdn-id-preview-slot__frame--filled' : '',
                         ]
                           .filter(Boolean)
                           .join(' ')}
                       >
-                        {scanPreviewUrls?.back ? (
+                        {scanPreviewUrls.back ? (
                           <img
                             className="fdn-id-preview-slot__img"
                             src={scanPreviewUrls.back}
@@ -1753,16 +1800,17 @@ function App() {
                           />
                         ) : (
                           <span className="fdn-id-preview-slot__placeholder">
-                            {scanPreviewUrls?.front
-                              ? 'Flip card — scan back…'
-                              : 'Waiting for back scan…'}
+                            {manualEntry
+                              ? 'Manual entry — no scan'
+                              : scanPreviewUrls.front
+                                ? 'Flip card — scan back…'
+                                : 'Waiting for back scan…'}
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
                 </div>
-              ) : null}
 
               <div className="fdn-id-form-body">
               <div className="fdn-grid fdn-grid--idguru fdn-grid--dense">
