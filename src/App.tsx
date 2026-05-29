@@ -13,14 +13,16 @@ import {
   type ScanFrontBroadcast,
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
-import { base64ToDataUrl } from './lib/imageDataUrl'
+import { base64ToBlobUrl, normalizeScanBase64, revokeBlobUrl } from './lib/imageDataUrl'
 import { transformBase64ImageSync } from './lib/imageTransform'
 import {
   clearScanImagesFromStorage,
   FDN_SCAN_IMAGE_BACK_KEY,
   FDN_SCAN_IMAGE_FRONT_KEY,
+  FDN_SCAN_PHASE_KEY,
   isCompleteTwoSidedScan,
   readScanImagesFromStorage,
+  readScanPhase,
   resolveScanImages,
 } from './lib/scan-image-storage'
 import './sidepanel.css'
@@ -288,8 +290,14 @@ function App() {
   const lastScanReceivedAtRef = useRef<string | null>(null)
   const scanImagesRef = useRef<{ front: string; back: string | null } | null>(null)
   const lastAppliedNativeScanAtRef = useRef<string | null>(null)
+  /** ISO time when the current front-only pass started — blocks stale complete-scan replay. */
+  const frontScanStartedAtRef = useRef<string | null>(null)
   /** `front` = first side captured; `complete` = both sides + OCR applied. */
   const idScanPassRef = useRef<'idle' | 'front' | 'complete'>('idle')
+  const scanPreviewBlobUrlsRef = useRef<{ front: string | null; back: string | null }>({
+    front: null,
+    back: null,
+  })
   const idPanelRef = useRef<HTMLElement>(null)
   type WorkspaceTab = 'id' | 'history' | 'payment' | 'signature' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
@@ -387,6 +395,7 @@ function App() {
     lastScanReceivedAtRef.current = null
     scanImagesRef.current = null
     lastAppliedNativeScanAtRef.current = null
+    frontScanStartedAtRef.current = null
     idScanPassRef.current = 'idle'
     setRotationDeg(0)
     setFlipH(false)
@@ -716,10 +725,18 @@ function App() {
   }, [cancelZipLookup])
 
   const applyScanFrontPreview = useCallback(async (frontB64: string) => {
-    const b64 = frontB64.trim()
+    const b64 = normalizeScanBase64(frontB64)
     if (!b64) return
 
     const prev = scanImagesRef.current
+    if (
+      idScanPassRef.current === 'front' &&
+      prev?.front === b64 &&
+      !prev?.back?.trim()
+    ) {
+      return
+    }
+
     if (
       idScanPassRef.current === 'complete' &&
       lastScanReceivedAtRef.current &&
@@ -729,6 +746,8 @@ function App() {
       return
     }
 
+    const startedAt = new Date().toISOString()
+    frontScanStartedAtRef.current = startedAt
     lastAppliedNativeScanAtRef.current = null
     lastScanReceivedAtRef.current = null
     idScanPassRef.current = 'front'
@@ -755,21 +774,34 @@ function App() {
       const receivedAt = m.receivedAt ?? new Date().toISOString()
       if (lastAppliedNativeScanAtRef.current === receivedAt) return
 
+      if (
+        frontScanStartedAtRef.current &&
+        receivedAt < frontScanStartedAtRef.current
+      ) {
+        return
+      }
+
       const resolvedImages = await resolveScanImages(m.images)
-      const front = resolvedImages?.front?.trim() ?? m.images.front_image_base64?.trim() ?? ''
-      const back = resolvedImages?.back?.trim() ?? m.images.back_image_base64?.trim() ?? null
+      const front = resolvedImages?.front ?? normalizeScanBase64(m.images.front_image_base64)
+      const back =
+        resolvedImages?.back ??
+        (normalizeScanBase64(m.images.back_image_base64) || null)
 
       if (!isCompleteTwoSidedScan(front, back)) {
-        if (front) {
-          await applyScanFrontPreview(front)
-        }
+        if (front) await applyScanFrontPreview(front)
         return
+      }
+
+      const phase = await readScanPhase()
+      if (phase === 'front' && idScanPassRef.current === 'front') {
+        frontScanStartedAtRef.current = null
       }
 
       lastAppliedNativeScanAtRef.current = receivedAt
       idScanPassRef.current = 'complete'
+      frontScanStartedAtRef.current = null
 
-      const nextImages = { front, back }
+      const nextImages = { front, back: back! }
       lastScanReceivedAtRef.current = receivedAt
       scanImagesRef.current = nextImages
       setActiveTab('id')
@@ -848,15 +880,20 @@ function App() {
     applyNativeIdScanRef.current = applyNativeIdScan
   }, [applyNativeIdScan])
 
+  const applyScanFrontPreviewRef = useRef(applyScanFrontPreview)
+  useEffect(() => {
+    applyScanFrontPreviewRef.current = applyScanFrontPreview
+  }, [applyScanFrontPreview])
+
   const applyScanFrontResult = useCallback(
     async (d: ScanFrontBroadcast) => {
-      let b64 = d.imageFrontBase64?.trim() ?? ''
+      let b64 = normalizeScanBase64(d.imageFrontBase64)
       if (!b64 && d.imagesInStorage) {
-        for (let attempt = 0; attempt < 6; attempt++) {
+        for (let attempt = 0; attempt < 8; attempt++) {
           const stored = await readScanImagesFromStorage()
-          b64 = stored?.front?.trim() ?? ''
+          b64 = stored?.front ?? ''
           if (b64) break
-          await new Promise((r) => window.setTimeout(r, 50 * (attempt + 1)))
+          await new Promise((r) => window.setTimeout(r, 40 * (attempt + 1)))
         }
       }
       if (!b64) {
@@ -896,40 +933,38 @@ function App() {
       }
     }
     chrome.runtime.onMessage.addListener(onRuntimeMessage)
-    void chrome.storage.local.get('fdn_last_native_scan').then(async (r) => {
-      const last = r.fdn_last_native_scan as NativeIdScanBroadcast | undefined
-      if (last?.type === 'FDN_NATIVE_ID_SCAN') await applyNativeIdScanRef.current(last)
-    })
     const onStorageChanged = (
       changes: Record<string, chrome.storage.StorageChange>,
       area: string,
     ) => {
       if (area !== 'local') return
-      if (
-        changes[FDN_SCAN_IMAGE_FRONT_KEY]?.newValue ||
-        changes[FDN_SCAN_IMAGE_BACK_KEY]?.newValue
-      ) {
-        void readScanImagesFromStorage().then((stored) => {
-          if (!stored?.front?.trim()) return
+
+      const imageChanged =
+        changes[FDN_SCAN_IMAGE_FRONT_KEY]?.newValue !== undefined ||
+        changes[FDN_SCAN_IMAGE_BACK_KEY]?.newValue !== undefined
+      const phaseChanged = changes[FDN_SCAN_PHASE_KEY]?.newValue === 'front'
+
+      if (imageChanged || phaseChanged) {
+        void readScanImagesFromStorage().then(async (stored) => {
+          if (!stored?.front) return
           if (idScanPassRef.current === 'complete' && lastScanReceivedAtRef.current) return
 
-          const front = stored.front.trim()
-          const back = stored.back?.trim() || null
+          const front = stored.front
+          const back = stored.back
 
           if (!isCompleteTwoSidedScan(front, back)) {
-            if (idScanPassRef.current !== 'complete') {
-              scanImagesRef.current = { front, back: null }
-              setScanImages({ front, back: null })
-              setActiveTab('id')
-              idScanPassRef.current = 'front'
-            }
+            await applyScanFrontPreviewRef.current(front)
             return
           }
 
-          scanImagesRef.current = { front, back }
-          setScanImages({ front, back })
-          setActiveTab('id')
+          if (changes.fdn_last_native_scan?.newValue) {
+            const last = changes.fdn_last_native_scan.newValue as NativeIdScanBroadcast
+            if (last?.type === 'FDN_NATIVE_ID_SCAN') {
+              void applyNativeIdScanRef.current(last)
+            }
+          }
         })
+        return
       }
 
       if (changes.fdn_last_native_scan?.newValue) {
@@ -942,19 +977,60 @@ function App() {
       chrome.runtime.onMessage.removeListener(onRuntimeMessage)
       chrome.storage.onChanged.removeListener(onStorageChanged)
     }
-  }, [applyScanFrontResult])
+  }, [applyScanFrontResult, refresh])
+
+  // Restore in-progress front preview when the side panel opens mid two-pass scan.
+  useEffect(() => {
+    void (async () => {
+      const [stored, phase, meta] = await Promise.all([
+        readScanImagesFromStorage(),
+        readScanPhase(),
+        chrome.storage.local.get('fdn_last_native_scan'),
+      ])
+      if (!stored?.front) return
+      if (scanImagesRef.current?.front) return
+
+      if (isCompleteTwoSidedScan(stored.front, stored.back)) {
+        const last = meta.fdn_last_native_scan as NativeIdScanBroadcast | undefined
+        if (last?.type === 'FDN_NATIVE_ID_SCAN') {
+          await applyNativeIdScanRef.current(last)
+        }
+        return
+      }
+
+      if (phase === 'front' || !stored.back) {
+        await applyScanFrontPreviewRef.current(stored.front)
+      }
+    })()
+  }, [])
 
   const scanPreviewUrls = useMemo(() => {
-    if (!scanImages) return { front: null, back: null }
+    revokeBlobUrl(scanPreviewBlobUrlsRef.current.front)
+    revokeBlobUrl(scanPreviewBlobUrlsRef.current.back)
+    if (!scanImages) {
+      scanPreviewBlobUrlsRef.current = { front: null, back: null }
+      return { front: null, back: null }
+    }
     try {
-      return {
-        front: scanImages.front?.trim() ? base64ToDataUrl(scanImages.front) : null,
-        back: scanImages.back?.trim() ? base64ToDataUrl(scanImages.back) : null,
+      const next = {
+        front: scanImages.front?.trim() ? base64ToBlobUrl(scanImages.front) : null,
+        back: scanImages.back?.trim() ? base64ToBlobUrl(scanImages.back) : null,
       }
+      scanPreviewBlobUrlsRef.current = next
+      return next
     } catch {
+      scanPreviewBlobUrlsRef.current = { front: null, back: null }
       return { front: null, back: null }
     }
   }, [scanImages])
+
+  useEffect(
+    () => () => {
+      revokeBlobUrl(scanPreviewBlobUrlsRef.current.front)
+      revokeBlobUrl(scanPreviewBlobUrlsRef.current.back)
+    },
+    [],
+  )
 
   async function onDevLogin(e: React.FormEvent) {
     e.preventDefault()

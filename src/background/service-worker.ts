@@ -45,6 +45,7 @@ import { isCompletePhoneForLookup } from '../lib/phone-lookup'
 import {
   isCompleteTwoSidedScan,
   writeScanImagesToStorage,
+  writeScanPhase,
 } from '../lib/scan-image-storage'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
@@ -1633,6 +1634,9 @@ function broadcastScanFrontResult(imageFrontBase64: string): void {
   void (async () => {
     try {
       await writeScanImagesToStorage(imageFrontBase64, null)
+      await writeScanPhase('front')
+      // Drop stale complete-scan metadata so the panel does not re-apply old OCR over the preview.
+      await chrome.storage.local.remove(['fdn_last_native_scan', 'lastScanResult'])
     } catch (e) {
       console.warn('[FDN ID scan] front image storage failed', e)
     }
@@ -1644,7 +1648,7 @@ function broadcastScanFrontResult(imageFrontBase64: string): void {
     try {
       await chrome.runtime.sendMessage(msg)
     } catch {
-      /* side panel may be closed */
+      /* side panel may be closed — reads storage on change */
     }
   })()
 }
@@ -1656,6 +1660,7 @@ async function broadcastNativeIdScan(payload: Omit<NativeIdScanBroadcast, 'type'
 
   try {
     await writeScanImagesToStorage(front, back ?? null)
+    await writeScanPhase('complete')
   } catch (e) {
     console.warn('[FDN ID scan] image storage failed', e)
   }
