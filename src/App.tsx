@@ -27,9 +27,17 @@ import {
 } from './lib/phone-lookup'
 import { formatHotelDateTime } from './lib/hotel-dates'
 import { GuestStaySummary } from './components/GuestStaySummary'
+import { CheckInHistoryPanel } from './components/CheckInHistoryPanel'
 import { LoadingScreen } from './components/LoadingScreen'
 import { PanelHeader } from './components/PanelHeader'
-import { IconArrowLeft, IconId, IconKey, IconPayment, IconSignature } from './components/WorkspaceIcons'
+import {
+  IconArrowLeft,
+  IconHistory,
+  IconId,
+  IconKey,
+  IconPayment,
+  IconSignature,
+} from './components/WorkspaceIcons'
 
 function formatCheckedAgo(ms: number | null | undefined): string {
   if (!ms || ms <= 0) return 'not checked'
@@ -237,7 +245,7 @@ function App() {
   const [phoneTouched, setPhoneTouched] = useState(false)
   const lastLoadedConfRef = useRef<string | null>(null)
   const idPanelRef = useRef<HTMLElement>(null)
-  type WorkspaceTab = 'id' | 'payment' | 'signature' | 'key'
+  type WorkspaceTab = 'id' | 'history' | 'payment' | 'signature' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
 
   const refreshIdScanHistory = useCallback(async () => {
@@ -1246,6 +1254,13 @@ function App() {
         Icon: IconId,
       },
       {
+        id: 'history',
+        label: 'History',
+        hint: 'Check-in history by date',
+        status: state.auth.signedIn ? 'idle' : 'warn',
+        Icon: IconHistory,
+      },
+      {
         id: 'payment',
         label: 'Payment',
         hint: 'Folio & balance',
@@ -1771,6 +1786,10 @@ function App() {
                 </button>
               </div>
             </section>
+          ) : null}
+
+          {activeTab === 'history' ? (
+            <CheckInHistoryPanel signedIn={state.auth.signedIn} />
           ) : null}
 
           {activeTab === 'payment' ? (

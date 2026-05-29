@@ -10,6 +10,7 @@ import type {
   NativeIdScanBroadcast,
   PanelToastBroadcast,
   GuestStayHistoryRecord,
+  IdScanLogEntry,
   PendingGuestDraft,
   ReturningGuestRecord,
   ScanFrontBroadcast,
@@ -30,6 +31,11 @@ import {
   filterRecordsByPhone,
   guestStayRecordFromScanRow,
 } from '../lib/guest-stay-history'
+import {
+  idScanLogEntryFromRow,
+  type ProfileLite,
+  type ReservationLite,
+} from '../lib/id-scan-log'
 import { isCompletePhoneForLookup } from '../lib/phone-lookup'
 import { createExtensionSupabase } from '../lib/supabase-factory'
 import { guessImageMimeFromBase64 } from '../lib/imageMime'
@@ -1575,6 +1581,65 @@ async function fetchIdScanHistoryForCurrentReservation(): Promise<ExtensionRespo
   return { ok: true, idScanHistory: rows }
 }
 
+async function fetchIdScansByDate(fromDate: string, toDate: string): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+
+  let q = client.from('id_scans').select('*').order('scanned_at', { ascending: false })
+  if (fromDate.trim()) q = q.gte('scanned_at', `${fromDate.trim()}T00:00:00`)
+  if (toDate.trim()) q = q.lte('scanned_at', `${toDate.trim()}T23:59:59.999`)
+
+  const { data, error } = await q
+  if (error) {
+    console.warn('[FDN] id_scans by date', error.message)
+    return { ok: false, error: error.message }
+  }
+
+  const scans = (data ?? []) as Record<string, unknown>[]
+  const confirmationNumbers = [...new Set(scans.map((s) => String(s.confirmation_number ?? '')))].filter(
+    Boolean,
+  )
+
+  const resByConf: Record<string, ReservationLite> = {}
+  if (confirmationNumbers.length > 0) {
+    const { data: resRows, error: resErr } = await client
+      .from('reservations')
+      .select('confirmation_number, room_number, guest_name, check_in_date, check_out_date')
+      .in('confirmation_number', confirmationNumbers)
+    if (resErr) console.warn('[FDN] reservations for id log', resErr.message)
+    for (const r of (resRows ?? []) as ReservationLite[]) {
+      resByConf[r.confirmation_number] = r
+    }
+  }
+
+  const userIds = [...new Set(scans.map((s) => s.scanned_by).filter(Boolean))] as string[]
+  const profById: Record<string, ProfileLite> = {}
+  if (userIds.length > 0) {
+    const { data: profRows, error: profErr } = await client
+      .from('profiles')
+      .select('id, email, full_name')
+      .in('id', userIds)
+    if (profErr) console.warn('[FDN] profiles for id log', profErr.message)
+    for (const p of (profRows ?? []) as ProfileLite[]) {
+      profById[p.id] = p
+    }
+  }
+
+  const idScanLog: IdScanLogEntry[] = []
+  for (const row of scans) {
+    const conf = String(row.confirmation_number ?? '')
+    const scannedBy =
+      typeof row.scanned_by === 'string' ? row.scanned_by : (row.scanned_by as string | null) ?? null
+    idScanLog.push(
+      await idScanLogEntryFromRow(row, resByConf[conf], scannedBy ? profById[scannedBy] : undefined),
+    )
+  }
+
+  return { ok: true, idScanLog }
+}
+
 async function fetchReturningGuestHistory(idNumber: string): Promise<ExtensionResponse> {
   const norm = idNumber.replace(/\s+/g, '').toUpperCase()
   if (!norm) return { ok: true, returningGuestHistory: [] }
@@ -1777,6 +1842,10 @@ async function handleMessage(
 
   if (msg.type === 'GET_ID_SCAN_HISTORY') {
     return fetchIdScanHistoryForCurrentReservation()
+  }
+
+  if (msg.type === 'GET_ID_SCANS_BY_DATE') {
+    return fetchIdScansByDate(msg.fromDate, msg.toDate)
   }
 
   if (msg.type === 'GET_KEY_HISTORY') {

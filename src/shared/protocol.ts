@@ -40,6 +40,42 @@ export type IdScanHistoryRow = {
   manualEntry: boolean
 }
 
+/** Check-in history log row (portal ID Data — by date). */
+export type IdScanLogEntry = {
+  id: string
+  confirmationNumber: string
+  scannedAt: string
+  manualEntry: boolean
+  ocrProvider: string | null
+  terminalId: string | null
+  scannedBy: string | null
+  agentLabel: string
+  displayName: string
+  roomNumber: string | null
+  reservationGuestName: string | null
+  checkInDate: string | null
+  checkOutDate: string | null
+  imageFrontPath: string | null
+  imageBackPath: string | null
+  phone: string | null
+  email: string | null
+  firstName: string | null
+  middleName: string | null
+  lastName: string | null
+  fullName: string | null
+  dateOfBirth: string | null
+  idNumber: string | null
+  idType: string | null
+  issueDate: string | null
+  expiryDate: string | null
+  streetAddress: string | null
+  city: string | null
+  state: string | null
+  postalCode: string | null
+  address: string | null
+  piiError: string | null
+}
+
 /** Prior guest profile from another stay (lookup by phone hash). */
 export type GuestStayHistoryRecord = {
   id: string
@@ -90,6 +126,8 @@ export type KeyHistoryRow = {
 export type ExtensionMessage =
   | { type: 'GET_STATE' }
   | { type: 'GET_ID_SCAN_HISTORY' }
+  /** ID Data by date range (portal “By date” tab). */
+  | { type: 'GET_ID_SCANS_BY_DATE'; fromDate: string; toDate: string }
   | { type: 'GET_KEY_HISTORY' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
   /** Manual scrape: eZee tab with Arrivals drawer open (same payload as auto). */
@@ -196,6 +234,7 @@ export type ExtensionResponse =
       ok: true
       state?: ExtensionState
       idScanHistory?: IdScanHistoryRow[]
+      idScanLog?: IdScanLogEntry[]
       keyHistory?: KeyHistoryRow[]
       signaturePath?: string
       returningGuestHistory?: ReturningGuestRecord[]
