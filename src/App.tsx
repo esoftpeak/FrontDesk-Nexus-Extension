@@ -299,6 +299,15 @@ function App() {
     back: null,
   })
   const idPanelRef = useRef<HTMLElement>(null)
+  /** Ref to the latest `persistGuestIdScan` — allows `applyScanFrontPreview` to save without
+   *  a forward reference, since `persistGuestIdScan` is defined later in the component. */
+  const persistGuestIdScanRef = useRef<
+    (opts: { clearAfter: boolean; silent: boolean; notification?: string | null }) => Promise<{ ok: boolean; error?: string }>
+  >(() => Promise.resolve({ ok: false }))
+  /** Seconds remaining in the idle auto-save countdown; null = not active. */
+  const [autoSaveCountdown, setAutoSaveCountdown] = useState<number | null>(null)
+  /** Timestamp of the last user interaction with the ID form, for idle detection. */
+  const lastFormInteractionRef = useRef<number>(Date.now())
   type WorkspaceTab = 'id' | 'history' | 'payment' | 'signature' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
 
@@ -746,12 +755,19 @@ function App() {
       return
     }
 
+    // A new scan is replacing a previous complete scan — save the old data first.
+    if (idScanPassRef.current === 'complete' && scanImagesRef.current?.front) {
+      await persistGuestIdScanRef.current({ clearAfter: false, silent: true, notification: null })
+    }
+
     const startedAt = new Date().toISOString()
     frontScanStartedAtRef.current = startedAt
     lastAppliedNativeScanAtRef.current = null
     lastScanReceivedAtRef.current = null
     idScanPassRef.current = 'front'
     scanImagesRef.current = { front: b64, back: null }
+    lastFormInteractionRef.current = Date.now()
+    setAutoSaveCountdown(null)
     setActiveTab('id')
     setScanImages({ front: b64, back: null })
     setRotationDeg(0)
@@ -792,6 +808,11 @@ function App() {
         return
       }
 
+      // A new complete scan is replacing a previous complete scan — save the old data first.
+      if (idScanPassRef.current === 'complete' && scanImagesRef.current?.front) {
+        await persistGuestIdScanRef.current({ clearAfter: false, silent: true, notification: null })
+      }
+
       const phase = await readScanPhase()
       if (phase === 'front' && idScanPassRef.current === 'front') {
         frontScanStartedAtRef.current = null
@@ -804,6 +825,8 @@ function App() {
       const nextImages = { front, back: back! }
       lastScanReceivedAtRef.current = receivedAt
       scanImagesRef.current = nextImages
+      lastFormInteractionRef.current = Date.now()
+      setAutoSaveCountdown(null)
       setActiveTab('id')
       setScanImages(nextImages)
       setRotationDeg(0)
@@ -1153,7 +1176,7 @@ function App() {
   }
 
   const persistGuestIdScan = useCallback(
-    async (opts: { clearAfter: boolean; silent: boolean }): Promise<{ ok: boolean; error?: string }> => {
+    async (opts: { clearAfter: boolean; silent: boolean; notification?: string | null }): Promise<{ ok: boolean; error?: string }> => {
       const requiredErr = validateRequiredGuestFields(idDetail, phone)
       if (requiredErr) return { ok: false, error: requiredErr }
 
@@ -1192,13 +1215,14 @@ function App() {
       guestDraftStartedAtRef.current = null
       void chrome.storage.local.remove([FDN_PENDING_GUEST_DRAFT_KEY])
 
-      if (!opts.silent) {
+      if (opts.notification === null) {
+        // suppressed — caller handles feedback (or doesn't want any)
+      } else if (opts.notification != null) {
+        showChromeNotification('FrontDesk Nexus', opts.notification)
+      } else if (!opts.silent) {
         showChromeNotification('FrontDesk Nexus', 'Guest ID saved — form cleared for next guest.')
       } else {
-        showChromeNotification(
-          'FrontDesk Nexus',
-          'Guest check-in saved automatically before sign-out.',
-        )
+        showChromeNotification('FrontDesk Nexus', 'Guest check-in saved automatically before sign-out.')
       }
       setManagerOverride(false)
       setShowManagerModal(false)
@@ -1226,6 +1250,10 @@ function App() {
       refreshIdScanHistory,
     ],
   )
+
+  useEffect(() => {
+    persistGuestIdScanRef.current = persistGuestIdScan
+  }, [persistGuestIdScan])
 
   const tryAutoSaveGuestDraftBeforeLogout = useCallback(
     async (requireMinAge: boolean): Promise<void> => {
@@ -1359,6 +1387,39 @@ function App() {
     checkInRemark,
   ])
 
+  // Idle auto-save: check every 30 s; start a 30-second countdown after 5 min of no interaction.
+  useEffect(() => {
+    const IDLE_MS = 5 * 60 * 1000
+    const handle = window.setInterval(() => {
+      if (idScanPassRef.current !== 'complete') return
+      if (!scanImagesRef.current?.front) return
+      if (Date.now() - lastFormInteractionRef.current < IDLE_MS) return
+      setAutoSaveCountdown((prev) => prev ?? 30)
+    }, 30_000)
+    return () => window.clearInterval(handle)
+  }, [])
+
+  // Countdown tick: save when it reaches 0.
+  useEffect(() => {
+    if (autoSaveCountdown === null) return
+    if (autoSaveCountdown <= 0) {
+      void persistGuestIdScanRef.current({
+        clearAfter: false,
+        silent: false,
+        notification: 'Scan data auto-saved after idle.',
+      }).then(() => {
+        setAutoSaveCountdown(null)
+        lastFormInteractionRef.current = Date.now()
+      })
+      return
+    }
+    const t = window.setTimeout(
+      () => setAutoSaveCountdown((n) => (n !== null ? n - 1 : null)),
+      1000,
+    )
+    return () => window.clearTimeout(t)
+  }, [autoSaveCountdown])
+
   async function onSaveAndClear() {
     const requiredErr = validateRequiredGuestFields(idDetail, phone)
     if (requiredErr) {
@@ -1383,6 +1444,11 @@ function App() {
     } finally {
       setBusy(false)
     }
+  }
+
+  function onIdFormInteraction() {
+    lastFormInteractionRef.current = Date.now()
+    if (autoSaveCountdown !== null) setAutoSaveCountdown(null)
   }
 
   function onCancelGuest() {
@@ -1799,12 +1865,29 @@ function App() {
 
         <main className="fdn-main">
           {activeTab === 'id' ? (
-            <section ref={idPanelRef} className="fdn-panel fdn-panel--id">
+            <section
+              ref={idPanelRef}
+              className="fdn-panel fdn-panel--id"
+              onPointerDown={onIdFormInteraction}
+              onInput={onIdFormInteraction}
+            >
               {formError ? (
                 <p className="fdn-form-error" role="alert">
                   {formError}
                 </p>
               ) : null}
+              {autoSaveCountdown !== null && (
+                <div className="fdn-autosave-banner" role="status">
+                  <span>Auto-saving in {autoSaveCountdown}s…</span>
+                  <button
+                    type="button"
+                    className="fdn-autosave-banner__cancel"
+                    onClick={onIdFormInteraction}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
               <div className="fdn-panel__toolbar">
                 <label className="fdn-check fdn-check--compact">
                   <input

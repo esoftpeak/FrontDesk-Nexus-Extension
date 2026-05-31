@@ -1228,6 +1228,35 @@ body {
   color: #79c0ff;
 }
 
+.fdn-autosave-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  margin-bottom: 6px;
+  background: #1a2e1a;
+  border: 1px solid #3fb950;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #3fb950;
+}
+
+.fdn-autosave-banner__cancel {
+  background: none;
+  border: 1px solid #3fb95088;
+  border-radius: 4px;
+  color: #3fb950;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 8px;
+  line-height: 1.4;
+}
+
+.fdn-autosave-banner__cancel:hover {
+  background: #3fb95022;
+  border-color: #3fb950;
+}
+
 .fdn-modal-backdrop {
   position: fixed;
   inset: 0;

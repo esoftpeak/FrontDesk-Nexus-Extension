@@ -2649,15 +2649,37 @@ function ensureSidePanelOpensOnActionClick() {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 }
 
+// Chrome kills service workers after ~30 s of inactivity, which stops Supabase's
+// autoRefreshToken timer. A persistent alarm wakes the SW every 45 min so the JWT
+// is refreshed before the 1-hour access-token expiry.
+const SESSION_KEEPALIVE_ALARM = 'fdn-session-keepalive'
+
+function ensureSessionKeepalive(): void {
+  void chrome.alarms.get(SESSION_KEEPALIVE_ALARM).then((alarm) => {
+    if (!alarm) {
+      void chrome.alarms.create(SESSION_KEEPALIVE_ALARM, { periodInMinutes: 45 })
+    }
+  })
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === SESSION_KEEPALIVE_ALARM) {
+    void getClient().auth.getSession()
+  }
+})
+
 chrome.runtime.onInstalled.addListener(() => {
   ensureSidePanelOpensOnActionClick()
+  ensureSessionKeepalive()
 })
 
 chrome.runtime.onStartup.addListener(() => {
   ensureSidePanelOpensOnActionClick()
+  ensureSessionKeepalive()
 })
 
 ensureSidePanelOpensOnActionClick()
+ensureSessionKeepalive()
 
 void (async () => {
   const v = await checkMinExtensionVersion()
