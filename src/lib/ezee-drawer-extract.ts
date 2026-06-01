@@ -670,6 +670,7 @@ export function ezeeScrapeToSnapshot(
     reservationTotal: fields.total,
     amountPaid: fields.paid,
     dueAmount: fields.balance,
+    pmsStatus: fields.status ?? null,
     restricted: false,
     loadedAt,
     pageUrl,

@@ -224,6 +224,8 @@ export type ExtensionMessage =
        * Admin-only: log `encoded_by_username` as **Admin** (PMS-style) and require `cachedRole === 'admin'`.
        */
       portalAdminEncode?: boolean
+      /** Manager override PIN to bypass check-in / balance gates. */
+      managerPin?: string
     }
   | { type: 'RFID_READ_CARD' }
   /**
@@ -256,7 +258,7 @@ export type ExtensionResponse =
       /** Present after `CHECK_DNR` or `ADD_DNR`. */
       dnrActive?: boolean
     }
-  | { ok: false; error: string }
+  | { ok: false; error: string; keyBlock?: 'not_checked_in' | 'balance_over_threshold' }
 
 /** Service worker → side panel: log native inbound (opens in side panel DevTools). */
 export type NativeHostRxDebugBroadcast = {
@@ -322,6 +324,10 @@ export type ExtensionState = {
   dnrHit: boolean
   /** From `app_settings` key `hotel`; 0 = no underage warning. */
   minimumCheckInAge: number
+  /** Maximum allowed balance before key encoding is blocked; -1 = disabled. */
+  maxAllowedBalance: number
+  /** True when a manager override PIN is configured in hotel settings. */
+  hasManagerPin: boolean
   lastError: string | null
 }
 

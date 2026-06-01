@@ -19,6 +19,8 @@ export type ReservationSnapshot = {
   amountPaid: string | null
   /** Remaining balance / due (eZee drawer "Balance"). */
   dueAmount: string | null
+  /** PMS reservation status as reported by PMS (e.g. "In House", "Confirmed Reservation"). Null when unknown. */
+  pmsStatus: string | null
   restricted: boolean
   loadedAt: string
   pageUrl: string

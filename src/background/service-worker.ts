@@ -145,8 +145,51 @@ function keyHistoryTimeForDb(rawSdk: unknown, fallbackMsg: string, defaultHour: 
 
 type RfidMakeKeyMessage = Extract<ExtensionMessage, { type: 'RFID_MAKE_KEY' }>
 
+/** True when eZee status badge indicates the guest is currently in-house. */
+function isEzeeCheckedIn(pmsStatus: string | null): boolean {
+  if (!pmsStatus) return true // unknown status → do not block
+  return /^in\s*house$/i.test(pmsStatus.trim())
+}
+
 async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionResponse | Record<string, unknown>> {
   const client = getClient()
+
+  // ── Key-making gates (check-in status + balance) ──────────────────────────
+  const settings = await loadExtensionHotelSettings(client)
+
+  const isOverride =
+    typeof msg.managerPin === 'string' &&
+    msg.managerPin.length > 0 &&
+    settings.managerOverridePin.length > 0 &&
+    msg.managerPin === settings.managerOverridePin
+
+  if (!isOverride) {
+    // Check-in gate — eZee only (SynXis status not yet captured)
+    if (reservation?.pms === 'ezee' && reservation.pmsStatus !== null) {
+      if (!isEzeeCheckedIn(reservation.pmsStatus)) {
+        return {
+          ok: false,
+          error: 'Guest is not checked in. Please check in the guest before encoding a key.',
+          keyBlock: 'not_checked_in' as const,
+        }
+      }
+    }
+
+    // Balance gate — applies to any PMS where dueAmount is known
+    if (settings.maxAllowedBalance >= 0) {
+      const balance = parseMoneyToNumber(reservation?.dueAmount ?? null)
+      if (balance !== null && balance > settings.maxAllowedBalance) {
+        const fmt = (n: number) => n.toFixed(2)
+        return {
+          ok: false,
+          error: `Balance of $${fmt(balance)} exceeds the $${fmt(settings.maxAllowedBalance)} limit. Please process a payment before encoding a key.`,
+          keyBlock: 'balance_over_threshold' as const,
+        }
+      }
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   try {
     const raw = await sendNativeRequest({
       type: 'RFID_MAKE_KEY',
@@ -194,7 +237,9 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
 
       const auditDescription = adminPortal
         ? `Portal admin room key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`
-        : `Room key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`
+        : isOverride
+          ? `Manager override: key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`
+          : `Room key encoded — room ${msg.roomNumber}, serial ${msg.cardSerial ?? 1}`
 
       await client
         .from('audit_log')
@@ -203,7 +248,7 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
           username: user.email,
           user_role: cachedRole,
           terminal_id: terminalId,
-          action_type: 'KEY_ENCODED',
+          action_type: isOverride ? 'MANAGER_OVERRIDE_KEY' : 'KEY_ENCODED',
           confirmation_number: conf,
           description: auditDescription,
           new_value: {
@@ -211,6 +256,7 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
             card_serial: msg.cardSerial ?? 1,
             return_msg: raw.return_msg,
             portal_admin: adminPortal,
+            manager_override: isOverride,
           },
         })
         .then(({ error }) => {
@@ -814,7 +860,7 @@ async function loadExtensionHotelSettings(
     if (!extensionHotelSettingsWarned) {
       extensionHotelSettingsWarned = true
       console.warn(
-        '[FDN SW] hotel settings unavailable — using defaults (minimumCheckInAge=18).',
+        '[FDN SW] hotel settings unavailable — using defaults (minimumCheckInAge=18, maxAllowedBalance=-1).',
         error.message,
       )
     }
@@ -872,6 +918,8 @@ async function getState(): Promise<ExtensionState> {
     terminalId: typeof terminalId === 'string' ? terminalId : null,
     dnrHit,
     minimumCheckInAge: hotelSettings.minimumCheckInAge,
+    maxAllowedBalance: hotelSettings.maxAllowedBalance,
+    hasManagerPin: hotelSettings.managerOverridePin.length > 0,
     lastError,
   }
 }

@@ -128,7 +128,8 @@ async function runDetection(): Promise<void> {
 
   const conf = fields.reservationNumber!.trim()
   const roomHint = (fields.roomNumber ?? '').trim()
-  const dedupeKey = `${conf}|${roomHint}`
+  const statusHint = (fields.status ?? '').trim()
+  const dedupeKey = `${conf}|${roomHint}|${statusHint}`
   const now = Date.now()
   if (dedupeKey === lastDedupeKey && now - lastSentAt < LOCAL_DEDUPE_MS) {
     if (now - lastDedupeLogAt > DEDUPE_LOG_THROTTLE_MS) {

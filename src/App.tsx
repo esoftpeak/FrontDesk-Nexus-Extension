@@ -262,6 +262,10 @@ function App() {
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyNotice, setKeyNotice] = useState<string | null>(null)
   const [keyCardSerial, setKeyCardSerial] = useState<number>(1)
+  const [keyBlock, setKeyBlock] = useState<'not_checked_in' | 'balance_over_threshold' | null>(null)
+  const [showOverridePin, setShowOverridePin] = useState(false)
+  const [overridePinInput, setOverridePinInput] = useState('')
+  const [overridePinError, setOverridePinError] = useState<string | null>(null)
   const [readCardBusy, setReadCardBusy] = useState(false)
   const [cancelCardBusy, setCancelCardBusy] = useState(false)
   const [rfidCheckBusy, setRfidCheckBusy] = useState(false)
@@ -1843,7 +1847,7 @@ function App() {
   }
 
   /** Encode one key (portal: IN time = encode moment; checkout from stay). */
-  async function runEncodeKey(serial: number): Promise<boolean> {
+  async function runEncodeKey(serial: number, managerPin?: string): Promise<boolean> {
     if (!res?.roomNumber || !res?.checkOutDate) {
       setKeyNotice('Load a reservation with room and check-out before encoding.')
       return false
@@ -1862,16 +1866,32 @@ function App() {
         checkinTime: res.checkInDate ?? new Date().toISOString(),
         checkoutTime: res.checkOutDate,
         cardSerial: serial,
-      })) as { ok: boolean; error?: string; dbWarning?: string; state?: ExtensionState } | undefined
+        managerPin: managerPin ?? undefined,
+      })) as { ok: boolean; error?: string; dbWarning?: string; keyBlock?: 'not_checked_in' | 'balance_over_threshold'; state?: ExtensionState } | undefined
 
       if (!result) {
         setKeyNotice('No response from native host — reload the extension and try again.')
         return false
       }
       if (!result.ok) {
-        setKeyNotice(result.error ?? 'Key encoding failed')
+        if (result.keyBlock) {
+          setKeyBlock(result.keyBlock)
+          setKeyNotice(result.error ?? 'Key encoding blocked.')
+        } else {
+          setKeyBlock(null)
+          setShowOverridePin(false)
+          setOverridePinInput('')
+          setOverridePinError(null)
+          setKeyNotice(result.error ?? 'Key encoding failed')
+        }
         return false
       }
+
+      // Success — clear any block state
+      setKeyBlock(null)
+      setShowOverridePin(false)
+      setOverridePinInput('')
+      setOverridePinError(null)
 
       const base = `Key ${serial} encoded — room ${res.roomNumber}.`
       if (result.dbWarning) {
@@ -1897,6 +1917,10 @@ function App() {
   }
 
   async function onMakeKey() {
+    setKeyBlock(null)
+    setShowOverridePin(false)
+    setOverridePinInput('')
+    setOverridePinError(null)
     await runEncodeKey(keyCardSerial)
   }
 
@@ -1905,7 +1929,21 @@ function App() {
       setKeyNotice('Encode the first key with Encode Key, then use Next key for each additional card.')
       return
     }
+    setKeyBlock(null)
+    setShowOverridePin(false)
+    setOverridePinInput('')
+    setOverridePinError(null)
     await runEncodeKey(keyCardSerial)
+  }
+
+  async function onManagerOverrideKey() {
+    const pin = overridePinInput.trim()
+    if (!pin) return
+    setOverridePinError(null)
+    const success = await runEncodeKey(keyCardSerial, pin)
+    if (!success && keyBlock) {
+      setOverridePinError('Incorrect PIN or override not available.')
+    }
   }
 
   async function onReadCard() {
@@ -2861,11 +2899,66 @@ function App() {
                     </button>
                   </div>
 
-                  {keyNotice && (
+                  {keyBlock ? (
+                    <div className="fdn-banner fdn-banner--danger" style={{ marginTop: 8 }}>
+                      <p style={{ margin: 0 }}>{keyNotice}</p>
+                      {state.hasManagerPin && !showOverridePin && (
+                        <button
+                          type="button"
+                          className="fdn-btn fdn-btn--secondary"
+                          style={{ marginTop: 6, fontSize: 12, padding: '3px 10px' }}
+                          onClick={() => { setShowOverridePin(true); setOverridePinError(null) }}
+                        >
+                          Manager Override
+                        </button>
+                      )}
+                      {!state.hasManagerPin && (
+                        <p style={{ marginTop: 4, fontSize: 11, color: '#f87171' }}>
+                          No manager PIN configured — contact admin to enable override.
+                        </p>
+                      )}
+                      {showOverridePin && (
+                        <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                          <input
+                            type="password"
+                            placeholder="Manager PIN"
+                            className="fdn-input"
+                            style={{ fontSize: 12, width: 120 }}
+                            value={overridePinInput}
+                            autoFocus
+                            onChange={(e) => setOverridePinInput(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') void onManagerOverrideKey() }}
+                          />
+                          <button
+                            type="button"
+                            className="fdn-btn fdn-btn--primary"
+                            style={{ fontSize: 12, padding: '3px 10px' }}
+                            disabled={!overridePinInput.trim() || keyBusy}
+                            onClick={() => void onManagerOverrideKey()}
+                          >
+                            {keyBusy ? 'Encoding…' : 'Override'}
+                          </button>
+                          <button
+                            type="button"
+                            className="fdn-btn fdn-btn--secondary"
+                            style={{ fontSize: 12, padding: '3px 10px' }}
+                            onClick={() => { setShowOverridePin(false); setOverridePinInput(''); setOverridePinError(null) }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                      {overridePinError && (
+                        <p style={{ marginTop: 4, fontSize: 11, color: '#f87171', margin: '4px 0 0' }}>
+                          {overridePinError}
+                        </p>
+                      )}
+                    </div>
+                  ) : keyNotice ? (
                     <div className={`fdn-banner ${keyNotice.startsWith('Key encoded') || keyNotice.startsWith('Lost key card ready') ? 'fdn-banner--info' : 'fdn-banner--danger'}`} style={{ marginTop: 8 }}>
                       {keyNotice}
                     </div>
-                  )}
+                  ) : null}
                 </>
               )}
 
