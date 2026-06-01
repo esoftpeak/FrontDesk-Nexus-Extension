@@ -624,17 +624,13 @@ async function completeSynxisReservationFromConfirmation(
   synxisGuestDisplay = apiRes.guestDisplay
   ezeeGuestDisplay = null
 
-  // Patch balance + in-house status from accounting-summary (fail open on error)
+  // Patch balance from accounting-summary (fail open on error)
+  // Note: stay.inHouse from this API is unreliable — SynXis check-in uses date logic instead
   const accounting = await fetchSynxisAccountingSummary(confirmation)
-  if (accounting) {
+  if (accounting && accounting.estimatedRemaining !== null) {
     reservation = {
       ...reservation,
-      dueAmount: accounting.estimatedRemaining !== null
-        ? String(accounting.estimatedRemaining)
-        : reservation.dueAmount,
-      pmsStatus: accounting.inHouse !== null
-        ? (accounting.inHouse ? 'In House' : 'Reserved')
-        : reservation.pmsStatus,
+      dueAmount: String(accounting.estimatedRemaining),
     }
   }
 
