@@ -145,8 +145,8 @@ function keyHistoryTimeForDb(rawSdk: unknown, fallbackMsg: string, defaultHour: 
 
 type RfidMakeKeyMessage = Extract<ExtensionMessage, { type: 'RFID_MAKE_KEY' }>
 
-/** True when eZee status badge indicates the guest is currently in-house. */
-function isEzeeCheckedIn(pmsStatus: string | null): boolean {
+/** True when PMS status indicates the guest is currently in-house (eZee or SynXis). */
+function isPmsCheckedIn(pmsStatus: string | null): boolean {
   if (!pmsStatus) return true // unknown status → do not block
   const s = pmsStatus.trim().toLowerCase().replace(/\s+/g, ' ')
   return (
@@ -172,9 +172,9 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
     msg.managerPin === settings.managerOverridePin
 
   if (!isOverride) {
-    // Check-in gate — eZee only (SynXis status not yet captured)
-    if (reservation?.pms === 'ezee' && reservation.pmsStatus !== null) {
-      if (!isEzeeCheckedIn(reservation.pmsStatus)) {
+    // Check-in gate — applies to any PMS where pmsStatus is known
+    if (reservation?.pmsStatus !== null && reservation?.pmsStatus !== undefined) {
+      if (!isPmsCheckedIn(reservation.pmsStatus)) {
         return {
           ok: false,
           error: 'Guest is not checked in. Please check in the guest before encoding a key.',
@@ -314,6 +314,9 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
 
 const SYNXIS_RESERVATION_SUMMARY_URL =
   'https://sph.synxis.com/pms-web-ui/service/v2/guest-mgt/guest-stay-record/reservation-summary'
+
+const SYNXIS_ACCOUNTING_SUMMARY_URL =
+  'https://sph.synxis.com/pms-web-ui/service/v2/guest-mgt/guest-stay-record/accounting-summary'
 
 function buildSynxisReservationSummaryBody(confirmationNumber: string): {
   payload: {
@@ -527,6 +530,78 @@ async function fetchSynxisReservationSummaryByApi(
   return { ok: true, payload: parsed.snapshot, guestDisplay: parsed.display }
 }
 
+/**
+ * Fetches balance and in-house status from the SynXis accounting-summary endpoint.
+ * Returns null on any failure so callers fail open (never block a key due to API error).
+ */
+async function fetchSynxisAccountingSummary(
+  confirmationNumber: string,
+): Promise<{ estimatedRemaining: number | null; inHouse: boolean | null } | null> {
+  const c = confirmationNumber.trim().toUpperCase()
+  const property = c.length >= 5 ? c.slice(0, 5) : c
+  const body = JSON.stringify({
+    payload: {
+      property,
+      account: c,
+      guestId: SYNXIS_DEFAULT_GUEST_ID,
+      confirmationNumber: c,
+    },
+  })
+
+  try {
+    const res = await fetch(SYNXIS_ACCOUNTING_SUMMARY_URL, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json, text/plain, */*',
+        'Content-Type': 'application/json',
+      },
+      body,
+    })
+
+    if (!res.ok) {
+      console.warn('[FDN SW] SynXis accounting-summary HTTP error', res.status)
+      return null
+    }
+
+    const raw = await res.text()
+    if (raw.includes('Please enter your user name and password')) {
+      console.warn('[FDN SW] SynXis accounting-summary returned login HTML — session expired')
+      return null
+    }
+
+    let json: unknown
+    try {
+      json = JSON.parse(raw)
+    } catch {
+      console.warn('[FDN SW] SynXis accounting-summary non-JSON response')
+      return null
+    }
+
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return null
+    const root = json as Record<string, unknown>
+    const summary = root.accountSummary
+    if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null
+    const acct = summary as Record<string, unknown>
+
+    const estimatedRemaining =
+      typeof acct.estimatedRemaining === 'number' ? acct.estimatedRemaining : null
+
+    let inHouse: boolean | null = null
+    const stay = acct.stay
+    if (stay && typeof stay === 'object' && !Array.isArray(stay)) {
+      const s = stay as Record<string, unknown>
+      if (typeof s.inHouse === 'boolean') inHouse = s.inHouse
+    }
+
+    console.info('[FDN SW] SynXis accounting-summary', { estimatedRemaining, inHouse })
+    return { estimatedRemaining, inHouse }
+  } catch (e) {
+    console.warn('[FDN SW] SynXis accounting-summary fetch failed', e)
+    return null
+  }
+}
+
 async function completeSynxisReservationFromConfirmation(
   tabId: number,
   tabUrl: string,
@@ -548,6 +623,21 @@ async function completeSynxisReservationFromConfirmation(
   reservation = apiRes.payload
   synxisGuestDisplay = apiRes.guestDisplay
   ezeeGuestDisplay = null
+
+  // Patch balance + in-house status from accounting-summary (fail open on error)
+  const accounting = await fetchSynxisAccountingSummary(confirmation)
+  if (accounting) {
+    reservation = {
+      ...reservation,
+      dueAmount: accounting.estimatedRemaining !== null
+        ? String(accounting.estimatedRemaining)
+        : reservation.dueAmount,
+      pmsStatus: accounting.inHouse !== null
+        ? (accounting.inHouse ? 'In House' : 'Reserved')
+        : reservation.pmsStatus,
+    }
+  }
+
   void chrome.storage.local.set({ fdn_active_reservation: reservation })
   void chrome.storage.local.remove('fdn_ezee_guest_display')
   const { data: sess } = await client.auth.getSession()
