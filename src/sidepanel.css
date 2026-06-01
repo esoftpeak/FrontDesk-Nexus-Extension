@@ -675,15 +675,8 @@ body {
   padding: 5px 8px;
 }
 
-.fdn-panel--id .fdn-panel__footer .fdn-btn--primary,
-.fdn-panel--id .fdn-panel__footer .fdn-btn--secondary {
-  flex: 1 1 0;
-  min-width: 0;
-}
-
 .fdn-panel__footer-cancel {
   margin-left: auto;
-  flex: 0 0 auto;
 }
 
 .fdn-key-tab__stay-toolbar {

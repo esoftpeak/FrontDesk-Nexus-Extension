@@ -38,6 +38,7 @@ import {
   guestProfileToFormState,
   idScanLogEntryToFormState,
 } from './lib/apply-guest-profile'
+import { buildGuestSaveSnapshot } from './lib/guest-save-snapshot'
 import {
   mergeHistoryRecordWithLatestContact,
   priorGuestStaysForConfirmation,
@@ -317,6 +318,10 @@ function App() {
     (opts: { clearAfter: boolean; silent: boolean; notification?: string | null }) => Promise<{ ok: boolean; error?: string }>
   >(() => Promise.resolve({ ok: false }))
   const canIdleSaveClearRef = useRef<() => boolean>(() => false)
+  /** Fingerprint of last successful SAVE_ID_SCAN — skips duplicate saves. */
+  const lastSavedSnapshotRef = useRef<string | null>(null)
+  /** `id_scans.id` when form was loaded from History — save updates this row instead of inserting. */
+  const editingScanIdRef = useRef<string | null>(null)
   /** Seconds remaining in the idle auto-save countdown; null = not active. */
   const [autoSaveCountdown, setAutoSaveCountdown] = useState<number | null>(null)
   /** Timestamp of the last user interaction with the ID form, for idle detection. */
@@ -442,6 +447,8 @@ function App() {
     lastPhoneLookupRef.current = null
     window.clearTimeout(phoneHistoryTimerRef.current)
     guestDraftStartedAtRef.current = null
+    lastSavedSnapshotRef.current = null
+    editingScanIdRef.current = null
     void chrome.storage.local.remove([
       'fdn_last_native_scan',
       'lastScanResult',
@@ -666,6 +673,7 @@ function App() {
 
         guestDraftCanceledRef.current = false
         guestDraftStartedAtRef.current = Date.now()
+        editingScanIdRef.current = entry.id
         setAutoSaveCountdown(null)
         lastFormInteractionRef.current = Date.now()
 
@@ -713,6 +721,27 @@ function App() {
         setLastScanReceivedAt(receivedAt)
         lastScanReceivedAtRef.current = receivedAt
 
+        const detailForSnapshot: IdScanDetailGuru = {
+          ...next.idDetail,
+          postalCode: normalizeUsZipInput(next.idDetail.postalCode) || null,
+          phone: next.phone || next.idDetail.phone,
+          email: next.emailGuest || next.idDetail.email,
+        }
+        const mergedForSnapshot = mergeParsedWithGuru(next.parsed, detailForSnapshot)
+        lastSavedSnapshotRef.current = buildGuestSaveSnapshot({
+          parsed: mergedForSnapshot,
+          phone: next.phone,
+          email: next.emailGuest,
+          manualEntry: entry.manualEntry,
+          managerOverride: false,
+          detail: detailForSnapshot,
+          guestRemark: '',
+          checkInRemark: '',
+          imageFront: frontB64,
+          imageBack: backB64,
+          documentData: null,
+        })
+
         void clearScanImagesFromStorage()
         void chrome.storage.local.remove([
           'fdn_last_native_scan',
@@ -738,7 +767,7 @@ function App() {
         const label = entry.displayName?.trim() || 'Guest'
         showChromeNotification(
           'FrontDesk Nexus',
-          `${label} loaded from history — edit, use To PMS, then Save or Save & Clear.`,
+          `${label} loaded from history — edit if needed, then Save updates this check-in (no duplicate).`,
         )
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Could not load history into scanner'
@@ -901,6 +930,8 @@ function App() {
     idScanPassRef.current = 'front'
     scanImagesRef.current = { front: b64, back: null }
     lastFormInteractionRef.current = Date.now()
+    lastSavedSnapshotRef.current = null
+    editingScanIdRef.current = null
     setAutoSaveCountdown(null)
     setActiveTab('id')
     setScanImages({ front: b64, back: null })
@@ -960,6 +991,8 @@ function App() {
       lastScanReceivedAtRef.current = receivedAt
       scanImagesRef.current = nextImages
       lastFormInteractionRef.current = Date.now()
+      lastSavedSnapshotRef.current = null
+      editingScanIdRef.current = null
       setAutoSaveCountdown(null)
       setActiveTab('id')
       setScanImages(nextImages)
@@ -1310,7 +1343,11 @@ function App() {
   }
 
   const persistGuestIdScan = useCallback(
-    async (opts: { clearAfter: boolean; silent: boolean; notification?: string | null }): Promise<{ ok: boolean; error?: string }> => {
+    async (opts: {
+      clearAfter: boolean
+      silent: boolean
+      notification?: string | null
+    }): Promise<{ ok: boolean; error?: string; skipped?: boolean }> => {
       const requiredErr = validateRequiredGuestFields(idDetail, phone)
       if (requiredErr) return { ok: false, error: requiredErr }
 
@@ -1327,6 +1364,42 @@ function App() {
         return { ok: false, error: images.error }
       }
 
+      const snapshot = buildGuestSaveSnapshot({
+        parsed: mergedParsed,
+        phone: phone.trim(),
+        email: emailGuest.trim(),
+        manualEntry,
+        managerOverride,
+        detail: detailForSave,
+        guestRemark: guestRemark.trim(),
+        checkInRemark: checkInRemark.trim(),
+        imageFront: images.front,
+        imageBack: images.back,
+        documentData: manualEntry ? null : lastDocumentData,
+      })
+
+      if (lastSavedSnapshotRef.current === snapshot) {
+        if (!opts.silent) {
+          if (opts.clearAfter) {
+            clearIdScan()
+            showChromeNotification(
+              'FrontDesk Nexus',
+              'Form cleared — no new changes were saved.',
+            )
+          } else {
+            showChromeNotification(
+              'FrontDesk Nexus',
+              'Nothing new to save — guest data is already up to date.',
+            )
+          }
+        } else if (opts.clearAfter) {
+          clearIdScan()
+        }
+        return { ok: true, skipped: true }
+      }
+
+      const updatingExisting = !!editingScanIdRef.current?.trim()
+
       const res = (await chrome.runtime.sendMessage({
         type: 'SAVE_ID_SCAN',
         parsed: mergedParsed,
@@ -1341,9 +1414,15 @@ function App() {
         documentData: manualEntry ? null : lastDocumentData,
         guestRemark: guestRemark.trim() || null,
         checkInRemark: checkInRemark.trim() || null,
+        existingScanId: editingScanIdRef.current,
       })) as { ok: boolean; error?: string }
 
       if (!res.ok) return { ok: false, error: res.error ?? 'Save failed' }
+
+      lastSavedSnapshotRef.current = snapshot
+      if (!updatingExisting) {
+        editingScanIdRef.current = null
+      }
 
       guestDraftCanceledRef.current = false
       guestDraftStartedAtRef.current = null
@@ -1354,7 +1433,14 @@ function App() {
       } else if (opts.notification != null) {
         showChromeNotification('FrontDesk Nexus', opts.notification)
       } else if (!opts.silent) {
-        showChromeNotification('FrontDesk Nexus', 'Guest ID saved — form cleared for next guest.')
+        showChromeNotification(
+          'FrontDesk Nexus',
+          updatingExisting
+            ? opts.clearAfter
+              ? 'Guest ID updated — form cleared for next guest.'
+              : 'Guest ID record updated.'
+            : 'Guest ID saved — form cleared for next guest.',
+        )
       } else {
         showChromeNotification('FrontDesk Nexus', 'Guest check-in saved automatically before sign-out.')
       }
@@ -1584,7 +1670,9 @@ function App() {
       const res = await persistGuestIdScan({
         clearAfter: false,
         silent: false,
-        notification: 'Guest ID saved — scan and form kept for this guest.',
+        notification: editingScanIdRef.current
+          ? 'Guest ID record updated.'
+          : 'Guest ID saved — scan and form kept for this guest.',
       })
       if (!res.ok) {
         const err = res.error ?? 'Save failed'
@@ -1634,6 +1722,22 @@ function App() {
   }
 
   function onCancelGuest() {
+    if (
+      hasUnsavedGuestDraft(
+        idDetail,
+        phone,
+        emailGuest,
+        parsed,
+        scanImages,
+        guestRemark,
+        checkInRemark,
+      ) &&
+      !window.confirm(
+        'Cancel this guest? Nothing on the form will be saved to ID Data.',
+      )
+    ) {
+      return
+    }
     guestDraftCanceledRef.current = true
     guestDraftStartedAtRef.current = null
     void chrome.storage.local.remove([FDN_PENDING_GUEST_DRAFT_KEY])

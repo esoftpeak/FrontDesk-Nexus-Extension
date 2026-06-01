@@ -1091,6 +1091,8 @@ async function saveIdScan(args: {
   documentData?: Record<string, unknown> | null
   guestRemark?: string | null
   checkInRemark?: string | null
+  /** When set, update this row (e.g. loaded from History) instead of inserting a duplicate. */
+  existingScanId?: string | null
 }): Promise<ExtensionResponse> {
   lastError = null
   const client = getClient()
@@ -1120,33 +1122,58 @@ async function saveIdScan(args: {
     }
   }
   const snap = reservation
-  const scanId = crypto.randomUUID()
+  const existingScanId = args.existingScanId?.trim() || null
+  const isUpdate = !!existingScanId
+  const scanId = isUpdate ? existingScanId : crypto.randomUUID()
 
-  // Never write to reservations from Save buttons.
-  // SELECT existing reservation ID only if a confirmation number is loaded; otherwise null.
   let resId: string | null = null
-  const conf: string = snap?.confirmationNumber ?? `NO-RES-${scanId}`
-  if (snap?.confirmationNumber) {
-    const { data, error } = await client
-      .from('reservations')
-      .select('id')
-      .eq('confirmation_number', snap.confirmationNumber)
-      .eq('pms_source', snap.pms)
+  let conf: string
+  let existingFrontPath: string | null = null
+  let existingBackPath: string | null = null
+
+  if (isUpdate) {
+    const { data: existingRow, error: selErr } = await client
+      .from('id_scans')
+      .select('id, confirmation_number, reservation_id, image_front_path, image_back_path')
+      .eq('id', scanId)
       .maybeSingle()
-    if (error) console.warn('[FDN SW] reservation select', error.message)
-    resId = (data?.id as string) ?? null
+    if (selErr || !existingRow) {
+      return {
+        ok: false,
+        error: 'Original ID scan not found — it may have been deleted.',
+      }
+    }
+    conf = String(existingRow.confirmation_number ?? snap?.confirmationNumber ?? `NO-RES-${scanId}`)
+    resId = (existingRow.reservation_id as string | null) ?? null
+    existingFrontPath =
+      typeof existingRow.image_front_path === 'string' ? existingRow.image_front_path : null
+    existingBackPath =
+      typeof existingRow.image_back_path === 'string' ? existingRow.image_back_path : null
+  } else {
+    conf = snap?.confirmationNumber ?? `NO-RES-${scanId}`
+    if (snap?.confirmationNumber) {
+      const { data, error } = await client
+        .from('reservations')
+        .select('id')
+        .eq('confirmation_number', snap.confirmationNumber)
+        .eq('pms_source', snap.pms)
+        .maybeSingle()
+      if (error) console.warn('[FDN SW] reservation select', error.message)
+      resId = (data?.id as string) ?? null
+    }
   }
+
   const resRow = { id: resId }
   const basePath = `${conf}/${scanId}`
 
-  let imageFrontPath: string | null = null
-  let imageBackPath: string | null = null
+  let imageFrontPath: string | null = isUpdate ? existingFrontPath : null
+  let imageBackPath: string | null = isUpdate ? existingBackPath : null
 
   try {
     if (args.imageFrontBase64) {
       const mime = guessImageMimeFromBase64(args.imageFrontBase64)
       const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/bmp' ? 'bmp' : 'png'
-      const path = `${basePath}/front.${ext}`
+      const path = existingFrontPath ?? `${basePath}/front.${ext}`
       const blob = base64ToBlob(args.imageFrontBase64, mime)
       const { error: upErr } = await client.storage.from('id-images').upload(path, blob, {
         contentType: mime,
@@ -1158,7 +1185,7 @@ async function saveIdScan(args: {
     if (args.imageBackBase64) {
       const mime = guessImageMimeFromBase64(args.imageBackBase64)
       const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/bmp' ? 'bmp' : 'png'
-      const path = `${basePath}/back.${ext}`
+      const path = existingBackPath ?? `${basePath}/back.${ext}`
       const blob = base64ToBlob(args.imageBackBase64, mime)
       const { error: upErr } = await client.storage.from('id-images').upload(path, blob, {
         contentType: mime,
@@ -1202,20 +1229,20 @@ async function saveIdScan(args: {
   }
 
   const scannedAt = new Date().toISOString()
+  const ocrProvider = args.manualEntry
+    ? null
+    : args.ocrProvider && String(args.ocrProvider).trim()
+      ? String(args.ocrProvider).trim()
+      : 'native_host'
 
-  const insertBase = {
-    id: scanId,
+  const rowPayload = {
     reservation_id: resRow.id,
     confirmation_number: conf,
     scanned_at: scannedAt,
     scanned_by: user.id,
     terminal_id: terminalId,
     manual_entry: args.manualEntry,
-    ocr_provider: args.manualEntry
-      ? null
-      : args.ocrProvider && String(args.ocrProvider).trim()
-        ? String(args.ocrProvider).trim()
-        : 'native_host',
+    ocr_provider: ocrProvider,
     pii_encrypted: pii_encrypted as unknown as Record<string, unknown>,
     image_front_path: imageFrontPath,
     image_back_path: imageBackPath,
@@ -1223,30 +1250,56 @@ async function saveIdScan(args: {
     email_encrypted,
   }
 
-  let scanResult = await client
-    .from('id_scans')
-    .insert({ ...insertBase, id_number_hash, phone_number_hash })
-    .select('id')
-    .single()
+  let savedScanId = scanId
 
-  // Hash columns optional until Supabase has id_number_hash / phone_number_hash on id_scans.
-  if (
-    scanResult.error?.message?.includes('id_number_hash') ||
-    scanResult.error?.message?.includes('phone_number_hash')
-  ) {
-    console.warn('[FDN SW] id_number_hash / phone_number_hash missing — run SQL migration. Saving without hashes.')
-    scanResult = await client
+  if (isUpdate) {
+    let updResult = await client
       .from('id_scans')
-      .insert(insertBase)
+      .update({ ...rowPayload, id_number_hash, phone_number_hash })
+      .eq('id', scanId)
       .select('id')
       .single()
-  }
 
-  const { data: insertRow, error: insErr } = scanResult
+    if (
+      updResult.error?.message?.includes('id_number_hash') ||
+      updResult.error?.message?.includes('phone_number_hash')
+    ) {
+      console.warn(
+        '[FDN SW] id_number_hash / phone_number_hash missing on update — saving without hashes.',
+      )
+      updResult = await client.from('id_scans').update(rowPayload).eq('id', scanId).select('id').single()
+    }
 
-  if (insErr) {
-    lastError = insErr.message
-    return { ok: false, error: insErr.message }
+    const { error: updErr } = updResult
+    if (updErr) {
+      lastError = updErr.message
+      return { ok: false, error: updErr.message }
+    }
+    savedScanId = (updResult.data?.id as string) ?? scanId
+  } else {
+    const insertBase = { id: scanId, ...rowPayload }
+
+    let scanResult = await client
+      .from('id_scans')
+      .insert({ ...insertBase, id_number_hash, phone_number_hash })
+      .select('id')
+      .single()
+
+    if (
+      scanResult.error?.message?.includes('id_number_hash') ||
+      scanResult.error?.message?.includes('phone_number_hash')
+    ) {
+      console.warn('[FDN SW] id_number_hash / phone_number_hash missing — run SQL migration. Saving without hashes.')
+      scanResult = await client.from('id_scans').insert(insertBase).select('id').single()
+    }
+
+    const { data: insertRow, error: insErr } = scanResult
+
+    if (insErr) {
+      lastError = insErr.message
+      return { ok: false, error: insErr.message }
+    }
+    savedScanId = (insertRow?.id as string) ?? scanId
   }
 
   const { error: audErr } = await client.from('audit_log').insert({
@@ -1254,14 +1307,19 @@ async function saveIdScan(args: {
     username: user.email,
     user_role: cachedRole,
     terminal_id: terminalId,
-    action_type: 'ID_SCAN',
+    action_type: isUpdate ? 'ID_SCAN_UPDATED' : 'ID_SCAN',
     confirmation_number: conf,
-    description: args.manualEntry
-      ? 'ID record saved (MANUAL_ENTRY)'
-      : 'ID record saved (native host or manual)',
+    description: isUpdate
+      ? args.manualEntry
+        ? 'ID record updated (MANUAL_ENTRY)'
+        : 'ID record updated'
+      : args.manualEntry
+        ? 'ID record saved (MANUAL_ENTRY)'
+        : 'ID record saved (native host or manual)',
     new_value: {
-      id_scan_id: insertRow?.id,
+      id_scan_id: savedScanId,
       manager_override: args.managerOverride,
+      updated: isUpdate,
     },
   })
   if (audErr) console.warn('audit_log insert', audErr.message)
@@ -2429,6 +2487,7 @@ async function handleMessage(
       documentData: msg.documentData ?? null,
       guestRemark: msg.guestRemark ?? null,
       checkInRemark: msg.checkInRemark ?? null,
+      existingScanId: msg.existingScanId ?? null,
     })
   }
 

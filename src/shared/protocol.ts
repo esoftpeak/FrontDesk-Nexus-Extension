@@ -181,6 +181,8 @@ export type ExtensionMessage =
       documentData?: Record<string, unknown> | null
       guestRemark?: string | null
       checkInRemark?: string | null
+      /** When set, updates this `id_scans` row instead of inserting a duplicate. */
+      existingScanId?: string | null
     }
   | { type: 'INJECT_PMS'; fields: Record<string, string> }
   | { type: 'VERIFY_MANAGER'; email: string; password: string }
