@@ -7,6 +7,7 @@ import {
   type GuestStayHistoryRecord,
   type IdScanLogEntry,
   type IdScanHistoryRow,
+  type KeyBlock,
   type KeyHistoryRow,
   type NativeHostRxDebugBroadcast,
   type NativeIdScanBroadcast,
@@ -262,7 +263,7 @@ function App() {
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyNotice, setKeyNotice] = useState<string | null>(null)
   const [keyCardSerial, setKeyCardSerial] = useState<number>(1)
-  const [keyBlock, setKeyBlock] = useState<'not_checked_in' | 'balance_over_threshold' | null>(null)
+  const [keyBlocks, setKeyBlocks] = useState<KeyBlock[]>([])
   const [showOverridePin, setShowOverridePin] = useState(false)
   const [overridePinInput, setOverridePinInput] = useState('')
   const [overridePinError, setOverridePinError] = useState<string | null>(null)
@@ -410,7 +411,7 @@ function App() {
     if (!conf || conf === lastLoadedConfRef.current) return
     lastLoadedConfRef.current = conf
     setReadCardResult(null)
-    setKeyBlock(null)
+    setKeyBlocks([])
     setKeyNotice(null)
     setShowOverridePin(false)
     setOverridePinInput('')
@@ -1918,18 +1919,18 @@ function App() {
         checkoutTime: res.checkOutDate,
         cardSerial: serial,
         managerPin: managerPin ?? undefined,
-      })) as { ok: boolean; error?: string; dbWarning?: string; keyBlock?: 'not_checked_in' | 'balance_over_threshold'; state?: ExtensionState } | undefined
+      })) as { ok: boolean; error?: string; dbWarning?: string; keyBlocks?: KeyBlock[]; state?: ExtensionState } | undefined
 
       if (!result) {
         setKeyNotice('No response from native host — reload the extension and try again.')
         return false
       }
       if (!result.ok) {
-        if (result.keyBlock) {
-          setKeyBlock(result.keyBlock)
-          setKeyNotice(result.error ?? 'Key encoding blocked.')
+        if (result.keyBlocks?.length) {
+          setKeyBlocks(result.keyBlocks)
+          setKeyNotice(null)
         } else {
-          setKeyBlock(null)
+          setKeyBlocks([])
           setShowOverridePin(false)
           setOverridePinInput('')
           setOverridePinError(null)
@@ -1939,7 +1940,7 @@ function App() {
       }
 
       // Success — clear any block state
-      setKeyBlock(null)
+      setKeyBlocks([])
       setShowOverridePin(false)
       setOverridePinInput('')
       setOverridePinError(null)
@@ -1968,7 +1969,7 @@ function App() {
   }
 
   async function onMakeKey() {
-    setKeyBlock(null)
+    setKeyBlocks([])
     setShowOverridePin(false)
     setOverridePinInput('')
     setOverridePinError(null)
@@ -1980,7 +1981,7 @@ function App() {
       setKeyNotice('Encode the first key with Encode Key, then use Next key for each additional card.')
       return
     }
-    setKeyBlock(null)
+    setKeyBlocks([])
     setShowOverridePin(false)
     setOverridePinInput('')
     setOverridePinError(null)
@@ -1992,7 +1993,7 @@ function App() {
     if (!pin) return
     setOverridePinError(null)
     const success = await runEncodeKey(keyCardSerial, pin)
-    if (!success && keyBlock) {
+    if (!success && keyBlocks.length > 0) {
       setOverridePinError('Incorrect PIN or override not available.')
     }
   }
@@ -2966,9 +2967,11 @@ function App() {
                     </button>
                   </div>
 
-                  {keyBlock ? (
+                  {keyBlocks.length > 0 ? (
                     <div className="fdn-banner fdn-banner--danger" style={{ marginTop: 8 }}>
-                      <p style={{ margin: 0 }}>{keyNotice}</p>
+                      {keyBlocks.map((b) => (
+                        <p key={b.type} style={{ margin: '0 0 4px' }}>{b.message}</p>
+                      ))}
                       {state.hasManagerPin && !showOverridePin && (
                         <button
                           type="button"

@@ -172,14 +172,15 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
     msg.managerPin === settings.managerOverridePin
 
   if (!isOverride) {
+    const keyBlocks: { type: 'not_checked_in' | 'balance_over_threshold'; message: string }[] = []
+
     // Check-in gate — applies to any PMS where pmsStatus is known
     if (reservation?.pmsStatus !== null && reservation?.pmsStatus !== undefined) {
       if (!isPmsCheckedIn(reservation.pmsStatus)) {
-        return {
-          ok: false,
-          error: 'Guest is not yet checked in — key encoding is blocked. Check in the guest in the PMS first, then try again.',
-          keyBlock: 'not_checked_in' as const,
-        }
+        keyBlocks.push({
+          type: 'not_checked_in',
+          message: 'Guest is not yet checked in — check in the guest in the PMS first.',
+        })
       }
     }
 
@@ -188,11 +189,18 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
       const balance = parseMoneyToNumber(reservation?.dueAmount ?? null)
       if (balance !== null && balance > settings.maxAllowedBalance) {
         const fmt = (n: number) => n.toFixed(2)
-        return {
-          ok: false,
-          error: `Balance of $${fmt(balance)} exceeds the $${fmt(settings.maxAllowedBalance)} limit. Please process a payment before encoding a key.`,
-          keyBlock: 'balance_over_threshold' as const,
-        }
+        keyBlocks.push({
+          type: 'balance_over_threshold',
+          message: `Balance of $${fmt(balance)} exceeds the $${fmt(settings.maxAllowedBalance)} limit — process a payment before encoding a key.`,
+        })
+      }
+    }
+
+    if (keyBlocks.length > 0) {
+      return {
+        ok: false,
+        error: keyBlocks.map((b) => b.message).join(' '),
+        keyBlocks,
       }
     }
   }

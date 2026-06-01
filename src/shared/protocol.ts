@@ -258,7 +258,10 @@ export type ExtensionResponse =
       /** Present after `CHECK_DNR` or `ADD_DNR`. */
       dnrActive?: boolean
     }
-  | { ok: false; error: string; keyBlock?: 'not_checked_in' | 'balance_over_threshold' }
+  | { ok: false; error: string; keyBlocks?: KeyBlock[] }
+
+export type KeyBlockType = 'not_checked_in' | 'balance_over_threshold'
+export type KeyBlock = { type: KeyBlockType; message: string }
 
 /** Service worker → side panel: log native inbound (opens in side panel DevTools). */
 export type NativeHostRxDebugBroadcast = {
