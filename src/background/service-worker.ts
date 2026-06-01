@@ -148,7 +148,15 @@ type RfidMakeKeyMessage = Extract<ExtensionMessage, { type: 'RFID_MAKE_KEY' }>
 /** True when eZee status badge indicates the guest is currently in-house. */
 function isEzeeCheckedIn(pmsStatus: string | null): boolean {
   if (!pmsStatus) return true // unknown status → do not block
-  return /^in\s*house$/i.test(pmsStatus.trim())
+  const s = pmsStatus.trim().toLowerCase().replace(/\s+/g, ' ')
+  return (
+    s === 'in house' ||
+    s === 'inhouse' ||
+    s === 'stayover' ||
+    s === 'stay over' ||
+    s === 'due out' ||
+    s === 'day use'
+  )
 }
 
 async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionResponse | Record<string, unknown>> {
