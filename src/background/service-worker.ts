@@ -2668,18 +2668,41 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 })
 
+// Sign out after 8 hours of system-wide inactivity (no mouse/keyboard input).
+// chrome.idle.onStateChanged wakes the service worker even when it is sleeping.
+const IDLE_LOGOUT_SECONDS = 8 * 60 * 60
+
+function ensureIdleLogout(): void {
+  chrome.idle.setDetectionInterval(IDLE_LOGOUT_SECONDS)
+}
+
+chrome.idle.onStateChanged.addListener((newState) => {
+  if (newState !== 'idle') return
+  void (async () => {
+    const client = getClient()
+    const { data: sess } = await client.auth.getSession()
+    if (!sess.session) return
+    await flushPendingGuestDraftIfPresent({ ignoreMinAge: false })
+    await client.auth.signOut()
+    cachedRole = null
+  })()
+})
+
 chrome.runtime.onInstalled.addListener(() => {
   ensureSidePanelOpensOnActionClick()
   ensureSessionKeepalive()
+  ensureIdleLogout()
 })
 
 chrome.runtime.onStartup.addListener(() => {
   ensureSidePanelOpensOnActionClick()
   ensureSessionKeepalive()
+  ensureIdleLogout()
 })
 
 ensureSidePanelOpensOnActionClick()
 ensureSessionKeepalive()
+ensureIdleLogout()
 
 void (async () => {
   const v = await checkMinExtensionVersion()

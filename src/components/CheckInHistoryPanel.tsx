@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { IdScanLogEntry } from '../shared/protocol'
+import { idScanLogEntryIsEditable } from '../lib/apply-guest-profile'
 import { createIdScanImageSignedUrl } from '../lib/id-scan-storage'
 import { localDateString } from '../lib/local-date'
 
 type CheckInHistoryPanelProps = {
   signedIn: boolean
+  editBusy?: boolean
+  onEditInScanner?: (entry: IdScanLogEntry) => void
 }
 
 function formatScanWhen(iso: string): string {
@@ -65,7 +68,11 @@ function DetailField({ label, value }: { label: string; value: string | null | u
   )
 }
 
-export function CheckInHistoryPanel({ signedIn }: CheckInHistoryPanelProps) {
+export function CheckInHistoryPanel({
+  signedIn,
+  editBusy = false,
+  onEditInScanner,
+}: CheckInHistoryPanelProps) {
   const today = useMemo(() => localDateString(), [])
   const [fromDate, setFromDate] = useState(today)
   const [toDate, setToDate] = useState(today)
@@ -253,7 +260,24 @@ export function CheckInHistoryPanel({ signedIn }: CheckInHistoryPanelProps) {
           ) : (
             <>
               <div className="fdn-id-log__detail-head">
-                <h3 className="fdn-id-log__detail-name">{selected.displayName}</h3>
+                <div className="fdn-id-log__detail-head-row">
+                  <h3 className="fdn-id-log__detail-name">{selected.displayName}</h3>
+                  {onEditInScanner ? (
+                    <button
+                      type="button"
+                      className="fdn-btn fdn-btn--primary fdn-btn--xs fdn-id-log__edit-btn"
+                      disabled={editBusy || !idScanLogEntryIsEditable(selected)}
+                      title={
+                        !idScanLogEntryIsEditable(selected)
+                          ? 'Cannot load — guest details could not be decrypted'
+                          : 'Open this check-in on the ID tab to edit, send to PMS, or save again'
+                      }
+                      onClick={() => onEditInScanner(selected)}
+                    >
+                      {editBusy ? 'Loading…' : 'Edit in scanner'}
+                    </button>
+                  ) : null}
+                </div>
                 <p className="fdn-id-log__detail-meta">
                   <span className="fdn-mono">{selected.confirmationNumber}</span>
                   {' · '}

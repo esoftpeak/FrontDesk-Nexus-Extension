@@ -5,6 +5,7 @@ import {
   type ExtensionResponse,
   type ExtensionState,
   type GuestStayHistoryRecord,
+  type IdScanLogEntry,
   type IdScanHistoryRow,
   type KeyHistoryRow,
   type NativeHostRxDebugBroadcast,
@@ -15,6 +16,7 @@ import {
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
 import { base64ToBlobUrl, normalizeScanBase64, revokeBlobUrl } from './lib/imageDataUrl'
 import { transformBase64ImageSync } from './lib/imageTransform'
+import { fetchStorageImageAsBase64 } from './lib/id-scan-storage'
 import {
   clearScanImagesFromStorage,
   FDN_SCAN_IMAGE_BACK_KEY,
@@ -32,7 +34,10 @@ import { ageYearsFromDobString, isGuestUnderMinimumAge } from './lib/id-age'
 import { ID_DOCUMENT_TYPES, normalizeIdDocumentType } from './lib/id-document-types'
 import { normalizeUsStateCode, US_STATE_SELECT_OPTIONS } from './lib/us-states'
 import { isCompleteUsZip, lookupUsZipCityState, normalizeUsZipInput } from './lib/zip-lookup'
-import { guestProfileToFormState } from './lib/apply-guest-profile'
+import {
+  guestProfileToFormState,
+  idScanLogEntryToFormState,
+} from './lib/apply-guest-profile'
 import {
   mergeHistoryRecordWithLatestContact,
   priorGuestStaysForConfirmation,
@@ -55,8 +60,13 @@ import {
   IconId,
   IconKey,
   IconPayment,
+  IconRefresh,
   IconSignature,
 } from './components/WorkspaceIcons'
+
+/** After this idle period, prompt then auto Save & Clear (same as manual Save & Clear). */
+const GUEST_IDLE_SAVE_CLEAR_MS = 5 * 60 * 1000
+const GUEST_IDLE_SAVE_CLEAR_COUNTDOWN_S = 30
 
 function formatCheckedAgo(ms: number | null | undefined): string {
   if (!ms || ms <= 0) return 'not checked'
@@ -254,6 +264,8 @@ function App() {
   const [readCardBusy, setReadCardBusy] = useState(false)
   const [cancelCardBusy, setCancelCardBusy] = useState(false)
   const [rfidCheckBusy, setRfidCheckBusy] = useState(false)
+  const [pmsRefreshBusy, setPmsRefreshBusy] = useState(false)
+  const [historyEditBusy, setHistoryEditBusy] = useState(false)
   const [, setRfidTick] = useState(0)
   const [readCardResult, setReadCardResult] = useState<{
     ok: boolean
@@ -304,6 +316,7 @@ function App() {
   const persistGuestIdScanRef = useRef<
     (opts: { clearAfter: boolean; silent: boolean; notification?: string | null }) => Promise<{ ok: boolean; error?: string }>
   >(() => Promise.resolve({ ok: false }))
+  const canIdleSaveClearRef = useRef<() => boolean>(() => false)
   /** Seconds remaining in the idle auto-save countdown; null = not active. */
   const [autoSaveCountdown, setAutoSaveCountdown] = useState<number | null>(null)
   /** Timestamp of the last user interaction with the ID form, for idle detection. */
@@ -625,6 +638,127 @@ function App() {
       }
     },
     [applyContactFromRecord, applyGuestProfile],
+  )
+
+  const loadHistoryEntryIntoScanner = useCallback(
+    async (entry: IdScanLogEntry) => {
+      const hasDraft = hasUnsavedGuestDraft(
+        idDetail,
+        phone,
+        emailGuest,
+        parsed,
+        scanImages,
+        guestRemark,
+        checkInRemark,
+      )
+      if (hasDraft) {
+        const ok = window.confirm(
+          'Replace the current guest on the ID form with this history record?',
+        )
+        if (!ok) return
+      }
+
+      setHistoryEditBusy(true)
+      setFormError(null)
+      try {
+        const next = idScanLogEntryToFormState(entry)
+        const receivedAt = entry.scannedAt?.trim() || new Date().toISOString()
+
+        guestDraftCanceledRef.current = false
+        guestDraftStartedAtRef.current = Date.now()
+        setAutoSaveCountdown(null)
+        lastFormInteractionRef.current = Date.now()
+
+        setManualEntry(entry.manualEntry)
+        setParsed(next.parsed)
+        setIdDetail({
+          ...next.idDetail,
+          postalCode: normalizeUsZipInput(next.idDetail.postalCode) || null,
+        })
+        setPhone(next.phone)
+        setEmailGuest(next.emailGuest)
+        setPhoneTouched(false)
+        setLastOcrProvider(entry.ocrProvider)
+        setLastDocumentData(null)
+        setGuestHistoryNote(null)
+        setReturningGuestRows([])
+        setReturningGuestExpanded(false)
+        setRotationDeg(0)
+        setFlipH(false)
+        lastZipLookupRef.current = normalizeUsZipInput(next.idDetail.postalCode) || null
+        setZipLookupNote(null)
+        lastAppliedNativeScanAtRef.current = receivedAt
+        frontScanStartedAtRef.current = null
+
+        const [frontB64, backB64] = await Promise.all([
+          entry.imageFrontPath
+            ? fetchStorageImageAsBase64(entry.imageFrontPath).catch(() => null)
+            : Promise.resolve(null),
+          entry.imageBackPath
+            ? fetchStorageImageAsBase64(entry.imageBackPath).catch(() => null)
+            : Promise.resolve(null),
+        ])
+
+        if (frontB64) {
+          const images = { front: frontB64, back: backB64 }
+          scanImagesRef.current = images
+          idScanPassRef.current = backB64 ? 'complete' : 'front'
+          setScanImages(images)
+        } else {
+          scanImagesRef.current = null
+          idScanPassRef.current = 'complete'
+          setScanImages(null)
+        }
+
+        setLastScanReceivedAt(receivedAt)
+        lastScanReceivedAtRef.current = receivedAt
+
+        void clearScanImagesFromStorage()
+        void chrome.storage.local.remove([
+          'fdn_last_native_scan',
+          'lastScanResult',
+          FDN_PENDING_GUEST_DRAFT_KEY,
+        ])
+
+        setActiveTab('id')
+
+        if (entry.idNumber?.trim()) {
+          void loadReturningGuestById(
+            entry.idNumber,
+            { phone: next.phone, email: next.emailGuest },
+            { fromLiveScan: true },
+          )
+        } else {
+          setReturningGuestRows([])
+          setReturningGuestExpanded(false)
+        }
+
+        void runIdScanAlertChecks(entry.idNumber, entry.dateOfBirth)
+
+        const label = entry.displayName?.trim() || 'Guest'
+        showChromeNotification(
+          'FrontDesk Nexus',
+          `${label} loaded from history — edit, use To PMS, then Save or Save & Clear.`,
+        )
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Could not load history into scanner'
+        setFormError(msg)
+        setActiveTab('id')
+      } finally {
+        setHistoryEditBusy(false)
+      }
+    },
+    [
+      idDetail,
+      phone,
+      emailGuest,
+      parsed,
+      scanImages,
+      guestRemark,
+      checkInRemark,
+      loadReturningGuestById,
+      runIdScanAlertChecks,
+    ],
   )
 
   const runPhoneHistoryLookup = useCallback(
@@ -1255,6 +1389,25 @@ function App() {
     persistGuestIdScanRef.current = persistGuestIdScan
   }, [persistGuestIdScan])
 
+  useEffect(() => {
+    canIdleSaveClearRef.current = () => {
+      if (
+        !hasUnsavedGuestDraft(
+          idDetail,
+          phone,
+          emailGuest,
+          parsed,
+          scanImages,
+          guestRemark,
+          checkInRemark,
+        )
+      ) {
+        return false
+      }
+      return validateRequiredGuestFields(idDetail, phone) === null
+    }
+  }, [idDetail, phone, emailGuest, parsed, scanImages, guestRemark, checkInRemark])
+
   const tryAutoSaveGuestDraftBeforeLogout = useCallback(
     async (requireMinAge: boolean): Promise<void> => {
       if (guestDraftCanceledRef.current) return
@@ -1387,26 +1540,25 @@ function App() {
     checkInRemark,
   ])
 
-  // Idle auto-save: check every 30 s; start a 30-second countdown after 5 min of no interaction.
+  // Idle Save & Clear: after 5 min with no form interaction, warn 30s then save + clear (if required fields are valid).
   useEffect(() => {
-    const IDLE_MS = 5 * 60 * 1000
     const handle = window.setInterval(() => {
-      if (idScanPassRef.current !== 'complete') return
-      if (!scanImagesRef.current?.front) return
-      if (Date.now() - lastFormInteractionRef.current < IDLE_MS) return
-      setAutoSaveCountdown((prev) => prev ?? 30)
+      if (!canIdleSaveClearRef.current()) return
+      if (Date.now() - lastFormInteractionRef.current < GUEST_IDLE_SAVE_CLEAR_MS) return
+      setAutoSaveCountdown((prev) => prev ?? GUEST_IDLE_SAVE_CLEAR_COUNTDOWN_S)
     }, 30_000)
-    return () => window.clearInterval(handle)
+    return () => clearInterval(handle)
   }, [])
 
-  // Countdown tick: save when it reaches 0.
+  // Countdown tick: Save & Clear when it reaches 0.
   useEffect(() => {
     if (autoSaveCountdown === null) return
     if (autoSaveCountdown <= 0) {
       void persistGuestIdScanRef.current({
-        clearAfter: false,
+        clearAfter: true,
         silent: false,
-        notification: 'Scan data auto-saved after idle.',
+        notification:
+          'Guest check-in saved — form cleared after 5 minutes of inactivity.',
       }).then(() => {
         setAutoSaveCountdown(null)
         lastFormInteractionRef.current = Date.now()
@@ -1419,6 +1571,36 @@ function App() {
     )
     return () => window.clearTimeout(t)
   }, [autoSaveCountdown])
+
+  async function onSave() {
+    const requiredErr = validateRequiredGuestFields(idDetail, phone)
+    if (requiredErr) {
+      setFormError(requiredErr)
+      return
+    }
+    setBusy(true)
+    setFormError(null)
+    try {
+      const res = await persistGuestIdScan({
+        clearAfter: false,
+        silent: false,
+        notification: 'Guest ID saved — scan and form kept for this guest.',
+      })
+      if (!res.ok) {
+        const err = res.error ?? 'Save failed'
+        void chrome.notifications.create({
+          type: 'basic',
+          title: 'FrontDesk Nexus — Save failed',
+          message: err,
+          iconUrl: chrome.runtime.getURL('icon.png'),
+        })
+        if (err.includes('DNR')) setShowManagerModal(true)
+        else if (err !== 'Save failed') setFormError(err)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function onSaveAndClear() {
     const requiredErr = validateRequiredGuestFields(idDetail, phone)
@@ -1697,6 +1879,44 @@ function App() {
     }
   }
 
+  /** Re-scrape the open PMS guest (SynXis / eZee) so room and checkout load for key encoding. */
+  async function onRefreshPmsStay() {
+    if (!state?.auth.signedIn) {
+      setKeyNotice('Sign in to refresh stay details from the PMS.')
+      return
+    }
+    setPmsRefreshBusy(true)
+    setKeyNotice(null)
+    try {
+      const pms = state?.reservation?.pms
+      let resp = (await chrome.runtime.sendMessage({
+        type: pms === 'ezee' ? 'LOAD_EZEE_RESERVATION' : 'LOAD_SYNXIS_RESERVATION',
+      })) as ExtensionResponse
+      if (!resp.ok && !pms) {
+        resp = (await chrome.runtime.sendMessage({ type: 'LOAD_EZEE_RESERVATION' })) as ExtensionResponse
+        if (!resp.ok) {
+          resp = (await chrome.runtime.sendMessage({ type: 'LOAD_SYNXIS_RESERVATION' })) as ExtensionResponse
+        }
+      }
+      if (resp?.ok && 'state' in resp && resp.state) setState(resp.state)
+      if (!resp.ok) {
+        const errMsg =
+          'error' in resp && typeof resp.error === 'string'
+            ? resp.error
+            : 'Could not read guest from the PMS tab. Open the guest drawer and try again.'
+        setKeyNotice(errMsg)
+      } else {
+        void refreshKeyHistory()
+        showChromeNotification(
+          'FrontDesk Nexus',
+          'Stay details refreshed from PMS — you can encode keys when room and checkout are shown.',
+        )
+      }
+    } finally {
+      setPmsRefreshBusy(false)
+    }
+  }
+
   if (!state) {
     return (
       <div className="fdn-root fdn-root--loading">
@@ -1730,6 +1950,12 @@ function App() {
     : !idTabReady
       ? 'First name, last name, and phone are required'
       : 'Fill the open PMS guest form only — does not save to ID Data'
+
+  const saveTooltip = !state.auth.signedIn
+    ? 'Sign in to save ID Data'
+    : !idTabReady
+      ? 'First name, last name, and phone are required'
+      : 'Save to ID Data — keep scan and form for this guest'
 
   const saveAndClearTooltip = !state.auth.signedIn
     ? 'Sign in to save ID Data'
@@ -1878,13 +2104,13 @@ function App() {
               ) : null}
               {autoSaveCountdown !== null && (
                 <div className="fdn-autosave-banner" role="status">
-                  <span>Auto-saving in {autoSaveCountdown}s…</span>
+                  <span>Save &amp; Clear in {autoSaveCountdown}s (5 min idle)…</span>
                   <button
                     type="button"
                     className="fdn-autosave-banner__cancel"
                     onClick={onIdFormInteraction}
                   >
-                    Cancel
+                    Keep editing
                   </button>
                 </div>
               )}
@@ -2360,6 +2586,15 @@ function App() {
                 </button>
                 <button
                   type="button"
+                  className="fdn-btn fdn-btn--secondary"
+                  disabled={guestActionsDisabled}
+                  title={saveTooltip}
+                  onClick={() => void onSave()}
+                >
+                  {busy ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  type="button"
                   className="fdn-btn fdn-btn--primary"
                   disabled={guestActionsDisabled}
                   title={saveAndClearTooltip}
@@ -2381,7 +2616,11 @@ function App() {
           ) : null}
 
           {activeTab === 'history' ? (
-            <CheckInHistoryPanel signedIn={state.auth.signedIn} />
+            <CheckInHistoryPanel
+              signedIn={state.auth.signedIn}
+              editBusy={historyEditBusy}
+              onEditInScanner={(entry) => void loadHistoryEntryIntoScanner(entry)}
+            />
           ) : null}
 
           {activeTab === 'payment' ? (
@@ -2404,11 +2643,28 @@ function App() {
 
           {activeTab === 'key' ? (
             <section className="fdn-panel fdn-panel--key">
+              <div className="fdn-key-tab__stay-toolbar">
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--secondary fdn-btn--with-icon fdn-key-tab__refresh"
+                  disabled={pmsRefreshBusy || !state.auth.signedIn}
+                  title={
+                    !state.auth.signedIn
+                      ? 'Sign in to load stay from PMS'
+                      : `Re-read the open guest in ${pmsLabel} (confirmation, room, checkout)`
+                  }
+                  onClick={() => void onRefreshPmsStay()}
+                >
+                  <IconRefresh className="fdn-btn__icon" />
+                  {pmsRefreshBusy ? 'Scanning PMS…' : 'Refresh stay'}
+                </button>
+              </div>
               {res?.confirmationNumber ? (
                 <GuestStaySummary res={res} guest={guest} ezee={ezee} pmsLabel={pmsLabel} />
               ) : (
                 <p className="fdn-stay-summary__empty">
-                  Open a guest in {pmsLabel} — stay details load automatically when the guest drawer is open.
+                  Open a guest in {pmsLabel}, then tap <strong>Refresh stay</strong> if room or checkout
+                  did not load automatically.
                 </p>
               )}
 

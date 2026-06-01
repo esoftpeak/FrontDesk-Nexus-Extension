@@ -44,6 +44,7 @@ export default defineManifest({
   permissions: [
     'storage',
     'alarms',
+    'idle',
     'activeTab',
     'scripting',
     'sidePanel',

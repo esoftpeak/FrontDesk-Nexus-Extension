@@ -675,8 +675,26 @@ body {
   padding: 5px 8px;
 }
 
+.fdn-panel--id .fdn-panel__footer .fdn-btn--primary,
+.fdn-panel--id .fdn-panel__footer .fdn-btn--secondary {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .fdn-panel__footer-cancel {
   margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.fdn-key-tab__stay-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.fdn-key-tab__refresh .fdn-btn__icon {
+  width: 14px;
+  height: 14px;
 }
 
 .fdn-check--compact {
@@ -1934,12 +1952,26 @@ body {
   margin-bottom: 8px;
 }
 
+.fdn-id-log__detail-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fdn-id-log__edit-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .fdn-id-log__detail-name {
   margin: 0;
   font-size: 14px;
   font-weight: 700;
   color: #58a6ff;
   line-height: 1.25;
+  flex: 1;
+  min-width: 0;
 }
 
 .fdn-id-log__detail-meta {

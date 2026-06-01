@@ -89,6 +89,19 @@ export function IconBan({ className, title }: IconProps) {
   )
 }
 
+/** Reload stay from PMS — `RefreshCw` */
+export function IconRefresh({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className} aria-hidden={title ? undefined : true}>
+      {title ? <title>{title}</title> : null}
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M8 16H3v5" />
+    </svg>
+  )
+}
+
 /** Send guest data to PMS — `ArrowLeft` */
 export function IconArrowLeft({ className, title }: IconProps) {
   return (
