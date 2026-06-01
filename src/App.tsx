@@ -330,6 +330,10 @@ function App() {
   const [autoSaveCountdown, setAutoSaveCountdown] = useState<number | null>(null)
   /** Timestamp of the last user interaction with the ID form, for idle detection. */
   const lastFormInteractionRef = useRef<number>(Date.now())
+  /** Timestamp of the last ANY interaction in the panel (mouse/key/scroll), for idle logout. */
+  const lastPanelInteractionRef = useRef<number>(Date.now())
+  /** Seconds remaining before auto-logout warning fires; null = not active. */
+  const [logoutCountdown, setLogoutCountdown] = useState<number | null>(null)
   type WorkspaceTab = 'id' | 'history' | 'payment' | 'signature' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
 
@@ -400,12 +404,17 @@ function App() {
     setKeyCardSerial(nextKeySerialFromHistory(keyHistory, state?.reservation?.confirmationNumber))
   }, [state?.reservation?.confirmationNumber, keyHistory])
 
-  // New PMS guest load: show full stay on Key tab and drop stale read-card UI from a prior room.
+  // New PMS guest load: show full stay on Key tab and drop stale read-card / key-block UI.
   useEffect(() => {
     const conf = state?.reservation?.confirmationNumber?.trim() ?? null
     if (!conf || conf === lastLoadedConfRef.current) return
     lastLoadedConfRef.current = conf
     setReadCardResult(null)
+    setKeyBlock(null)
+    setKeyNotice(null)
+    setShowOverridePin(false)
+    setOverridePinInput('')
+    setOverridePinError(null)
     if (state?.reservation?.roomNumber) setActiveTab('key')
   }, [state?.reservation?.confirmationNumber, state?.reservation?.roomNumber])
 
@@ -1662,6 +1671,48 @@ function App() {
     return () => window.clearTimeout(t)
   }, [autoSaveCountdown])
 
+  // Track any panel interaction (mouse, keyboard, scroll) to reset the idle logout timer.
+  useEffect(() => {
+    const onActivity = () => {
+      lastPanelInteractionRef.current = Date.now()
+      setLogoutCountdown(null)
+    }
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click'] as const
+    events.forEach((e) => window.addEventListener(e, onActivity, { passive: true }))
+    return () => events.forEach((e) => window.removeEventListener(e, onActivity))
+  }, [])
+
+  // Idle logout check: every 30 s, see if panel has been idle past the configured threshold.
+  // Shows a 60-second countdown warning before actually logging out.
+  useEffect(() => {
+    const LOGOUT_WARN_S = 60
+    const handle = window.setInterval(() => {
+      if (!state?.auth.signedIn) return
+      const autoLogoutMs = (state?.autoLogoutMinutes ?? 0) * 60 * 1000
+      if (autoLogoutMs <= 0) return
+      const idleMs = Date.now() - lastPanelInteractionRef.current
+      if (idleMs >= autoLogoutMs - LOGOUT_WARN_S * 1000) {
+        setLogoutCountdown((prev) => prev ?? LOGOUT_WARN_S)
+      }
+    }, 30_000)
+    return () => clearInterval(handle)
+  }, [state?.auth.signedIn, state?.autoLogoutMinutes])
+
+  // Countdown tick: actually log out when the warning countdown reaches 0.
+  useEffect(() => {
+    if (logoutCountdown === null) return
+    if (logoutCountdown <= 0) {
+      void onLogout()
+      return
+    }
+    const t = window.setTimeout(
+      () => setLogoutCountdown((n) => (n !== null ? n - 1 : null)),
+      1000,
+    )
+    return () => window.clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logoutCountdown])
+
   async function onSave() {
     const requiredErr = validateRequiredGuestFields(idDetail, phone)
     if (requiredErr) {
@@ -2171,6 +2222,22 @@ function App() {
         onRefreshId={() => void refresh()}
         onCheckKey={() => void onCheckRfid()}
       />
+
+      {logoutCountdown !== null && state.auth.signedIn && (
+        <div className="fdn-logout-banner" role="alert">
+          <span>Signing out in {logoutCountdown}s due to inactivity…</span>
+          <button
+            type="button"
+            className="fdn-logout-banner__cancel"
+            onClick={() => {
+              lastPanelInteractionRef.current = Date.now()
+              setLogoutCountdown(null)
+            }}
+          >
+            Stay signed in
+          </button>
+        </div>
+      )}
 
       {!state.auth.signedIn && (
         <section className="fdn-card fdn-card--compact">

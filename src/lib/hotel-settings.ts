@@ -6,12 +6,15 @@ export type ExtensionHotelSettings = {
   maxAllowedBalance: number
   /** Manager PIN to override key-encoding blocks. Empty string = override disabled. */
   managerOverridePin: string
+  /** Minutes of inactivity before the extension auto-logs out. 0 = disabled. Default 480. */
+  autoLogoutMinutes: number
 }
 
 export const DEFAULT_EXTENSION_HOTEL_SETTINGS: ExtensionHotelSettings = {
   minimumCheckInAge: 18,
   maxAllowedBalance: -1,
   managerOverridePin: '',
+  autoLogoutMinutes: 480,
 }
 
 function clampMinimumCheckInAge(n: unknown): number {
@@ -32,15 +35,23 @@ function sanitizeManagerOverridePin(v: unknown): string {
   return v.trim().slice(0, 32)
 }
 
+function clampAutoLogoutMinutes(n: unknown): number {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return DEFAULT_EXTENSION_HOTEL_SETTINGS.autoLogoutMinutes
+  if (n <= 0) return 0
+  return Math.round(Math.max(1, n))
+}
+
 export function parseHotelSettingsValue(value: unknown): ExtensionHotelSettings {
   const v = (value ?? {}) as {
     minimumCheckInAge?: unknown
     maxAllowedBalance?: unknown
     managerOverridePin?: unknown
+    autoLogoutMinutes?: unknown
   }
   return {
     minimumCheckInAge: clampMinimumCheckInAge(v.minimumCheckInAge),
     maxAllowedBalance: clampMaxAllowedBalance(v.maxAllowedBalance),
     managerOverridePin: sanitizeManagerOverridePin(v.managerOverridePin),
+    autoLogoutMinutes: clampAutoLogoutMinutes(v.autoLogoutMinutes),
   }
 }

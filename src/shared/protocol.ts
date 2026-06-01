@@ -328,6 +328,8 @@ export type ExtensionState = {
   maxAllowedBalance: number
   /** True when a manager override PIN is configured in hotel settings. */
   hasManagerPin: boolean
+  /** Minutes of inactivity before the extension auto-logs out; 0 = disabled. */
+  autoLogoutMinutes: number
   lastError: string | null
 }
 

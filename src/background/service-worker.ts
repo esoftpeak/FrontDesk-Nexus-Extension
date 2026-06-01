@@ -177,7 +177,7 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
       if (!isPmsCheckedIn(reservation.pmsStatus)) {
         return {
           ok: false,
-          error: 'Guest is not checked in. Please check in the guest before encoding a key.',
+          error: 'Guest is not yet checked in — key encoding is blocked. Check in the guest in the PMS first, then try again.',
           keyBlock: 'not_checked_in' as const,
         }
       }
@@ -1014,6 +1014,7 @@ async function getState(): Promise<ExtensionState> {
     minimumCheckInAge: hotelSettings.minimumCheckInAge,
     maxAllowedBalance: hotelSettings.maxAllowedBalance,
     hasManagerPin: hotelSettings.managerOverridePin.length > 0,
+    autoLogoutMinutes: hotelSettings.autoLogoutMinutes,
     lastError,
   }
 }

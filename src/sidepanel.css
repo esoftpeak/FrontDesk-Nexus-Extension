@@ -1268,6 +1268,37 @@ body {
   border-color: #3fb950;
 }
 
+.fdn-logout-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: #2e1a1a;
+  border: 1px solid #f85149;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #ff7b72;
+  margin: 4px 6px 0;
+}
+
+.fdn-logout-banner__cancel {
+  background: none;
+  border: 1px solid #f8514988;
+  border-radius: 4px;
+  color: #ff7b72;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 8px;
+  line-height: 1.4;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fdn-logout-banner__cancel:hover {
+  background: #f8514922;
+  border-color: #f85149;
+}
+
 .fdn-modal-backdrop {
   position: fixed;
   inset: 0;
