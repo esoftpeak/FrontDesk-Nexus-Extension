@@ -961,4 +961,154 @@ document.addEventListener(
   true,
 )
 
+// ── Check-in confirmation auto-search ────────────────────────────────────────
+//
+// Detects the eZee "Guest has been checked in successfully" success toast,
+// extracts the Reservation No, then auto-types it into Quick Search and clicks
+// the single result card so the guest drawer opens automatically.
+
+const CHECKIN_SUCCESS_LC = 'guest has been checked in successfully'
+const CHECKIN_RES_NO_RE = /Reservation\s+no\s+is\s*:\s*(\d+)/i
+const CHECKIN_DEDUPE_MS = 30_000
+
+let lastCheckinResNo: string | null = null
+let lastCheckinAt = 0
+
+/**
+ * The target toast has these distinguishing characteristics:
+ *   • Dark floating Ant Design success message/notification (not a modal dialog)
+ *   • Green ✓ check-circle icon  (aria-label="check-circle" / .anticon-check-circle)
+ *   • Text: "The Guest has been checked in successfully. Guest folio no is : X and Reservation no is : Y"
+ *
+ * False-positive guards:
+ *   • The "CONFIRM – Do you want to charge early Check-In Rate?" dialog uses a ⚠ exclamation-circle
+ *     icon and lives inside .ant-modal-confirm-body — excluded by the closest() check.
+ *   • Table rows / drawer bodies are also excluded.
+ */
+function tryExtractCheckinResNo(el: Element): string | null {
+  const text = el.textContent ?? ''
+  if (!text.toLowerCase().includes(CHECKIN_SUCCESS_LC)) return null
+  if (!CHECKIN_RES_NO_RE.test(text)) return null
+
+  // Not inside a confirm dialog, drawer, or data table
+  if (el.closest(
+    '.ant-modal-confirm-body, .ant-modal-body, .ant-drawer-body, .ant-table-tbody, tr, td',
+  )) return null
+
+  // Must carry the success ✓ icon — the CONFIRM dialog has ⚠, info has ℹ
+  const hasCheckIcon =
+    !!el.querySelector('[aria-label="check-circle"], .anticon-check-circle, [data-icon="check-circle"]') ||
+    el.classList.contains('ant-message-success') ||
+    !!el.closest('.ant-message-success, .ant-notification-notice-success')
+  if (!hasCheckIcon) return null
+
+  return text.match(CHECKIN_RES_NO_RE)?.[1] ?? null
+}
+
+function handleCheckinConfirmed(resNo: string): void {
+  const now = Date.now()
+  if (resNo === lastCheckinResNo && now - lastCheckinAt < CHECKIN_DEDUPE_MS) return
+  lastCheckinResNo = resNo
+  lastCheckinAt = now
+  console.info('[FDN eZee] Check-in confirmed — Reservation No:', resNo)
+  void autoSearchAndSelect(resNo)
+}
+
+// Dedicated zero-debounce observer — catches the toast the instant it hits the DOM.
+// Separate from the guest-drawer observer to keep the two concerns isolated.
+const checkinToastObserver = new MutationObserver((mutations) => {
+  outer: for (const mutation of mutations) {
+    for (const node of Array.from(mutation.addedNodes)) {
+      if (node.nodeType !== Node.ELEMENT_NODE) continue
+      const root = node as Element
+      // Check the added node itself, then every descendant.
+      // The toast subtree is tiny (≈10 elements); cost is negligible.
+      for (const el of [root, ...Array.from(root.querySelectorAll('*'))]) {
+        const resNo = tryExtractCheckinResNo(el)
+        if (resNo) { handleCheckinConfirmed(resNo); break outer }
+      }
+    }
+  }
+})
+checkinToastObserver.observe(document.body, { childList: true, subtree: true })
+
+async function autoSearchAndSelect(resNo: string): Promise<void> {
+  if (!location.pathname.startsWith('/unity/reservations')) return
+
+  // Brief pause so the Add Reservation modal finishes its close animation
+  await sleep(350)
+
+  const searchInput = document.querySelector<HTMLInputElement>('input[placeholder="Quick Search"]')
+  if (!searchInput) {
+    console.warn('[FDN eZee] autoSearchAndSelect: Quick Search input not found')
+    return
+  }
+
+  // Don't overwrite if the user is already searching something unrelated
+  const current = searchInput.value.trim()
+  if (current && current !== resNo) {
+    console.info('[FDN eZee] autoSearchAndSelect: Quick Search has user value — skipping auto', current)
+    return
+  }
+
+  reactSet(searchInput, resNo)
+  console.info('[FDN eZee] autoSearchAndSelect: typing reservation no', resNo)
+
+  if (!await waitForCheckinResultCard(resNo, 4_000)) {
+    // One retry — eZee's search API can be slow
+    await sleep(2_000)
+    if (!await waitForCheckinResultCard(resNo, 3_000)) {
+      console.warn('[FDN eZee] autoSearchAndSelect: result card not found for reservation no', resNo)
+    }
+  }
+}
+
+async function waitForCheckinResultCard(resNo: string, maxMs: number): Promise<boolean> {
+  const deadline = Date.now() + maxMs
+  while (Date.now() < deadline) {
+    const card = findCheckinResultCard(resNo)
+    if (card) {
+      card.click()
+      console.info('[FDN eZee] autoSearchAndSelect: clicked result for reservation no', resNo)
+      return true
+    }
+    await sleep(250)
+  }
+  return false
+}
+
+/**
+ * Finds the Quick Search result card containing "Res No # {resNo}".
+ * eZee renders the unique result as an Ant Design card / list item below the search bar.
+ */
+function findCheckinResultCard(resNo: string): HTMLElement | null {
+  const label = `Res No # ${resNo}`
+
+  // Priority 1: Ant Design card / list-item components and eZee-named variants
+  for (const sel of ['.ant-card', '.ant-list-item', '[class*="resCard"]', '[class*="bookingCard"]']) {
+    for (const el of document.querySelectorAll<HTMLElement>(sel)) {
+      if (!isCheckinElVisible(el)) continue
+      if ((el.textContent ?? '').replace(/\s+/g, ' ').includes(label)) return el
+    }
+  }
+
+  // Priority 2: any div/li with the "Res No # X" label, outside the header/search area
+  for (const el of document.querySelectorAll<HTMLElement>('div[class], li')) {
+    if (!isCheckinElVisible(el)) continue
+    if (el.closest('header, nav, [class*="header"], [class*="search-bar"]')) continue
+    const text = (el.textContent ?? '').replace(/\s+/g, ' ')
+    if (!text.includes(label)) continue
+    const r = el.getBoundingClientRect()
+    // Exclude full-width containers; target a card-sized element
+    if (r.width > 200 && r.height > 40 && r.width < window.innerWidth * 0.95) return el
+  }
+
+  return null
+}
+
+function isCheckinElVisible(el: HTMLElement): boolean {
+  const r = el.getBoundingClientRect()
+  return r.width > 0 && r.height > 0
+}
+
 export {}
