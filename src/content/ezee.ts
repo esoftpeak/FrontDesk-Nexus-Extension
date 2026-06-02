@@ -973,6 +973,7 @@ const CHECKIN_DEDUPE_MS = 30_000
 
 let lastCheckinResNo: string | null = null
 let lastCheckinAt = 0
+let _autoSearchRunning = false
 
 /**
  * The target toast has these distinguishing characteristics:
@@ -1033,33 +1034,46 @@ const checkinToastObserver = new MutationObserver((mutations) => {
 checkinToastObserver.observe(document.body, { childList: true, subtree: true })
 
 async function autoSearchAndSelect(resNo: string): Promise<void> {
+  if (_autoSearchRunning) return
   if (!location.pathname.startsWith('/unity/reservations')) return
 
-  // Brief pause so the Add Reservation modal finishes its close animation
-  await sleep(350)
+  _autoSearchRunning = true
+  try {
+    // Brief pause so the Add Reservation modal finishes its close animation
+    await sleep(350)
 
-  const searchInput = document.querySelector<HTMLInputElement>('input[placeholder="Quick Search"]')
-  if (!searchInput) {
-    console.warn('[FDN eZee] autoSearchAndSelect: Quick Search input not found')
-    return
-  }
-
-  // Don't overwrite if the user is already searching something unrelated
-  const current = searchInput.value.trim()
-  if (current && current !== resNo) {
-    console.info('[FDN eZee] autoSearchAndSelect: Quick Search has user value — skipping auto', current)
-    return
-  }
-
-  reactSet(searchInput, resNo)
-  console.info('[FDN eZee] autoSearchAndSelect: typing reservation no', resNo)
-
-  if (!await waitForCheckinResultCard(resNo, 4_000)) {
-    // One retry — eZee's search API can be slow
-    await sleep(2_000)
-    if (!await waitForCheckinResultCard(resNo, 3_000)) {
-      console.warn('[FDN eZee] autoSearchAndSelect: result card not found for reservation no', resNo)
+    const searchInput = document.querySelector<HTMLInputElement>('input[placeholder="Quick Search"]')
+    if (!searchInput) {
+      console.warn('[FDN eZee] autoSearchAndSelect: Quick Search input not found')
+      return
     }
+
+    // Don't overwrite if the user is already searching something unrelated
+    const current = searchInput.value.trim()
+    if (current && current !== resNo) {
+      console.info('[FDN eZee] autoSearchAndSelect: Quick Search has user value — skipping auto', current)
+      return
+    }
+
+    // Fill without blur — reactSet calls el.blur() which fires the Ant Design
+    // AutoComplete's onBlur handler and permanently marks the input as unfocused,
+    // breaking every subsequent manual search until the page reloads.
+    searchInput.focus()
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    if (nativeSetter) nativeSetter.call(searchInput, resNo)
+    else searchInput.value = resNo
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }))
+    console.info('[FDN eZee] autoSearchAndSelect: typing reservation no', resNo)
+
+    if (!await waitForCheckinResultCard(resNo, 4_000)) {
+      // One retry — eZee's search API can be slow
+      await sleep(2_000)
+      if (!await waitForCheckinResultCard(resNo, 3_000)) {
+        console.warn('[FDN eZee] autoSearchAndSelect: result card not found for reservation no', resNo)
+      }
+    }
+  } finally {
+    _autoSearchRunning = false
   }
 }
 
