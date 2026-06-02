@@ -10,7 +10,6 @@ import type {
   NativeIdScanBroadcast,
   PanelToastBroadcast,
   GuestStayHistoryRecord,
-  IdScanLogEntry,
   PendingGuestDraft,
   ReturningGuestRecord,
   ScanFrontBroadcast,
@@ -36,11 +35,8 @@ import {
   filterRecordsByPhone,
   guestStayRecordFromScanRow,
 } from '../lib/guest-stay-history'
-import {
-  idScanLogEntryFromRow,
-  type ProfileLite,
-  type ReservationLite,
-} from '../lib/id-scan-log'
+import { buildIdScanLogFromScanRows } from '../lib/id-scan-log'
+import { searchIdScanHistory } from '../lib/id-scan-history-search'
 import { isCompletePhoneForLookup } from '../lib/phone-lookup'
 import {
   isCompleteTwoSidedScan,
@@ -1996,46 +1992,27 @@ async function fetchIdScansByDate(fromDate: string, toDate: string): Promise<Ext
   }
 
   const scans = (data ?? []) as Record<string, unknown>[]
-  const confirmationNumbers = [...new Set(scans.map((s) => String(s.confirmation_number ?? '')))].filter(
-    Boolean,
-  )
-
-  const resByConf: Record<string, ReservationLite> = {}
-  if (confirmationNumbers.length > 0) {
-    const { data: resRows, error: resErr } = await client
-      .from('reservations')
-      .select('confirmation_number, room_number, guest_name, check_in_date, check_out_date')
-      .in('confirmation_number', confirmationNumbers)
-    if (resErr) console.warn('[FDN] reservations for id log', resErr.message)
-    for (const r of (resRows ?? []) as ReservationLite[]) {
-      resByConf[r.confirmation_number] = r
-    }
-  }
-
-  const userIds = [...new Set(scans.map((s) => s.scanned_by).filter(Boolean))] as string[]
-  const profById: Record<string, ProfileLite> = {}
-  if (userIds.length > 0) {
-    const { data: profRows, error: profErr } = await client
-      .from('profiles')
-      .select('id, email, full_name')
-      .in('id', userIds)
-    if (profErr) console.warn('[FDN] profiles for id log', profErr.message)
-    for (const p of (profRows ?? []) as ProfileLite[]) {
-      profById[p.id] = p
-    }
-  }
-
-  const idScanLog: IdScanLogEntry[] = []
-  for (const row of scans) {
-    const conf = String(row.confirmation_number ?? '')
-    const scannedBy =
-      typeof row.scanned_by === 'string' ? row.scanned_by : (row.scanned_by as string | null) ?? null
-    idScanLog.push(
-      await idScanLogEntryFromRow(row, resByConf[conf], scannedBy ? profById[scannedBy] : undefined),
-    )
-  }
-
+  const idScanLog = await buildIdScanLogFromScanRows(client, scans)
   return { ok: true, idScanLog }
+}
+
+async function fetchIdScansBySearch(query: string): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+
+  const q = query.trim()
+  if (q.length < 2) return { ok: true, idScanLog: [] }
+
+  try {
+    const idScanLog = await searchIdScanHistory(client, q)
+    return { ok: true, idScanLog }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Search failed'
+    console.warn('[FDN] id_scans search', message)
+    return { ok: false, error: message }
+  }
 }
 
 async function fetchReturningGuestHistory(idNumber: string): Promise<ExtensionResponse> {
@@ -2244,6 +2221,10 @@ async function handleMessage(
 
   if (msg.type === 'GET_ID_SCANS_BY_DATE') {
     return fetchIdScansByDate(msg.fromDate, msg.toDate)
+  }
+
+  if (msg.type === 'SEARCH_ID_SCANS_HISTORY') {
+    return fetchIdScansBySearch(msg.query)
   }
 
   if (msg.type === 'GET_KEY_HISTORY') {

@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EncryptedPayload } from './encryption'
 import { decryptJson } from './encryption'
 import type { IdScanLogEntry } from '../shared/protocol'
@@ -62,6 +63,53 @@ export function idScanGuestDisplayName(
   const pms = reservationGuest?.trim()
   if (pms) return pms
   return '—'
+}
+
+export async function buildIdScanLogFromScanRows(
+  client: SupabaseClient,
+  scans: Record<string, unknown>[],
+): Promise<IdScanLogEntry[]> {
+  if (scans.length === 0) return []
+
+  const confirmationNumbers = [...new Set(scans.map((s) => String(s.confirmation_number ?? '')))].filter(
+    Boolean,
+  )
+
+  const resByConf: Record<string, ReservationLite> = {}
+  if (confirmationNumbers.length > 0) {
+    const { data: resRows, error: resErr } = await client
+      .from('reservations')
+      .select('confirmation_number, room_number, guest_name, check_in_date, check_out_date')
+      .in('confirmation_number', confirmationNumbers)
+    if (resErr) console.warn('[FDN] reservations for id log', resErr.message)
+    for (const r of (resRows ?? []) as ReservationLite[]) {
+      resByConf[r.confirmation_number] = r
+    }
+  }
+
+  const userIds = [...new Set(scans.map((s) => s.scanned_by).filter(Boolean))] as string[]
+  const profById: Record<string, ProfileLite> = {}
+  if (userIds.length > 0) {
+    const { data: profRows, error: profErr } = await client
+      .from('profiles')
+      .select('id, email, full_name')
+      .in('id', userIds)
+    if (profErr) console.warn('[FDN] profiles for id log', profErr.message)
+    for (const p of (profRows ?? []) as ProfileLite[]) {
+      profById[p.id] = p
+    }
+  }
+
+  const idScanLog: IdScanLogEntry[] = []
+  for (const row of scans) {
+    const conf = String(row.confirmation_number ?? '')
+    const scannedBy =
+      typeof row.scanned_by === 'string' ? row.scanned_by : (row.scanned_by as string | null) ?? null
+    idScanLog.push(
+      await idScanLogEntryFromRow(row, resByConf[conf], scannedBy ? profById[scannedBy] : undefined),
+    )
+  }
+  return idScanLog
 }
 
 export async function idScanLogEntryFromRow(

@@ -128,6 +128,8 @@ export type ExtensionMessage =
   | { type: 'GET_ID_SCAN_HISTORY' }
   /** ID Data by date range (portal “By date” tab). */
   | { type: 'GET_ID_SCANS_BY_DATE'; fromDate: string; toDate: string }
+  /** Guest lookup across recent scans (name, phone, ID, confirmation). */
+  | { type: 'SEARCH_ID_SCANS_HISTORY'; query: string }
   | { type: 'GET_KEY_HISTORY' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
   /** Manual scrape: eZee tab with Arrivals drawer open (same payload as auto). */
