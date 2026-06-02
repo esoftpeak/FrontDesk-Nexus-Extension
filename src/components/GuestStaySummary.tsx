@@ -44,7 +44,7 @@ export function GuestStaySummary({ res, guest, ezee, pmsLabel }: Props) {
         {isEzee && ezee ? (
           <>
             <Row label="Guest" value={ezee.nameLine ?? res.guestName} />
-            <Row label="Status" value={ezee.status} />
+            <Row label="Status" value={ezee.status?.trim().toLowerCase() === 'arrived' ? 'Checked In' : ezee.status} />
             <Row label="Room" value={ezee.roomNumber ?? res.roomNumber} />
             <Row label="Address" value={ezee.addressLine ?? res.addressRaw} />
             <Row label="Arrival" value={checkIn} />

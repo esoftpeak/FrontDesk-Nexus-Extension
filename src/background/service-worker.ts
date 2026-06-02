@@ -152,6 +152,7 @@ function isPmsCheckedIn(pmsStatus: string | null): boolean {
   return (
     s === 'in house' ||
     s === 'inhouse' ||
+    s === 'arrived' ||   // eZee: guest has checked in
     s === 'stayover' ||
     s === 'stay over' ||
     s === 'due out' ||
