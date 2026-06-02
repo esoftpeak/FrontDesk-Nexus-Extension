@@ -1048,21 +1048,28 @@ async function autoSearchAndSelect(resNo: string): Promise<void> {
       return
     }
 
-    // Don't overwrite if the user is already searching something unrelated
-    const current = searchInput.value.trim()
-    if (current && current !== resNo) {
-      console.info('[FDN eZee] autoSearchAndSelect: Quick Search has user value — skipping auto', current)
-      return
+    // Helper: set value via React's native setter + fire input event (no blur)
+    const setSearchVal = (v: string) => {
+      const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+      if (s) s.call(searchInput, v)
+      else searchInput.value = v
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }))
     }
 
-    // Fill without blur — reactSet calls el.blur() which fires the Ant Design
-    // AutoComplete's onBlur handler and permanently marks the input as unfocused,
-    // breaking every subsequent manual search until the page reloads.
+    const current = searchInput.value.trim()
+    if (current && current !== resNo) {
+      // Another search term is in the field — clear it first so eZee resets
+      // the dropdown state before we type the new confirmation number
+      searchInput.focus()
+      setSearchVal('')
+      await sleep(200)
+    }
+
+    // Fill without blur — reactSet calls el.blur() which fires Ant Design's
+    // onBlur handler and permanently marks the input as unfocused, breaking
+    // every subsequent manual search until the page reloads.
     searchInput.focus()
-    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-    if (nativeSetter) nativeSetter.call(searchInput, resNo)
-    else searchInput.value = resNo
-    searchInput.dispatchEvent(new Event('input', { bubbles: true }))
+    setSearchVal(resNo)
     console.info('[FDN eZee] autoSearchAndSelect: typing reservation no', resNo)
 
     if (!await waitForCheckinResultCard(resNo, 4_000)) {
