@@ -1068,7 +1068,7 @@ async function waitForCheckinResultCard(resNo: string, maxMs: number): Promise<b
   while (Date.now() < deadline) {
     const card = findCheckinResultCard(resNo)
     if (card) {
-      card.click()
+      clickCheckinCard(card)
       console.info('[FDN eZee] autoSearchAndSelect: clicked result for reservation no', resNo)
       return true
     }
@@ -1078,28 +1078,51 @@ async function waitForCheckinResultCard(resNo: string, maxMs: number): Promise<b
 }
 
 /**
- * Finds the Quick Search result card containing "Res No # {resNo}".
- * eZee renders the unique result as an Ant Design card / list item below the search bar.
+ * React/Ant Design components require a real mousedown before click to register.
+ * We also try the inner card body — eZee's React handler may sit on a child element.
+ */
+function clickCheckinCard(el: HTMLElement): void {
+  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }))
+  el.click()
+  const inner = el.querySelector<HTMLElement>(
+    '.ant-card-body, .ant-list-item-main, [class*="card-body"], [class*="cardBody"], [class*="item-main"]',
+  )
+  if (inner) {
+    inner.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }))
+    inner.click()
+  }
+}
+
+/**
+ * Finds the Quick Search result card for the given reservation number.
+ * Matches "Res No # 3629" / "Res No #3629" / "Res No  #  3629" (flexible spacing).
  */
 function findCheckinResultCard(resNo: string): HTMLElement | null {
-  const label = `Res No # ${resNo}`
+  const resNoPattern = new RegExp(`Res\\s*No\\s*#\\s*${resNo}`)
 
-  // Priority 1: Ant Design card / list-item components and eZee-named variants
-  for (const sel of ['.ant-card', '.ant-list-item', '[class*="resCard"]', '[class*="bookingCard"]']) {
+  // Priority 1: Ant Design select-item (AutoComplete dropdown), card, list-item, custom variants
+  for (const sel of [
+    '.ant-select-item',
+    '.ant-card',
+    '.ant-list-item',
+    '[class*="resCard"]',
+    '[class*="bookingCard"]',
+    '[class*="searchItem"]',
+    '[class*="search-item"]',
+  ]) {
     for (const el of document.querySelectorAll<HTMLElement>(sel)) {
       if (!isCheckinElVisible(el)) continue
-      if ((el.textContent ?? '').replace(/\s+/g, ' ').includes(label)) return el
+      if (resNoPattern.test((el.textContent ?? '').replace(/\s+/g, ' '))) return el
     }
   }
 
-  // Priority 2: any div/li with the "Res No # X" label, outside the header/search area
+  // Priority 2: any div/li carrying the pattern, outside the header/search bar
   for (const el of document.querySelectorAll<HTMLElement>('div[class], li')) {
     if (!isCheckinElVisible(el)) continue
     if (el.closest('header, nav, [class*="header"], [class*="search-bar"]')) continue
     const text = (el.textContent ?? '').replace(/\s+/g, ' ')
-    if (!text.includes(label)) continue
+    if (!resNoPattern.test(text)) continue
     const r = el.getBoundingClientRect()
-    // Exclude full-width containers; target a card-sized element
     if (r.width > 200 && r.height > 40 && r.width < window.innerWidth * 0.95) return el
   }
 
