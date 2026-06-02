@@ -35,13 +35,26 @@ function normMoney(s: string | null | undefined): string | null {
   return m?.[1] ? `$${m[1]}` : t
 }
 
-/** eZee Arrivals drawer uses MM-DD-YYYY with optional time — store YYYY-MM-DD for DB. */
+/**
+ * eZee Arrivals drawer uses `MM-DD-YYYY [H:MM:SS AM/PM]`.
+ * Returns `YYYY-MM-DD` when no time is present, or `YYYY-MM-DDTHH:MM:00`
+ * (local wall-clock, no Z) when a time component is found.
+ * The time is preserved so key encoding uses the actual check-in moment
+ * rather than the hotel's default 2 PM / 12 PM fallback.
+ */
 export function parseEzeeDateTimeToIsoDate(raw: string | null): string | null {
   if (!raw) return null
-  const m = raw.match(/(\d{2})-(\d{2})-(\d{4})/)
+  const m = raw.match(/(\d{2})-(\d{2})-(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?)?/i)
   if (!m) return null
-  const [, mm, dd, yyyy] = m
-  return `${yyyy}-${mm}-${dd}`
+  const [, mm, dd, yyyy, hStr, minStr, ampm] = m
+  if (!hStr) return `${yyyy}-${mm}-${dd}`
+  let hour = parseInt(hStr, 10)
+  const min = parseInt(minStr!, 10)
+  if (ampm) {
+    if (/PM/i.test(ampm) && hour !== 12) hour += 12
+    else if (/AM/i.test(ampm) && hour === 12) hour = 0
+  }
+  return `${yyyy}-${mm}-${dd}T${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}:00`
 }
 
 function pickFromMap(map: Map<string, string>, ...keys: string[]): string | null {

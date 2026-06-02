@@ -87,11 +87,19 @@ export function formatCalendarDate(isoDate: string): string {
 /**
  * Normalise check-in/out to SDK `yyyyMMddHHmm`.
  * UTC midnight ISO → hotel calendar date + `defaultHour` (local wall clock).
+ * Local datetime with an explicit time (e.g. `2026-06-02T08:28:00`, no Z, not midnight)
+ * is used as-is — `defaultHour` is NOT applied.
  */
 export function toSdkDatetimeHotel(s: string, defaultHour: number): string {
   const t = s.trim()
   if (!t) return t
   if (/^\d{12}$/.test(t)) return t
+
+  // Local ISO datetime with a real time component — preserve it exactly
+  const localDt = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(t)
+  if (localDt && !t.endsWith('Z') && !/T00:00:00/.test(t)) {
+    return `${localDt[1]}${localDt[2]}${localDt[3]}${localDt[4]}${localDt[5]}`
+  }
 
   const normalized = normalizeHotelStayDate(null, t)
   if (normalized) {
@@ -127,6 +135,7 @@ function formatCalendarDateWithHour(isoDate: string, hour: number): string {
 /**
  * Human-readable check-in/out for UI (ISO, SDK 12-char, or free text).
  * Date-only values use `defaultHour` (check-in 14:00, check-out 12:00) so format matches timed strings.
+ * Local datetime with an explicit time is displayed as-is — `defaultHour` is NOT applied.
  */
 export function formatHotelDateTime(
   s: string | null | undefined,
@@ -139,6 +148,13 @@ export function formatHotelDateTime(
       `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(8, 10)}:${t.slice(10, 12)}:00`,
     )
     if (!Number.isNaN(d.getTime())) return formatLocalDateTime(d)
+  }
+  // Local ISO datetime with a real time component — display as-is, ignore defaultHour
+  const localDt = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(t)
+  if (localDt && !t.endsWith('Z') && !/T00:00:00/.test(t)) {
+    const [, y, mo, d, h, min] = localDt
+    const date = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(min), 0, 0)
+    if (!Number.isNaN(date.getTime())) return formatLocalDateTime(date)
   }
   const normalized = normalizeHotelStayDate(null, t)
   if (normalized) {
