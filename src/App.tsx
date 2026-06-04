@@ -198,20 +198,7 @@ function formatLocalFromIso(iso: string | null | undefined): string {
 /** Same cap as portal `AdminPortalEncodeModal` (1–8 keys per stay). */
 const MAX_ROOM_KEYS = 8
 
-function nextKeySerialFromHistory(
-  history: KeyHistoryRow[],
-  confirmation: string | null | undefined,
-): number {
-  const conf = confirmation?.trim()
-  if (!conf) return 1
-  let max = 0
-  for (const row of history) {
-    if (row.confirmation_number?.trim() !== conf) continue
-    const s = typeof row.card_serial === 'number' ? row.card_serial : 0
-    if (s > max) max = s
-  }
-  return Math.min(MAX_ROOM_KEYS, Math.max(1, max + 1))
-}
+
 
 const emptyIdDetail: IdScanDetailGuru = {
   firstName: null,
@@ -262,8 +249,9 @@ function App() {
   const [keyHistory, setKeyHistory] = useState<KeyHistoryRow[]>([])
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyNotice, setKeyNotice] = useState<string | null>(null)
-  const [keyCardSerial, setKeyCardSerial] = useState<number>(1)
   const [keyBlocks, setKeyBlocks] = useState<KeyBlock[]>([])
+  const [sessionCheckinTime, setSessionCheckinTime] = useState<string | null>(null)
+  const [sessionNextSerial, setSessionNextSerial] = useState<number>(2)
   const [showOverridePin, setShowOverridePin] = useState(false)
   const [overridePinInput, setOverridePinInput] = useState('')
   const [overridePinError, setOverridePinError] = useState<string | null>(null)
@@ -400,10 +388,6 @@ function App() {
     void refreshKeyHistory()
   }, [refreshKeyHistory, state?.reservation?.confirmationNumber])
 
-  // Keep "Key #N" in sync with key_history for this confirmation (portal-style serial).
-  useEffect(() => {
-    setKeyCardSerial(nextKeySerialFromHistory(keyHistory, state?.reservation?.confirmationNumber))
-  }, [state?.reservation?.confirmationNumber, keyHistory])
 
   // New PMS guest load: show full stay on Key tab and drop stale read-card / key-block UI.
   useEffect(() => {
@@ -416,6 +400,8 @@ function App() {
     setShowOverridePin(false)
     setOverridePinInput('')
     setOverridePinError(null)
+    setSessionCheckinTime(null)
+    setSessionNextSerial(2)
     if (state?.reservation?.roomNumber) setActiveTab('key')
   }, [state?.reservation?.confirmationNumber, state?.reservation?.roomNumber])
 
@@ -1899,7 +1885,7 @@ function App() {
   }
 
   /** Encode one key (portal: IN time = encode moment; checkout from stay). */
-  async function runEncodeKey(serial: number, managerPin?: string): Promise<boolean> {
+  async function runEncodeKey(serial: number, managerPin?: string, checkinOverride?: string): Promise<boolean> {
     if (!res?.roomNumber || !res?.checkOutDate) {
       setKeyNotice('Load a reservation with room and check-out before encoding.')
       return false
@@ -1914,7 +1900,7 @@ function App() {
     try {
       const _now = new Date()
       const _p = (n: number) => String(n).padStart(2, '0')
-      const checkinNow = `${_now.getFullYear()}${_p(_now.getMonth() + 1)}${_p(_now.getDate())}${_p(_now.getHours())}${_p(_now.getMinutes())}`
+      const checkinNow = checkinOverride ?? `${_now.getFullYear()}${_p(_now.getMonth() + 1)}${_p(_now.getDate())}${_p(_now.getHours())}${_p(_now.getMinutes())}`
       const result = (await chrome.runtime.sendMessage({
         type: 'RFID_MAKE_KEY',
         roomNumber: res.roomNumber,
@@ -1960,7 +1946,6 @@ function App() {
       }
 
       if (result.state) setState(result.state)
-      setKeyCardSerial(Math.min(MAX_ROOM_KEYS + 1, serial + 1))
       void refreshKeyHistory()
       return true
     } catch (e) {
@@ -1976,26 +1961,42 @@ function App() {
     setShowOverridePin(false)
     setOverridePinInput('')
     setOverridePinError(null)
-    await runEncodeKey(keyCardSerial)
+    const d = new Date()
+    const p2 = (n: number) => String(n).padStart(2, '0')
+    const freshCheckin = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}`
+    setSessionCheckinTime(freshCheckin)
+    setSessionNextSerial(2)
+    await runEncodeKey(1, undefined, freshCheckin)
   }
 
   async function onNextKey() {
-    if (keyCardSerial <= 1) {
-      setKeyNotice('Encode the first key with Encode Key, then use Next key for each additional card.')
+    if (!sessionCheckinTime) {
+      setKeyNotice('Press Encode Key first to start a new key session.')
+      return
+    }
+    if (sessionNextSerial > MAX_ROOM_KEYS) {
+      setKeyNotice(`Maximum ${MAX_ROOM_KEYS} keys per stay.`)
       return
     }
     setKeyBlocks([])
     setShowOverridePin(false)
     setOverridePinInput('')
     setOverridePinError(null)
-    await runEncodeKey(keyCardSerial)
+    const serial = sessionNextSerial
+    setSessionNextSerial(serial + 1)
+    await runEncodeKey(serial, undefined, sessionCheckinTime)
   }
 
   async function onManagerOverrideKey() {
     const pin = overridePinInput.trim()
     if (!pin) return
     setOverridePinError(null)
-    const success = await runEncodeKey(keyCardSerial, pin)
+    const d = new Date()
+    const p2 = (n: number) => String(n).padStart(2, '0')
+    const freshCheckin = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}`
+    setSessionCheckinTime(freshCheckin)
+    setSessionNextSerial(2)
+    const success = await runEncodeKey(1, pin, freshCheckin)
     if (!success && keyBlocks.length > 0) {
       setOverridePinError('Incorrect PIN or override not available.')
     }
@@ -2049,6 +2050,8 @@ function App() {
         return
       }
       if (result.state) setState(result.state)
+      setSessionCheckinTime(null)
+      setSessionNextSerial(2)
       void refreshKeyHistory()
       const notice = result.dbWarning
         ? `Lost key encoded. Warning: ${result.dbWarning}`
@@ -2897,8 +2900,8 @@ function App() {
                 <>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
                     <span style={{ fontSize: 12, color: '#c9d1d9' }}>
-                      Key #{Math.min(keyCardSerial, MAX_ROOM_KEYS)}
-                      {keyCardSerial > MAX_ROOM_KEYS ? ' (max reached)' : ''}
+                      Key #{sessionCheckinTime ? sessionNextSerial : 1}
+                      {sessionCheckinTime && sessionNextSerial > MAX_ROOM_KEYS ? ' (max reached)' : ''}
                     </span>
                     <button
                       type="button"
@@ -2908,12 +2911,12 @@ function App() {
                         keyBusy ||
                         hw.rfid_encoder !== 'connected' ||
                         !state.auth.signedIn ||
-                        keyCardSerial <= 1 ||
-                        keyCardSerial > MAX_ROOM_KEYS
+                        !sessionCheckinTime ||
+                        sessionNextSerial > MAX_ROOM_KEYS
                       }
                       title={
-                        keyCardSerial <= 1
-                          ? 'Encode key 1 first'
+                        !sessionCheckinTime
+                          ? 'Press Encode Key first'
                           : 'Swap in a blank card and encode the next copy'
                       }
                       onClick={() => void onNextKey()}
@@ -2922,12 +2925,12 @@ function App() {
                     </button>
                   </div>
 
-                  {keyCardSerial > 1 && keyCardSerial <= MAX_ROOM_KEYS ? (
+                  {sessionCheckinTime && sessionNextSerial <= MAX_ROOM_KEYS ? (
                     <p className="fdn-help" style={{ marginTop: 6 }}>
                       Remove the last card, place a blank card on the encoder, then press Next key (key{' '}
-                      {keyCardSerial} of {MAX_ROOM_KEYS}).
+                      {sessionNextSerial} of {MAX_ROOM_KEYS}).
                     </p>
-                  ) : keyCardSerial === 1 ? (
+                  ) : !sessionCheckinTime ? (
                     <p className="fdn-help" style={{ marginTop: 6 }}>
                       First card: press Encode Key. Additional cards: swap blank, then Next key.
                     </p>
@@ -2940,16 +2943,11 @@ function App() {
                       disabled={
                         keyBusy ||
                         hw.rfid_encoder !== 'connected' ||
-                        !state.auth.signedIn ||
-                        keyCardSerial > MAX_ROOM_KEYS
+                        !state.auth.signedIn
                       }
                       onClick={() => void onMakeKey()}
                     >
-                      {keyBusy
-                        ? 'Encoding…'
-                        : keyCardSerial <= 1
-                          ? 'Encode Key'
-                          : `Encode key ${keyCardSerial}`}
+                      {keyBusy ? 'Encoding…' : 'Encode Key'}
                     </button>
                     <button
                       type="button"
