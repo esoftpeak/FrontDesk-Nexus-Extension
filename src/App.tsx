@@ -1912,10 +1912,13 @@ function App() {
     setKeyBusy(true)
     setKeyNotice(null)
     try {
+      const _now = new Date()
+      const _p = (n: number) => String(n).padStart(2, '0')
+      const checkinNow = `${_now.getFullYear()}${_p(_now.getMonth() + 1)}${_p(_now.getDate())}${_p(_now.getHours())}${_p(_now.getMinutes())}`
       const result = (await chrome.runtime.sendMessage({
         type: 'RFID_MAKE_KEY',
         roomNumber: res.roomNumber,
-        checkinTime: res.checkInDate ?? new Date().toISOString(),
+        checkinTime: checkinNow,
         checkoutTime: res.checkOutDate,
         cardSerial: serial,
         managerPin: managerPin ?? undefined,
