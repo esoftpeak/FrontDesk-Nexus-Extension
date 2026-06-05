@@ -38,6 +38,13 @@ import {
 import { buildIdScanLogFromScanRows } from '../lib/id-scan-log'
 import { searchIdScanHistory } from '../lib/id-scan-history-search'
 import { buildSignatureLogFromRows } from '../lib/signature-log'
+import {
+  createRoomBlockSw,
+  fetchKeyBoardData,
+  fetchKeyLedger,
+  keysWriteAuthorized,
+  releaseRoomBlockSw,
+} from '../lib/keys-operations-sw'
 import { isCompletePhoneForLookup } from '../lib/phone-lookup'
 import {
   isCompleteTwoSidedScan,
@@ -2035,6 +2042,126 @@ async function fetchSignaturesByDate(
   return { ok: true, signatureLog }
 }
 
+async function requireKeysWriteAccess(managerPin?: string): Promise<ExtensionResponse | null> {
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+  const settings = await loadExtensionHotelSettings(client)
+  const ok = keysWriteAuthorized(cachedRole, managerPin, settings.managerOverridePin)
+  if (!ok) {
+    return {
+      ok: false,
+      error: 'Admin role or valid manager PIN required for this action.',
+    }
+  }
+  return null
+}
+
+async function handleCreateRoomBlock(
+  msg: Extract<ExtensionMessage, { type: 'CREATE_ROOM_BLOCK' }>,
+): Promise<ExtensionResponse> {
+  const denied = await requireKeysWriteAccess(msg.managerPin)
+  if (denied) return denied
+
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  const user = sess.session!.user
+
+  let blockedUntil: string | null = null
+  const now = new Date()
+  if (msg.durationKind === 'hours') {
+    const h = Math.max(1, msg.durationValue ?? 4)
+    blockedUntil = new Date(now.getTime() + h * 3_600_000).toISOString()
+  } else if (msg.durationKind === 'days') {
+    const d = Math.max(1, msg.durationValue ?? 1)
+    blockedUntil = new Date(now.getTime() + d * 86_400_000).toISOString()
+  }
+
+  const { error } = await createRoomBlockSw(client, {
+    roomNumber: msg.roomNumber,
+    blockedUntil,
+    reason: msg.reason ?? null,
+    userId: user.id,
+    username: user.email ?? null,
+    role: cachedRole,
+    effectiveFromVacancy: Boolean(msg.effectiveFromVacancy),
+  })
+  if (error) return { ok: false, error }
+  return { ok: true }
+}
+
+async function handleReleaseRoomBlock(
+  msg: Extract<ExtensionMessage, { type: 'RELEASE_ROOM_BLOCK' }>,
+): Promise<ExtensionResponse> {
+  const denied = await requireKeysWriteAccess(msg.managerPin)
+  if (denied) return denied
+
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  const user = sess.session!.user
+
+  const { error } = await releaseRoomBlockSw(client, {
+    blockId: msg.blockId,
+    roomNumber: msg.roomNumber,
+    userId: user.id,
+    username: user.email ?? null,
+    role: cachedRole,
+  })
+  if (error) return { ok: false, error }
+  return { ok: true }
+}
+
+async function handleKeysAdminEncode(
+  msg: Extract<ExtensionMessage, { type: 'KEYS_ADMIN_ENCODE' }>,
+): Promise<ExtensionResponse> {
+  const denied = await requireKeysWriteAccess(msg.managerPin)
+  if (denied) return denied
+
+  const result = await runRfidMakeKey({
+    type: 'RFID_MAKE_KEY',
+    roomNumber: msg.roomNumber,
+    checkinTime: msg.checkinTime,
+    checkoutTime: msg.checkoutTime,
+    cardSerial: msg.cardSerial ?? 1,
+    confirmationNumber: msg.confirmationNumber,
+    portalAdminEncode: true,
+  })
+  return result as ExtensionResponse
+}
+
+async function fetchKeyBoard(businessDate: string, agentFilter?: string): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+  try {
+    const { board, stats } = await fetchKeyBoardData(client, businessDate, agentFilter)
+    return { ok: true, keyBoard: board, keyBoardStats: stats }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Could not load room board'
+    return { ok: false, error: message }
+  }
+}
+
+async function fetchKeyLedgerMsg(
+  fromDate: string,
+  toDate: string,
+  agentFilter?: string,
+  roomFilter?: string,
+): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+  try {
+    const keyLedger = await fetchKeyLedger(client, fromDate, toDate, agentFilter, roomFilter)
+    return { ok: true, keyLedger }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Could not load key history'
+    return { ok: false, error: message }
+  }
+}
+
 async function verifyManagerPin(pin: string): Promise<ExtensionResponse> {
   const settings = await loadExtensionHotelSettings(getClient())
   if (!settings.managerOverridePin) {
@@ -2283,6 +2410,26 @@ async function handleMessage(
 
   if (msg.type === 'VERIFY_MANAGER_PIN') {
     return verifyManagerPin(msg.pin)
+  }
+
+  if (msg.type === 'GET_KEY_BOARD') {
+    return fetchKeyBoard(msg.businessDate, msg.agentFilter)
+  }
+
+  if (msg.type === 'GET_KEY_LEDGER') {
+    return fetchKeyLedgerMsg(msg.fromDate, msg.toDate, msg.agentFilter, msg.roomFilter)
+  }
+
+  if (msg.type === 'CREATE_ROOM_BLOCK') {
+    return handleCreateRoomBlock(msg)
+  }
+
+  if (msg.type === 'RELEASE_ROOM_BLOCK') {
+    return handleReleaseRoomBlock(msg)
+  }
+
+  if (msg.type === 'KEYS_ADMIN_ENCODE') {
+    return handleKeysAdminEncode(msg)
   }
 
   if (msg.type === 'GET_KEY_HISTORY') {
@@ -2701,9 +2848,14 @@ async function handleMessage(
 
   if (msg.type === 'RFID_MAKE_KEY') {
     if (msg.portalAdminEncode && cachedRole !== 'admin') {
-      return {
-        ok: false,
-        error: 'Portal admin key encode requires an admin session in the extension (session bridge from the portal).',
+      const settings = await loadExtensionHotelSettings(getClient())
+      const pinOk = keysWriteAuthorized(cachedRole, msg.managerPin, settings.managerOverridePin)
+      if (!pinOk) {
+        return {
+          ok: false,
+          error:
+            'Admin encode requires an admin session or valid manager PIN in the extension.',
+        }
       }
     }
     return runRfidMakeKey(msg)

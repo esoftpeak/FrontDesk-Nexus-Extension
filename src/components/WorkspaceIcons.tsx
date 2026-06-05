@@ -64,6 +64,19 @@ export function IconHistory({ className, title }: IconProps) {
   )
 }
 
+/** Hotel keys / room board — grid layout */
+export function IconKeysBoard({ className, title }: IconProps) {
+  return (
+    <svg {...base} className={className} aria-hidden={title ? undefined : true}>
+      {title ? <title>{title}</title> : null}
+      <rect x="3" y="3" width="8" height="8" rx="1" />
+      <rect x="13" y="3" width="8" height="8" rx="1" />
+      <rect x="3" y="13" width="8" height="8" rx="1" />
+      <rect x="13" y="13" width="8" height="8" rx="1" />
+    </svg>
+  )
+}
+
 /** Classic skeleton key — head top-right, blade to bottom-left (matches portal key art). */
 export function IconKey({ className, title }: IconProps) {
   return (

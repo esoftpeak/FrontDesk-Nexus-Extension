@@ -54,6 +54,7 @@ import { formatHotelDateTime } from './lib/hotel-dates'
 import { GuestStaySummary } from './components/GuestStaySummary'
 import { CheckInHistoryPanel } from './components/CheckInHistoryPanel'
 import { SignaturesPdfPanel } from './components/SignaturesPdfPanel'
+import { KeysOperationsPanel } from './components/KeysOperationsPanel'
 import { LoadingScreen } from './components/LoadingScreen'
 import { PanelHeader } from './components/PanelHeader'
 import {
@@ -62,6 +63,7 @@ import {
   IconHistory,
   IconId,
   IconKey,
+  IconKeysBoard,
   IconPayment,
   IconRefresh,
   IconSignature,
@@ -324,7 +326,7 @@ function App() {
   const lastPanelInteractionRef = useRef<number>(Date.now())
   /** Seconds remaining before auto-logout warning fires; null = not active. */
   const [logoutCountdown, setLogoutCountdown] = useState<number | null>(null)
-  type WorkspaceTab = 'id' | 'history' | 'payment' | 'signature' | 'key'
+  type WorkspaceTab = 'id' | 'history' | 'payment' | 'signature' | 'keys' | 'key'
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('id')
 
   const refreshIdScanHistory = useCallback(async () => {
@@ -2200,9 +2202,16 @@ function App() {
         Icon: IconSignature,
       },
       {
+        id: 'keys',
+        label: 'Keys',
+        hint: 'Room board & key ledger',
+        status: 'idle',
+        Icon: IconKeysBoard,
+      },
+      {
         id: 'key',
-        label: 'Key',
-        hint: 'Encode room keys',
+        label: 'Encode',
+        hint: 'Encode key for open guest',
         status:
           hw.rfid_encoder !== 'connected' ? 'warn' : keyHistory.length > 0 ? 'ready' : res?.roomNumber ? 'idle' : 'warn',
         Icon: IconKey,
@@ -2282,7 +2291,9 @@ function App() {
 
       <div className="fdn-shell">
         <nav className="fdn-sidebar" aria-label="Workspace">
-          {workspaceTabs.map((tab) => (
+          {workspaceTabs
+            .filter((tab) => tab.id !== 'keys' || state.auth.role !== 'housekeeper')
+            .map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -2301,7 +2312,7 @@ function App() {
             >
               <tab.Icon className="fdn-nav-btn__icon" />
             </button>
-          ))}
+            ))}
         </nav>
 
         <main className="fdn-main">
@@ -2850,6 +2861,15 @@ function App() {
               signedIn={state.auth.signedIn}
               userRole={state.auth.role}
               hasManagerPin={state.hasManagerPin}
+            />
+          ) : null}
+
+          {activeTab === 'keys' ? (
+            <KeysOperationsPanel
+              signedIn={state.auth.signedIn}
+              userRole={state.auth.role}
+              hasManagerPin={state.hasManagerPin}
+              encoderConnected={hw.rfid_encoder === 'connected'}
             />
           ) : null}
 

@@ -76,6 +76,51 @@ export type IdScanLogEntry = {
   piiError: string | null
 }
 
+/** Keys room board row (portal Keys → Room board). */
+export type KeyBoardEntry = {
+  roomNumber: string
+  guestName: string | null
+  confirmationNumber: string | null
+  checkinTime: string | null
+  checkoutTime: string | null
+  encodedBy: string | null
+  cardSerial: number | null
+  blocked: boolean
+  blockSummary: string | null
+  blockId: string | null
+  deferredBlock: boolean
+  roomStatus: string | null
+  hasKey: boolean
+}
+
+/** Keys encode ledger row. */
+export type KeyLedgerEntry = {
+  id: string
+  roomNumber: string
+  guestName: string | null
+  confirmationNumber: string
+  cardSerial: number | null
+  checkinTime: string | null
+  checkoutTime: string | null
+  encodedBy: string | null
+  encodedAt: string
+}
+
+export type RoomBlockEntry = {
+  id: string
+  roomNumber: string
+  blockedUntil: string | null
+  reason: string | null
+  createdAt: string
+  effectiveFromVacancy: boolean
+}
+
+export type KeyBoardStats = {
+  total: number
+  withKey: number
+  vacant: number
+}
+
 /** Signature PDF log row (portal PDFs tab). */
 export type SignatureLogEntry = {
   id: string
@@ -148,6 +193,39 @@ export type ExtensionMessage =
   | { type: 'GET_SIGNATURES_BY_DATE'; fromDate: string; toDate: string; agentFilter?: string }
   /** Verify hotel manager/admin PIN (download & export on PDFs tab). */
   | { type: 'VERIFY_MANAGER_PIN'; pin: string }
+  /** Portal Keys — room board for a business date. */
+  | { type: 'GET_KEY_BOARD'; businessDate: string; agentFilter?: string }
+  /** Portal Keys — encode ledger for date range. */
+  | {
+      type: 'GET_KEY_LEDGER'
+      fromDate: string
+      toDate: string
+      agentFilter?: string
+      roomFilter?: string
+    }
+  /** Block a room (admin or manager PIN). */
+  | {
+      type: 'CREATE_ROOM_BLOCK'
+      roomNumber: string
+      durationKind: 'hours' | 'days' | 'unlimited'
+      durationValue?: number
+      reason?: string
+      effectiveFromVacancy?: boolean
+      managerPin?: string
+    }
+  /** Release an active room block. */
+  | { type: 'RELEASE_ROOM_BLOCK'; blockId: string; roomNumber: string; managerPin?: string }
+  /** Admin-style encode from Keys board (admin or manager PIN). */
+  | {
+      type: 'KEYS_ADMIN_ENCODE'
+      roomNumber: string
+      checkinTime: string
+      checkoutTime: string
+      confirmationNumber: string
+      guestName?: string | null
+      cardSerial?: number
+      managerPin?: string
+    }
   | { type: 'GET_KEY_HISTORY' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
   /** Manual scrape: eZee tab with Arrivals drawer open (same payload as auto). */
@@ -272,6 +350,9 @@ export type ExtensionResponse =
       idScanHistory?: IdScanHistoryRow[]
       idScanLog?: IdScanLogEntry[]
       signatureLog?: SignatureLogEntry[]
+      keyBoard?: KeyBoardEntry[]
+      keyBoardStats?: KeyBoardStats
+      keyLedger?: KeyLedgerEntry[]
       keyHistory?: KeyHistoryRow[]
       signaturePath?: string
       returningGuestHistory?: ReturningGuestRecord[]
