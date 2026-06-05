@@ -343,6 +343,8 @@ export type ExtensionMessage =
   | { type: 'GET_RETURNING_GUEST_HISTORY'; idNumber: string }
   /** Look up prior stays / ID profiles by phone number hash. */
   | { type: 'GET_GUEST_HISTORY_BY_PHONE'; phone: string }
+  /** Search PMS reservations by last name — fills the search field on the active PMS tab. */
+  | { type: 'FIND_GUEST_IN_PMS'; lastName: string }
 export type ExtensionResponse =
   | {
       ok: true

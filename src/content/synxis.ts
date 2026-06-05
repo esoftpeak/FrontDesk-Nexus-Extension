@@ -101,9 +101,37 @@ function extractConfirmationNumber(): Promise<string> {
   })
 }
 
+const SYNXIS_SEARCH_SELECTORS = [
+  'input[placeholder*="Find reservations" i]',
+  'input[placeholder*="Find" i]',
+  'input[placeholder*="Search" i]',
+  'input[type="search"]',
+]
+
+function fillSynxisSearch(lastName: string): { ok: boolean; error?: string } {
+  let el: HTMLInputElement | null = null
+  for (const sel of SYNXIS_SEARCH_SELECTORS) {
+    el = document.querySelector<HTMLInputElement>(sel)
+    if (el) break
+  }
+  if (!el) {
+    return { ok: false, error: 'Search input not found. Make sure you are on the Guest Board page.' }
+  }
+  el.focus()
+  const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+  if (nativeSetter) nativeSetter.call(el, lastName)
+  else el.value = lastName
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+  el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  return { ok: true }
+}
+
 chrome.runtime.onMessage.addListener(
   (
-    message: { type?: string; fields?: Record<string, string> },
+    message: { type?: string; fields?: Record<string, string>; lastName?: string },
     _sender,
     sendResponse: (r: InjectResult | { ok: boolean; error?: string; confirmation?: string }) => void,
   ) => {
@@ -121,6 +149,10 @@ chrome.runtime.onMessage.addListener(
           }),
         )
       return true
+    }
+    if (message?.type === 'FDN_FIND_GUEST' && message.lastName) {
+      sendResponse(fillSynxisSearch(message.lastName))
+      return
     }
     // FDN_FILL_GUEST_FORM is handled by synxis-sph-autoload.ts inside the SphContentIframe
   },

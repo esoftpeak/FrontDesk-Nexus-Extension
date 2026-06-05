@@ -3026,6 +3026,23 @@ async function handleMessage(
     return { ok: true, state: await getState() }
   }
 
+  if (msg.type === 'FIND_GUEST_IN_PMS') {
+    const tabId = await resolvePmsTabId()
+    if (tabId == null) {
+      return { ok: false, error: 'No SynXis or eZee tab found. Open the reservations page first.' }
+    }
+    try {
+      const tabRes = await chrome.tabs.sendMessage(tabId, {
+        type: 'FDN_FIND_GUEST',
+        lastName: msg.lastName,
+      })
+      return { ok: true, ...(tabRes as object) }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Find Guest message failed'
+      return { ok: false, error: message }
+    }
+  }
+
   return { ok: false, error: 'Unknown message type' }
 }
 

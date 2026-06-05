@@ -185,11 +185,33 @@ for (const ms of BACKUP_RUN_AT_MS) {
   window.setTimeout(() => void runDetection(), ms)
 }
 
+const EZEE_SEARCH_SELECTORS = [
+  'input[placeholder*="Search" i]',
+  'input.ant-input[type="text"]',
+  'input[placeholder*="Guest" i]',
+]
+
+function fillEzeeSearch(lastName: string): { ok: boolean; error?: string } {
+  let el: HTMLInputElement | null = null
+  for (const sel of EZEE_SEARCH_SELECTORS) {
+    el = document.querySelector<HTMLInputElement>(sel)
+    if (el) break
+  }
+  if (!el) {
+    return { ok: false, error: 'Search input not found. Make sure you are on the reservations list page.' }
+  }
+  reactSet(el, lastName)
+  el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  return { ok: true }
+}
+
 chrome.runtime.onMessage.addListener(
   (
-    message: { type?: string; fields?: Record<string, string>; payload?: LastScanResult },
+    message: { type?: string; fields?: Record<string, string>; payload?: LastScanResult; lastName?: string },
     _sender: chrome.runtime.MessageSender,
-    sendResponse: (r: InjectResult | ReturnType<typeof buildExtractPayload> | { ok: boolean }) => void,
+    sendResponse: (r: InjectResult | ReturnType<typeof buildExtractPayload> | { ok: boolean; error?: string }) => void,
   ) => {
     if (message?.type === 'FDN_INJECT' && message.fields) {
       sendResponse(injectFields(EZEE_INJECT_SELECTORS, message.fields))
@@ -204,6 +226,10 @@ chrome.runtime.onMessage.addListener(
       console.log('[FDN] received FDN_FILL_GUEST_FORM, payload:', payload)
       triggerFill(payload)
       sendResponse({ ok: true })
+      return
+    }
+    if (message?.type === 'FDN_FIND_GUEST' && message.lastName) {
+      sendResponse(fillEzeeSearch(message.lastName))
       return
     }
   },

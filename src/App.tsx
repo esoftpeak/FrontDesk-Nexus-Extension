@@ -262,6 +262,7 @@ function App() {
   const [cancelCardBusy, setCancelCardBusy] = useState(false)
   const [rfidCheckBusy, setRfidCheckBusy] = useState(false)
   const [pmsRefreshBusy, setPmsRefreshBusy] = useState(false)
+  const [findGuestBusy, setFindGuestBusy] = useState(false)
   const [historyEditBusy, setHistoryEditBusy] = useState(false)
   const [, setRfidTick] = useState(0)
   const [readCardResult, setReadCardResult] = useState<{
@@ -1311,6 +1312,26 @@ function App() {
         document_type: mergedParsed.idType ?? null,
       },
     })
+  }
+
+  async function onFindGuest() {
+    const lastName = idDetail.lastName?.trim()
+    if (!lastName) return
+    setFindGuestBusy(true)
+    setFormError(null)
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'FIND_GUEST_IN_PMS',
+        lastName,
+      })) as { ok: boolean; error?: string }
+      if (!res?.ok) {
+        setFormError(res?.error ?? 'Could not find guest in PMS.')
+      }
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Find Guest failed.')
+    } finally {
+      setFindGuestBusy(false)
+    }
   }
 
   async function onTransferToPms() {
@@ -2800,6 +2821,15 @@ function App() {
               </div>
 
               <div className="fdn-panel__footer">
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--secondary"
+                  disabled={findGuestBusy || !idDetail.lastName?.trim()}
+                  title={!idDetail.lastName?.trim() ? 'Scan an ID first' : 'Search PMS reservations by last name'}
+                  onClick={() => void onFindGuest()}
+                >
+                  {findGuestBusy ? 'Searching…' : 'Find Guest'}
+                </button>
                 <button
                   type="button"
                   className="fdn-btn fdn-btn--secondary fdn-btn--with-icon"
