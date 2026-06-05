@@ -560,6 +560,44 @@ export function KeysOperationsPanel({
           >
             {loading ? 'Loading…' : 'Reload'}
           </button>
+          {innerTab === 'board' && canEdit ? (
+            <>
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--primary fdn-btn--xs"
+                disabled={!selected || encodeBusy || !encoderConnected}
+                title={
+                  !selected
+                    ? 'Select a room first'
+                    : !encoderConnected
+                      ? 'Connect RFID encoder'
+                      : 'Encode key for selected room'
+                }
+                onClick={() => void handleEncode()}
+              >
+                {encodeBusy ? '…' : 'Encode key'}
+              </button>
+              {selected?.blocked && selected.blockId ? (
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--secondary fdn-btn--xs"
+                  disabled={!selected || blockBusy}
+                  onClick={() => void handleUnblock()}
+                >
+                  {blockBusy ? '…' : 'Unblock'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--secondary fdn-btn--xs"
+                  disabled={!selected || blockBusy}
+                  onClick={() => setShowBlockForm((v) => !v)}
+                >
+                  Block room
+                </button>
+              )}
+            </>
+          ) : null}
           {innerTab === 'history' ? (
             <button
               type="button"
@@ -666,39 +704,6 @@ export function KeysOperationsPanel({
                     </>
                   ) : null}
                 </dl>
-
-                {canEdit ? (
-                  <div className="fdn-keys-ops__actions">
-                    <button
-                      type="button"
-                      className="fdn-btn fdn-btn--primary fdn-btn--xs"
-                      disabled={encodeBusy || !encoderConnected}
-                      title={!encoderConnected ? 'Connect RFID encoder' : 'Encode key for this room'}
-                      onClick={() => void handleEncode()}
-                    >
-                      {encodeBusy ? '…' : 'Encode key'}
-                    </button>
-                    {selected.blocked && selected.blockId ? (
-                      <button
-                        type="button"
-                        className="fdn-btn fdn-btn--secondary fdn-btn--xs"
-                        disabled={blockBusy}
-                        onClick={() => void handleUnblock()}
-                      >
-                        {blockBusy ? '…' : 'Unblock'}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="fdn-btn fdn-btn--secondary fdn-btn--xs"
-                        disabled={blockBusy}
-                        onClick={() => setShowBlockForm((v) => !v)}
-                      >
-                        Block room
-                      </button>
-                    )}
-                  </div>
-                ) : null}
 
                 {showBlockForm && canEdit && !selected.blocked ? (
                   <div className="fdn-keys-ops__block-form">

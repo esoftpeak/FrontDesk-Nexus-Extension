@@ -2513,14 +2513,24 @@ body {
 }
 
 .fdn-keys-ops__list-wrap {
-  flex: 0 0 auto;
-  max-height: 32%;
-  min-height: 5.5rem;
+  flex: 1;
+  min-height: 14rem;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid #30363d;
   border-radius: 6px;
   background: #0d1117;
+}
+
+.fdn-keys-ops__list-wrap .fdn-id-log__table th,
+.fdn-keys-ops__list-wrap .fdn-id-log__table td {
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.fdn-keys-ops__list-wrap .fdn-id-log__cell-guest {
+  max-width: none;
+  font-size: 12px;
 }
 
 .fdn-keys-ops__list-wrap--ledger {
@@ -2550,10 +2560,11 @@ body {
 }
 
 .fdn-keys-ops__detail {
-  flex: 1;
+  flex: 0 0 auto;
+  max-height: 38%;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border: 1px solid #30363d;
   border-radius: 6px;
   background: #161b22;
@@ -2564,13 +2575,6 @@ body {
   font-size: 14px;
   font-weight: 700;
   color: #58a6ff;
-}
-
-.fdn-keys-ops__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
 }
 
 .fdn-keys-ops__block-form {
