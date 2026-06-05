@@ -1578,11 +1578,12 @@ async function moveWindowToSecondDisplay(windowId: number): Promise<void> {
     const second = displays.find(d => !d.isPrimary) ?? displays[1]
     if (!second) return
     await chrome.windows.update(windowId, {
-      left: second.workArea.left,
-      top: second.workArea.top,
-      width: second.workArea.width,
-      height: second.workArea.height,
-      state: 'normal',
+      left:    second.workArea.left,
+      top:     second.workArea.top,
+      width:   second.workArea.width,
+      height:  second.workArea.height,
+      state:   'normal',
+      focused: true,
     })
   } catch (e) {
     console.warn('[FDN SW] moveWindowToSecondDisplay failed:', e)
@@ -1773,22 +1774,31 @@ function eZeeSignOverlayFunc(conf: string): void {
   ctx.lineJoin    = 'round'
 
   let drawing = false
-  function getPos(e: MouseEvent | TouchEvent): { x: number; y: number } {
-    const r   = canvas.getBoundingClientRect()
-    const src = 'touches' in e ? (e as TouchEvent).touches[0]! : (e as MouseEvent)
+  function getPos(e: PointerEvent): { x: number; y: number } {
+    const r = canvas.getBoundingClientRect()
     return {
-      x: (src.clientX - r.left) * (canvas.width  / r.width),
-      y: (src.clientY - r.top)  * (canvas.height / r.height),
+      x: (e.clientX - r.left) * (canvas.width  / r.width),
+      y: (e.clientY - r.top)  * (canvas.height / r.height),
     }
   }
 
-  canvas.addEventListener('mousedown',  e => { drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y) })
-  canvas.addEventListener('mousemove',  e => { if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke() })
-  canvas.addEventListener('mouseup',    () => { drawing = false })
-  canvas.addEventListener('mouseleave', () => { drawing = false })
-  canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y) }, { passive: false })
-  canvas.addEventListener('touchmove',  e => { e.preventDefault(); if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke() }, { passive: false })
-  canvas.addEventListener('touchend',   () => { drawing = false })
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault()
+    canvas.setPointerCapture(e.pointerId)
+    drawing = true
+    ctx.beginPath()
+    const p = getPos(e)
+    ctx.moveTo(p.x, p.y)
+  })
+  canvas.addEventListener('pointermove', e => {
+    if (!drawing) return
+    const p = getPos(e)
+    ctx.lineTo(p.x, p.y)
+    ctx.stroke()
+  })
+  canvas.addEventListener('pointerup',     () => { drawing = false })
+  canvas.addEventListener('pointercancel', () => { drawing = false })
+  canvas.addEventListener('pointerleave',  () => { drawing = false })
 
   btnClear.onclick  = () => ctx.clearRect(0, 0, canvas.width, canvas.height)
   btnCancel.onclick = () => overlay.remove()

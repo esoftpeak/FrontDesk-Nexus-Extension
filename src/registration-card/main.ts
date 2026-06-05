@@ -72,12 +72,14 @@ async function moveToSecondScreen() {
     if (win.id === undefined) return
 
     await chrome.windows.update(win.id, {
-      left:   second.workArea.left,
-      top:    second.workArea.top,
-      width:  second.workArea.width,
-      height: second.workArea.height,
-      state:  'normal',
+      left:    second.workArea.left,
+      top:     second.workArea.top,
+      width:   second.workArea.width,
+      height:  second.workArea.height,
+      state:   'normal',
+      focused: true,
     })
+    window.focus()
     console.log('[FDN RegCard] Moved to:', second.name, second.workArea)
   } catch (e) {
     console.error('[FDN RegCard] Display detection failed:', e)
@@ -97,21 +99,33 @@ function setupSignatureCanvas() {
 
   let drawing = false
 
-  function getPos(e: MouseEvent | TouchEvent) {
-    const r      = canvas.getBoundingClientRect()
-    const src    = 'touches' in e ? e.touches[0] : e
-    const scaleX = canvas.width  / r.width
-    const scaleY = canvas.height / r.height
-    return { x: (src.clientX - r.left) * scaleX, y: (src.clientY - r.top) * scaleY }
+  function getPos(e: PointerEvent) {
+    const r = canvas.getBoundingClientRect()
+    return {
+      x: (e.clientX - r.left) * (canvas.width  / r.width),
+      y: (e.clientY - r.top)  * (canvas.height / r.height),
+    }
   }
 
-  canvas.addEventListener('mousedown',  e => { drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y) })
-  canvas.addEventListener('mousemove',  e => { if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke() })
-  canvas.addEventListener('mouseup',    () => { drawing = false })
-  canvas.addEventListener('mouseleave', () => { drawing = false })
-  canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; ctx.beginPath(); const p = getPos(e); ctx.moveTo(p.x, p.y) }, { passive: false })
-  canvas.addEventListener('touchmove',  e => { e.preventDefault(); if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke() }, { passive: false })
-  canvas.addEventListener('touchend',   () => { drawing = false })
+  // Pointer Events handle mouse, touch, AND stylus pen uniformly.
+  // setPointerCapture keeps events flowing even when the pen briefly leaves the canvas edge.
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault()
+    canvas.setPointerCapture(e.pointerId)
+    drawing = true
+    ctx.beginPath()
+    const p = getPos(e)
+    ctx.moveTo(p.x, p.y)
+  })
+  canvas.addEventListener('pointermove', e => {
+    if (!drawing) return
+    const p = getPos(e)
+    ctx.lineTo(p.x, p.y)
+    ctx.stroke()
+  })
+  canvas.addEventListener('pointerup',     () => { drawing = false })
+  canvas.addEventListener('pointercancel', () => { drawing = false })
+  canvas.addEventListener('pointerleave',  () => { drawing = false })
 
   document.getElementById('btnClear')!.onclick  = () => ctx.clearRect(0, 0, canvas.width, canvas.height)
   document.getElementById('btnCancel')!.onclick = () => modal.classList.remove('open')
