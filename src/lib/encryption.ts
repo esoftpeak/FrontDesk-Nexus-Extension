@@ -45,6 +45,25 @@ export type EncryptedPayload = {
  * Returns a single Uint8Array: [12-byte IV][ciphertext].
  * Upload this blob directly to Supabase Storage as application/octet-stream.
  */
+function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(u8.byteLength)
+  copy.set(u8)
+  return copy.buffer
+}
+
+/** Decrypts bytes from `encryptBinary()`: [12-byte IV ‖ ciphertext] → plaintext. */
+export async function decryptBinary(data: Uint8Array): Promise<Uint8Array> {
+  const key = await getOrCreateAesKey()
+  const iv = data.subarray(0, 12)
+  const ciphertext = data.subarray(12)
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+    key,
+    toArrayBuffer(ciphertext),
+  )
+  return new Uint8Array(plain)
+}
+
 export async function encryptBinary(data: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
   const key = await getOrCreateAesKey()
   const iv = crypto.getRandomValues(new Uint8Array(12))

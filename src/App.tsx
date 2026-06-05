@@ -53,6 +53,7 @@ import {
 import { formatHotelDateTime } from './lib/hotel-dates'
 import { GuestStaySummary } from './components/GuestStaySummary'
 import { CheckInHistoryPanel } from './components/CheckInHistoryPanel'
+import { SignaturesPdfPanel } from './components/SignaturesPdfPanel'
 import { LoadingScreen } from './components/LoadingScreen'
 import { PanelHeader } from './components/PanelHeader'
 import {
@@ -2845,14 +2846,11 @@ function App() {
           ) : null}
 
           {activeTab === 'signature' ? (
-            <section className="fdn-panel fdn-panel--signature">
-              <p className="fdn-panel__lead">Guest signature is captured on the PMS registration card.</p>
-              <ol className="fdn-steps">
-                <li>Open the guest in {pmsLabel} and print or open the registration card.</li>
-                <li>Sign on the overlay that appears on the card popup.</li>
-                <li>Tap <strong>Save Signature</strong> — it uploads to FrontDesk Nexus automatically.</li>
-              </ol>
-            </section>
+            <SignaturesPdfPanel
+              signedIn={state.auth.signedIn}
+              userRole={state.auth.role}
+              hasManagerPin={state.hasManagerPin}
+            />
           ) : null}
 
           {activeTab === 'key' ? (

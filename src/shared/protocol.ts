@@ -76,6 +76,20 @@ export type IdScanLogEntry = {
   piiError: string | null
 }
 
+/** Signature PDF log row (portal PDFs tab). */
+export type SignatureLogEntry = {
+  id: string
+  confirmationNumber: string
+  storagePath: string
+  signedByUsername: string | null
+  terminalId: string | null
+  createdAt: string
+  roomNumber: string | null
+  guestName: string | null
+  checkInDate: string | null
+  checkOutDate: string | null
+}
+
 /** Prior guest profile from another stay (lookup by phone hash). */
 export type GuestStayHistoryRecord = {
   id: string
@@ -130,6 +144,10 @@ export type ExtensionMessage =
   | { type: 'GET_ID_SCANS_BY_DATE'; fromDate: string; toDate: string }
   /** Guest lookup across recent scans (name, phone, ID, confirmation). */
   | { type: 'SEARCH_ID_SCANS_HISTORY'; query: string }
+  /** Signature PDFs by signed date range. */
+  | { type: 'GET_SIGNATURES_BY_DATE'; fromDate: string; toDate: string; agentFilter?: string }
+  /** Verify hotel manager/admin PIN (download & export on PDFs tab). */
+  | { type: 'VERIFY_MANAGER_PIN'; pin: string }
   | { type: 'GET_KEY_HISTORY' }
   | { type: 'LOAD_SYNXIS_RESERVATION' }
   /** Manual scrape: eZee tab with Arrivals drawer open (same payload as auto). */
@@ -253,6 +271,7 @@ export type ExtensionResponse =
       state?: ExtensionState
       idScanHistory?: IdScanHistoryRow[]
       idScanLog?: IdScanLogEntry[]
+      signatureLog?: SignatureLogEntry[]
       keyHistory?: KeyHistoryRow[]
       signaturePath?: string
       returningGuestHistory?: ReturningGuestRecord[]

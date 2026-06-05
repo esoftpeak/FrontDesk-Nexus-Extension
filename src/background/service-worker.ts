@@ -37,6 +37,7 @@ import {
 } from '../lib/guest-stay-history'
 import { buildIdScanLogFromScanRows } from '../lib/id-scan-log'
 import { searchIdScanHistory } from '../lib/id-scan-history-search'
+import { buildSignatureLogFromRows } from '../lib/signature-log'
 import { isCompletePhoneForLookup } from '../lib/phone-lookup'
 import {
   isCompleteTwoSidedScan,
@@ -1996,6 +1997,45 @@ async function fetchIdScansByDate(fromDate: string, toDate: string): Promise<Ext
   return { ok: true, idScanLog }
 }
 
+async function fetchSignaturesByDate(
+  fromDate: string,
+  toDate: string,
+  agentFilter?: string,
+): Promise<ExtensionResponse> {
+  lastError = null
+  const client = getClient()
+  const { data: sess } = await client.auth.getSession()
+  if (!sess.session) return { ok: false, error: 'Not signed in' }
+
+  let q = client.from('signatures').select('*').order('created_at', { ascending: false })
+  if (fromDate.trim()) q = q.gte('created_at', `${fromDate.trim()}T00:00:00`)
+  if (toDate.trim()) q = q.lte('created_at', `${toDate.trim()}T23:59:59.999`)
+  if (agentFilter?.trim()) q = q.ilike('signed_by_username', `%${agentFilter.trim()}%`)
+
+  const { data, error } = await q
+  if (error) {
+    console.warn('[FDN] signatures by date', error.message)
+    return { ok: false, error: error.message }
+  }
+
+  const signatureLog = await buildSignatureLogFromRows(
+    client,
+    (data ?? []) as Record<string, unknown>[],
+  )
+  return { ok: true, signatureLog }
+}
+
+async function verifyManagerPin(pin: string): Promise<ExtensionResponse> {
+  const settings = await loadExtensionHotelSettings(getClient())
+  if (!settings.managerOverridePin) {
+    return { ok: false, error: 'No manager PIN configured — contact your admin.' }
+  }
+  if (pin.trim() !== settings.managerOverridePin) {
+    return { ok: false, error: 'Invalid PIN' }
+  }
+  return { ok: true }
+}
+
 async function fetchIdScansBySearch(query: string): Promise<ExtensionResponse> {
   lastError = null
   const client = getClient()
@@ -2225,6 +2265,14 @@ async function handleMessage(
 
   if (msg.type === 'SEARCH_ID_SCANS_HISTORY') {
     return fetchIdScansBySearch(msg.query)
+  }
+
+  if (msg.type === 'GET_SIGNATURES_BY_DATE') {
+    return fetchSignaturesByDate(msg.fromDate, msg.toDate, msg.agentFilter)
+  }
+
+  if (msg.type === 'VERIFY_MANAGER_PIN') {
+    return verifyManagerPin(msg.pin)
   }
 
   if (msg.type === 'GET_KEY_HISTORY') {
