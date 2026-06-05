@@ -1017,12 +1017,10 @@ function App() {
         setZipLookupNote(null)
         setLastDocumentData(m.documentData ?? null)
         setLastScanReceivedAt(receivedAt)
-        if (m.detail?.phone?.trim()) {
-          const p = m.detail.phone.trim()
-          setPhone(p)
-          lastPhoneLookupRef.current = null
-        }
-        if (m.detail?.email?.trim()) setEmailGuest(m.detail.email.trim())
+        setPhone(m.detail?.phone?.trim() ?? '')
+        setEmailGuest(m.detail?.email?.trim() ?? '')
+        setPhoneTouched(false)
+        lastPhoneLookupRef.current = null
 
         if (m.parsed.idNumber?.trim()) {
           void loadReturningGuestById(
