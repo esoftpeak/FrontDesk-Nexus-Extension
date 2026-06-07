@@ -3031,6 +3031,42 @@ async function handleMessage(
     if (tabId == null) {
       return { ok: false, error: 'No SynXis or eZee tab found. Open the reservations page first.' }
     }
+
+    let tabUrl = ''
+    try { tabUrl = (await chrome.tabs.get(tabId)).url ?? '' } catch { /* ignore */ }
+
+    if (/synxis\.com/i.test(tabUrl)) {
+      // The "Find reservations" input lives in the cross-origin sph.synxis.com iframe.
+      // chrome.tabs.sendMessage without frameId is unreliable for cross-origin iframes,
+      // so we inject directly with executeScript allFrames:true — it runs in every frame
+      // and the sph.synxis.com frame is the one that finds #find-reservation-input.
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          func: (lastName: string): boolean => {
+            const el = document.getElementById('find-reservation-input') as HTMLInputElement | null
+            if (!el) return false
+            el.focus()
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+            if (setter) setter.call(el, lastName)
+            else el.value = lastName
+            el.dispatchEvent(new Event('input', { bubbles: true }))
+            el.dispatchEvent(new Event('change', { bubbles: true }))
+            ;(document.getElementById('find-reservation-search-bar') as HTMLElement | null)?.click()
+            return true
+          },
+          args: [msg.lastName],
+        })
+        const found = results.some(r => r.result === true)
+        return found
+          ? { ok: true }
+          : { ok: false, error: 'Search input not found. Navigate to the Guest Board page first.' }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : 'Find Guest failed' }
+      }
+    }
+
+    // eZee: message passing works fine (search input is in the main frame, no iframe involved)
     try {
       const tabRes = await chrome.tabs.sendMessage(tabId, {
         type: 'FDN_FIND_GUEST',
