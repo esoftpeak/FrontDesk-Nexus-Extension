@@ -195,16 +195,38 @@ const sphModalObserver = new MutationObserver(() => {
 })
 sphModalObserver.observe(document.body, { childList: true, subtree: true })
 
+function fillSynxisReservationSearch(lastName: string): { ok: boolean; error?: string } {
+  const el = document.getElementById('find-reservation-input') as HTMLInputElement | null
+  if (!el) {
+    return { ok: false, error: 'Search input not found. Make sure the Guest Board is open.' }
+  }
+  el.focus()
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+  if (setter) setter.call(el, lastName)
+  else el.value = lastName
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+  el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }))
+  console.log('[FDN SPH] Find Guest: filled search with', lastName)
+  return { ok: true }
+}
+
 chrome.runtime.onMessage.addListener(
   (
-    message: { type?: string; payload?: FillPayload },
+    message: { type?: string; payload?: FillPayload; lastName?: string },
     _sender,
-    sendResponse: (r: { ok: boolean }) => void,
+    sendResponse: (r: { ok: boolean; error?: string }) => void,
   ) => {
     if (message?.type === 'FDN_FILL_GUEST_FORM') {
       console.log('[FDN SPH] FDN_FILL_GUEST_FORM received')
       triggerSynxisFill(message.payload ?? null)
       sendResponse({ ok: true })
+      return
+    }
+    if (message?.type === 'FDN_FIND_GUEST' && message.lastName) {
+      sendResponse(fillSynxisReservationSearch(message.lastName))
       return
     }
   },
