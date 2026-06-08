@@ -265,6 +265,8 @@ function App() {
   const [pmsRefreshBusy, setPmsRefreshBusy] = useState(false)
   const [findGuestBusy, setFindGuestBusy] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
   const [historyEditBusy, setHistoryEditBusy] = useState(false)
   const [, setRfidTick] = useState(0)
   const [readCardResult, setReadCardResult] = useState<{
@@ -366,6 +368,17 @@ function App() {
   }, [refresh])
 
   useEffect(() => () => zipLookupAbortRef.current?.abort(), [])
+
+  useEffect(() => {
+    if (!exportMenuOpen) return
+    function handleOutsideClick(e: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [exportMenuOpen])
 
   useEffect(() => () => window.clearTimeout(phoneHistoryTimerRef.current), [])
 
@@ -2483,37 +2496,71 @@ function App() {
               >
                   <div className="fdn-id-preview-dock__head">
                     <span className="fdn-id-preview-dock__title">ID card</span>
-                    {!manualEntry && (scanPreviewUrls.front || scanPreviewUrls.back) ? (
-                      <div className="fdn-id-preview__tools-inline" aria-label="Adjust image orientation">
+                    <div className="fdn-id-preview-dock__head-right">
+                      {/* Export dropdown */}
+                      <div className="fdn-export-menu" ref={exportMenuRef}>
                         <button
                           type="button"
-                          className="fdn-id-preview__tool fdn-id-preview__tool--xs"
-                          title="Rotate clockwise"
-                          onClick={() => setRotationDeg((d) => (d + 90) % 360)}
+                          className="fdn-export-menu__trigger"
+                          disabled={!idDetail.firstName?.trim() || !idDetail.lastName?.trim()}
+                          title={
+                            !idDetail.firstName?.trim() || !idDetail.lastName?.trim()
+                              ? 'Scan an ID first'
+                              : 'Export options'
+                          }
+                          onClick={() => setExportMenuOpen((o) => !o)}
                         >
-                          ↻
+                          Export ▾
                         </button>
-                        <button
-                          type="button"
-                          className="fdn-id-preview__tool fdn-id-preview__tool--xs"
-                          title="Flip horizontal"
-                          onClick={() => setFlipH((f) => !f)}
-                        >
-                          ⇄
-                        </button>
-                        <button
-                          type="button"
-                          className="fdn-id-preview__tool fdn-id-preview__tool--xs"
-                          title="Reset orientation"
-                          onClick={() => {
-                            setRotationDeg(0)
-                            setFlipH(false)
-                          }}
-                        >
-                          ⊡
-                        </button>
+                        {exportMenuOpen && (
+                          <div className="fdn-export-menu__list">
+                            <button
+                              type="button"
+                              className="fdn-export-menu__item"
+                              disabled={exportBusy}
+                              onClick={() => {
+                                setExportMenuOpen(false)
+                                void onExportProfile()
+                              }}
+                            >
+                              {exportBusy ? 'Exporting…' : 'Export Profile'}
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    ) : null}
+                      {/* Orientation tools */}
+                      {!manualEntry && (scanPreviewUrls.front || scanPreviewUrls.back) ? (
+                        <div className="fdn-id-preview__tools-inline" aria-label="Adjust image orientation">
+                          <button
+                            type="button"
+                            className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                            title="Rotate clockwise"
+                            onClick={() => setRotationDeg((d) => (d + 90) % 360)}
+                          >
+                            ↻
+                          </button>
+                          <button
+                            type="button"
+                            className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                            title="Flip horizontal"
+                            onClick={() => setFlipH((f) => !f)}
+                          >
+                            ⇄
+                          </button>
+                          <button
+                            type="button"
+                            className="fdn-id-preview__tool fdn-id-preview__tool--xs"
+                            title="Reset orientation"
+                            onClick={() => {
+                              setRotationDeg(0)
+                              setFlipH(false)
+                            }}
+                          >
+                            ⊡
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="fdn-id-preview-dock__pair">
                     <div className="fdn-id-preview-slot">
@@ -2857,19 +2904,6 @@ function App() {
                   onClick={() => void onFindGuest()}
                 >
                   {findGuestBusy ? 'Searching…' : 'Find Guest'}
-                </button>
-                <button
-                  type="button"
-                  className="fdn-btn fdn-btn--secondary"
-                  disabled={exportBusy || !idDetail.firstName?.trim() || !idDetail.lastName?.trim()}
-                  title={
-                    !idDetail.firstName?.trim() || !idDetail.lastName?.trim()
-                      ? 'Scan an ID first'
-                      : 'Download guest profile PDF'
-                  }
-                  onClick={() => void onExportProfile()}
-                >
-                  {exportBusy ? 'Exporting…' : 'Export Profile'}
                 </button>
                 <button
                   type="button"
