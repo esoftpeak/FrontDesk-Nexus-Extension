@@ -14,6 +14,7 @@ const LIGHT  = rgb(0.75, 0.75, 0.75)
 const PAGE_W = 612
 const PAGE_H = 792
 const MARGIN = 50
+const COL_W  = PAGE_W - MARGIN * 2
 
 // ── Drawing helpers ──────────────────────────────────────────────────────────
 
@@ -292,6 +293,244 @@ export async function buildGuestProfilePdf(input: GuestProfileInput): Promise<Ui
     end:       { x: PAGE_W - MARGIN, y: footerY1 + 14 },
     thickness: 0.5,
     color:     LIGHT,
+  })
+
+  return pdfDoc.save()
+}
+
+// ── Receipt helpers ───────────────────────────────────────────────────────────
+
+/** Word-wrap a string to fit within maxW points at the given size. */
+function wrapText(str: string, font: PDFFont, size: number, maxW: number): string[] {
+  const words = str.split(' ')
+  const lines: string[] = []
+  let line = ''
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w
+    if (font.widthOfTextAtSize(test, size) <= maxW) {
+      line = test
+    } else {
+      if (line) lines.push(line)
+      line = w
+    }
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+/**
+ * "Label: value" when value is present, otherwise "Label: ___" blank fill line.
+ * Returns y advanced by one row.
+ */
+function fillField(
+  page: PDFPage,
+  label: string,
+  value: string | null | undefined,
+  y: number,
+  regular: PDFFont,
+  lineLen = 150,
+  size = 9,
+): number {
+  const prefix = `${label}: `
+  const pw = regular.widthOfTextAtSize(prefix, size)
+  page.drawText(prefix, { x: MARGIN, y, size, font: regular, color: GRAY })
+  if (value?.trim()) {
+    page.drawText(value.trim(), { x: MARGIN + pw, y, size, font: regular, color: BLACK })
+  } else {
+    page.drawLine({
+      start:     { x: MARGIN + pw, y: y - 2 },
+      end:       { x: MARGIN + pw + lineLen, y: y - 2 },
+      thickness: 0.5,
+      color:     BLACK,
+    })
+  }
+  return y - 16
+}
+
+/** Single "Label: _____" signature row. Optional inline date field on the right. */
+function sigRow(
+  page: PDFPage,
+  label: string,
+  y: number,
+  regular: PDFFont,
+  lineLen = 180,
+  withDate = false,
+): void {
+  const prefix = `${label}: `
+  const pw = regular.widthOfTextAtSize(prefix, 9)
+  page.drawText(prefix, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
+  page.drawLine({
+    start: { x: MARGIN + pw, y: y - 2 },
+    end:   { x: MARGIN + pw + lineLen, y: y - 2 },
+    thickness: 0.5,
+    color: BLACK,
+  })
+  if (withDate) {
+    const dateLabel = 'Date: '
+    const dx = MARGIN + pw + lineLen + 18
+    page.drawText(dateLabel, { x: dx, y, size: 9, font: regular, color: BLACK })
+    const dlw = regular.widthOfTextAtSize(dateLabel, 9)
+    page.drawLine({
+      start: { x: dx + dlw, y: y - 2 },
+      end:   { x: dx + dlw + 80, y: y - 2 },
+      thickness: 0.5,
+      color: BLACK,
+    })
+  }
+}
+
+/** "Jun 08, 2026" from an ISO date or date-time string. */
+function formatDateDisplay(iso: string | null | undefined): string {
+  if (!iso?.trim()) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso.trim()
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' })
+}
+
+// ── Cash Deposit Receipt ──────────────────────────────────────────────────────
+
+export type CashDepositInput = {
+  idDetail: IdScanDetailGuru
+  /** Pre-filled from loaded reservation; null = blank fill line. */
+  roomNumber: string | null
+  checkInDate: string | null
+  checkOutDate: string | null
+  hotel: HotelContact
+}
+
+export async function buildCashDepositReceiptPdf(input: CashDepositInput): Promise<Uint8Array> {
+  const { idDetail, roomNumber, checkInDate, checkOutDate, hotel } = input
+
+  const pdfDoc = await PDFDocument.create()
+  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const bold    = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const page    = pdfDoc.addPage([PAGE_W, PAGE_H])
+
+  let y = PAGE_H - MARGIN
+
+  // ── Hotel header ──────────────────────────────────────────────────────────
+  if (hotel.name?.trim()) {
+    const nw = bold.widthOfTextAtSize(hotel.name, 16)
+    page.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 16, font: bold, color: BLACK })
+    y -= 22
+  }
+  if (hotel.address?.trim()) {
+    centeredText(page, hotel.address, y, 9, regular, GRAY)
+    y -= 13
+  }
+  const cityLine = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
+  if (cityLine) {
+    centeredText(page, cityLine, y, 9, regular, GRAY)
+    y -= 13
+  }
+  const contactLine = [hotel.phone, hotel.email].filter(Boolean).join('   |   ')
+  if (contactLine) {
+    centeredText(page, contactLine, y, 9, regular, GRAY)
+    y -= 13
+  }
+  y -= 8
+  hRule(page, y)
+  y -= 22
+
+  // ── Title ─────────────────────────────────────────────────────────────────
+  const title = 'CASH DEPOSIT RECEIPT'
+  const tw = bold.widthOfTextAtSize(title, 13)
+  page.drawText(title, { x: (PAGE_W - tw) / 2, y, size: 13, font: bold, color: BLACK })
+  y -= 18
+  hRule(page, y)
+  y -= 22
+
+  // ── Date ──────────────────────────────────────────────────────────────────
+  const todayStr = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+  page.drawText(`Date: ${todayStr}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
+  y -= 22
+
+  // ── Guest information ─────────────────────────────────────────────────────
+  y = sectionHeader(page, 'GUEST INFORMATION', y, bold)
+  y -= 4
+
+  const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName]
+    .map(p => p?.trim()).filter(Boolean)
+  const guestName = nameParts.join(' ').toUpperCase()
+  if (guestName) {
+    page.drawText(`Name: ${guestName}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
+    y -= 13
+  }
+  const streetAddr = idDetail.streetAddress?.trim()
+  if (streetAddr) {
+    page.drawText(`Address: ${streetAddr}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
+    y -= 13
+  }
+  const guestCityParts = [idDetail.city?.trim(), idDetail.state?.trim()].filter(Boolean).join(', ')
+  const guestZip = idDetail.postalCode?.trim()
+  const guestCityLine = guestZip ? `${guestCityParts} ${guestZip}` : guestCityParts
+  if (guestCityLine) {
+    page.drawText(guestCityLine, { x: MARGIN + regular.widthOfTextAtSize('Address: ', 9), y, size: 9, font: regular, color: BLACK })
+    y -= 13
+  }
+
+  // ── Reservation details ───────────────────────────────────────────────────
+  y -= 10
+  hRule(page, y)
+  y -= 18
+  y = sectionHeader(page, 'RESERVATION DETAILS', y, bold)
+  y -= 4
+
+  y = fillField(page, 'Room Number',  roomNumber, y, regular, 150)
+  y = fillField(page, 'Folio Number', null,        y, regular, 150)
+  if (checkInDate) {
+    page.drawText(`Check-In: ${formatDateDisplay(checkInDate)}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
+    y -= 13
+  }
+  if (checkOutDate) {
+    page.drawText(`Check-Out: ${formatDateDisplay(checkOutDate)}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
+    y -= 13
+  }
+
+  // ── Deposit details ───────────────────────────────────────────────────────
+  y -= 10
+  hRule(page, y)
+  y -= 18
+  y = sectionHeader(page, 'DEPOSIT DETAILS', y, bold)
+  y -= 8
+
+  const amountStr = `$${hotel.cashDepositAmount.toFixed(2)}`
+  page.drawText(`Cash Deposit Amount: ${amountStr}`, { x: MARGIN, y, size: 11, font: bold, color: BLACK })
+  y -= 22
+
+  // Policy paragraph (word-wrapped)
+  const hotelLabel = hotel.name?.trim() || 'our hotel'
+  const policy =
+    `A cash deposit of ${amountStr} has been collected from the above-named guest as security ` +
+    `for room and incidental charges during their stay at ${hotelLabel}. ` +
+    `This deposit is fully refundable at checkout, subject to any charges posted to the room account. ` +
+    `Any unused portion will be returned to the guest upon departure.`
+  for (const line of wrapText(policy, regular, 9, COL_W)) {
+    page.drawText(line, { x: MARGIN, y, size: 9, font: regular, color: GRAY })
+    y -= 13
+  }
+
+  // ── Signature section (fixed position near bottom) ────────────────────────
+  const SIG_TOP = 218
+  hRule(page, SIG_TOP + 16)
+
+  sigRow(page, 'Guest Signature',       SIG_TOP,      regular, 180, true)
+  sigRow(page, 'Staff Name (Printed)',  SIG_TOP - 36, regular, 200)
+  sigRow(page, 'Staff Signature',       SIG_TOP - 72, regular, 180, true)
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  const footerY1 = 36
+  const footerY2 = 22
+  if (hotel.name || hotel.city || hotel.state) {
+    const fp = [hotel.name, hotel.city, hotel.state].filter(Boolean)
+    centeredText(page, fp.join(' • '), footerY1, 9, regular, GRAY)
+  }
+  centeredText(page, formatFooterTimestamp(), footerY2, 9, regular, GRAY)
+  page.drawLine({
+    start: { x: MARGIN, y: footerY1 + 14 },
+    end:   { x: PAGE_W - MARGIN, y: footerY1 + 14 },
+    thickness: 0.5,
+    color: LIGHT,
   })
 
   return pdfDoc.save()

@@ -40,7 +40,7 @@ import {
   idScanLogEntryToFormState,
 } from './lib/apply-guest-profile'
 import { buildGuestSaveSnapshot } from './lib/guest-save-snapshot'
-import { buildGuestProfilePdf, downloadPdfBytes } from './lib/export-pdf'
+import { buildCashDepositReceiptPdf, buildGuestProfilePdf, downloadPdfBytes } from './lib/export-pdf'
 import {
   mergeHistoryRecordWithLatestContact,
   priorGuestStaysForConfirmation,
@@ -1375,6 +1375,27 @@ function App() {
     }
   }
 
+  async function onExportCashDeposit() {
+    if (!idDetail.firstName?.trim() || !idDetail.lastName?.trim()) return
+    setExportBusy(true)
+    try {
+      const bytes = await buildCashDepositReceiptPdf({
+        idDetail,
+        roomNumber: state!.reservation?.roomNumber ?? null,
+        checkInDate: state!.reservation?.checkInDate ?? null,
+        checkOutDate: state!.reservation?.checkOutDate ?? null,
+        hotel: state!.hotelContact,
+      })
+      const lastName  = idDetail.lastName.trim().replace(/\s+/g, '_')
+      const firstName = idDetail.firstName.trim().replace(/\s+/g, '_')
+      downloadPdfBytes(bytes, `${lastName}_${firstName}_cash_deposit.pdf`)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Export failed.')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   async function onTransferToPms() {
     const built = buildGuestFormPayload()
     if (!built) return
@@ -2523,7 +2544,18 @@ function App() {
                                 void onExportProfile()
                               }}
                             >
-                              {exportBusy ? 'Exporting…' : 'Export Profile'}
+                              Export Profile
+                            </button>
+                            <button
+                              type="button"
+                              className="fdn-export-menu__item"
+                              disabled={exportBusy}
+                              onClick={() => {
+                                setExportMenuOpen(false)
+                                void onExportCashDeposit()
+                              }}
+                            >
+                              Export Cash Deposit Receipt
                             </button>
                           </div>
                         )}
