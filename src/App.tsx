@@ -1381,8 +1381,9 @@ function App() {
     try {
       const bytes = await buildCashDepositReceiptPdf({
         idDetail,
+        parsed,
+        scanTime: lastScanReceivedAt,
         roomNumber: state!.reservation?.roomNumber ?? null,
-        checkInDate: state!.reservation?.checkInDate ?? null,
         checkOutDate: state!.reservation?.checkOutDate ?? null,
         hotel: state!.hotelContact,
       })

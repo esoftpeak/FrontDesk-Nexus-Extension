@@ -125,6 +125,14 @@ function formatFooterTimestamp(): string {
   return `${day}-${m}-${year} ${time}`
 }
 
+/** "Jun 08, 2026" from an ISO date or date-time string. */
+function formatDateDisplay(iso: string | null | undefined): string {
+  if (!iso?.trim()) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso!.trim()
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' })
+}
+
 /** Normalize raw gender value ("M" → "Male", "F" → "Female", others as-is). */
 function normalizeGender(raw: unknown): string {
   if (typeof raw !== 'string' || !raw.trim()) return ''
@@ -134,7 +142,7 @@ function normalizeGender(raw: unknown): string {
   return g
 }
 
-// ── Main export ──────────────────────────────────────────────────────────────
+// ── Guest Profile PDF ─────────────────────────────────────────────────────────
 
 export type GuestProfileInput = {
   idDetail: IdScanDetailGuru
@@ -241,7 +249,6 @@ export async function buildGuestProfilePdf(input: GuestProfileInput): Promise<Ui
   // ── ID card image ─────────────────────────────────────────────────────────
   if (input.imageFrontBase64?.trim()) {
     try {
-      // Apply UI rotation/flip so the PDF matches what the agent sees on screen.
       const transformed = (input.rotationDeg !== 0 || input.flipH)
         ? await transformBase64ImageSync(input.imageFrontBase64, input.rotationDeg, input.flipH)
         : input.imageFrontBase64
@@ -253,18 +260,14 @@ export async function buildGuestProfilePdf(input: GuestProfileInput): Promise<Ui
       } else if (mime === 'image/png') {
         embeddedImage = await pdfDoc.embedPng(transformed)
       } else {
-        // BMP: transformBase64ImageSync uses a canvas which always outputs PNG
         const pngB64 = await transformBase64ImageSync(transformed, 0, false)
         embeddedImage = await pdfDoc.embedPng(pngB64)
       }
 
-      // Scale to fit within a 250pt-wide, 170pt-tall box (typical DL ratio)
-      const maxW = 250
-      const maxH = 170
+      const maxW = 250; const maxH = 170
       const { width: iw, height: ih } = embeddedImage
       const scale = Math.min(maxW / iw, maxH / ih)
-      const drawW = iw * scale
-      const drawH = ih * scale
+      const drawW = iw * scale; const drawH = ih * scale
       const imgX = (PAGE_W - drawW) / 2
       const imgY = y - drawH
 
@@ -281,13 +284,11 @@ export async function buildGuestProfilePdf(input: GuestProfileInput): Promise<Ui
 
   if (hotel.name || hotel.city || hotel.state) {
     const footerParts = [hotel.name, hotel.city, hotel.state].filter(Boolean)
-    const footerLine = footerParts.join(' • ')  // bullet separator
-    centeredText(page, footerLine, footerY1, 9, regular, GRAY)
+    centeredText(page, footerParts.join(' • '), footerY1, 9, regular, GRAY)
   }
 
   centeredText(page, formatFooterTimestamp(), footerY2, 9, regular, GRAY)
 
-  // Thin top border above footer
   page.drawLine({
     start:     { x: MARGIN, y: footerY1 + 14 },
     end:       { x: PAGE_W - MARGIN, y: footerY1 + 14 },
@@ -298,239 +299,227 @@ export async function buildGuestProfilePdf(input: GuestProfileInput): Promise<Ui
   return pdfDoc.save()
 }
 
-// ── Receipt helpers ───────────────────────────────────────────────────────────
+// ── Cash Deposit Receipt ──────────────────────────────────────────────────────
 
-/** Word-wrap a string to fit within maxW points at the given size. */
-function wrapText(str: string, font: PDFFont, size: number, maxW: number): string[] {
-  const words = str.split(' ')
-  const lines: string[] = []
-  let line = ''
-  for (const w of words) {
-    const test = line ? `${line} ${w}` : w
-    if (font.widthOfTextAtSize(test, size) <= maxW) {
-      line = test
-    } else {
-      if (line) lines.push(line)
-      line = w
+type Seg = { text: string; bold?: boolean; ul?: boolean }
+
+/**
+ * Draw mixed regular/bold text with automatic word-wrap.
+ * Returns y of the last line drawn; caller subtracts lineH to advance.
+ */
+function drawSegs(
+  page: PDFPage,
+  segs: Seg[],
+  x0: number,
+  y: number,
+  size: number,
+  reg: PDFFont,
+  bld: PDFFont,
+  maxW: number,
+  lineH: number,
+): number {
+  const tokens: Array<{ word: string; bold: boolean; ul: boolean }> = []
+  for (const seg of segs) {
+    for (const w of seg.text.split(/\s+/).filter(Boolean)) {
+      tokens.push({ word: w, bold: !!seg.bold, ul: !!seg.ul })
     }
   }
-  if (line) lines.push(line)
-  return lines
+  let x = x0
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i]!
+    const font = tok.bold ? bld : reg
+    const ww = font.widthOfTextAtSize(tok.word, size)
+    if (x > x0 && x + ww > x0 + maxW) { y -= lineH; x = x0 }
+    page.drawText(tok.word, { x, y, size, font, color: BLACK })
+    if (tok.ul) {
+      page.drawLine({ start: { x, y: y - 1.5 }, end: { x: x + ww, y: y - 1.5 }, thickness: 0.5, color: BLACK })
+    }
+    x += ww
+    if (i < tokens.length - 1) x += reg.widthOfTextAtSize(' ', size)
+  }
+  return y
 }
 
 /**
- * "Label: value" when value is present, otherwise "Label: ___" blank fill line.
- * Returns y advanced by one row.
+ * Two-column info grid row (CHECK IN DATE / GUEST NAME / ID NUMBER grid).
+ * Values are bold; blank values show only the underline. Returns next y.
  */
-function fillField(
+function gridRow(
   page: PDFPage,
-  label: string,
-  value: string | null | undefined,
+  leftLabel: string,  leftValue:  string | null,
+  rightLabel: string, rightValue: string | null,
   y: number,
-  regular: PDFFont,
-  lineLen = 150,
-  size = 9,
+  reg: PDFFont,
+  bld: PDFFont,
 ): number {
-  const prefix = `${label}: `
-  const pw = regular.widthOfTextAtSize(prefix, size)
-  page.drawText(prefix, { x: MARGIN, y, size, font: regular, color: GRAY })
-  if (value?.trim()) {
-    page.drawText(value.trim(), { x: MARGIN + pw, y, size, font: regular, color: BLACK })
-  } else {
-    page.drawLine({
-      start:     { x: MARGIN + pw, y: y - 2 },
-      end:       { x: MARGIN + pw + lineLen, y: y - 2 },
-      thickness: 0.5,
-      color:     BLACK,
-    })
-  }
-  return y - 16
+  const LS = 8;  const VS = 9
+  const LVX = 153;  const LVE = 295
+  const RLX = 315;  const RVX = 430;  const RVE = 562
+
+  page.drawText(leftLabel,  { x: MARGIN, y, size: LS, font: reg, color: GRAY })
+  if (leftValue?.trim())  page.drawText(leftValue.trim(),  { x: LVX, y, size: VS, font: bld, color: BLACK })
+  page.drawLine({ start: { x: LVX, y: y - 2 }, end: { x: LVE, y: y - 2 }, thickness: 0.5, color: BLACK })
+
+  page.drawText(rightLabel, { x: RLX, y, size: LS, font: reg, color: GRAY })
+  if (rightValue?.trim()) page.drawText(rightValue.trim(), { x: RVX, y, size: VS, font: bld, color: BLACK })
+  page.drawLine({ start: { x: RVX, y: y - 2 }, end: { x: RVE, y: y - 2 }, thickness: 0.5, color: BLACK })
+
+  return y - 28
 }
 
-/** Single "Label: _____" signature row. Optional inline date field on the right. */
-function sigRow(
+/**
+ * Two-column row for CASH DEPOSIT RECEIVED / RETURNED sections.
+ * Pre-filled value drawn as bold text; blank value = underline only.
+ */
+function receiptSigRow(
   page: PDFPage,
-  label: string,
+  leftLabel: string,  leftValue:  string | null,
+  rightLabel: string, rightValue: string | null,
   y: number,
-  regular: PDFFont,
-  lineLen = 180,
-  withDate = false,
+  reg: PDFFont,
+  bld: PDFFont,
 ): void {
-  const prefix = `${label}: `
-  const pw = regular.widthOfTextAtSize(prefix, 9)
-  page.drawText(prefix, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
-  page.drawLine({
-    start: { x: MARGIN + pw, y: y - 2 },
-    end:   { x: MARGIN + pw + lineLen, y: y - 2 },
-    thickness: 0.5,
-    color: BLACK,
-  })
-  if (withDate) {
-    const dateLabel = 'Date: '
-    const dx = MARGIN + pw + lineLen + 18
-    page.drawText(dateLabel, { x: dx, y, size: 9, font: regular, color: BLACK })
-    const dlw = regular.widthOfTextAtSize(dateLabel, 9)
-    page.drawLine({
-      start: { x: dx + dlw, y: y - 2 },
-      end:   { x: dx + dlw + 80, y: y - 2 },
-      thickness: 0.5,
-      color: BLACK,
-    })
+  const LS = 8;  const VS = 9
+  const llw = reg.widthOfTextAtSize(leftLabel,  LS)
+  const rlw = reg.widthOfTextAtSize(rightLabel, LS)
+  const LVX = MARGIN + llw + 8;  const LVE = 292
+  const RLX = 310
+  const RVX = RLX + rlw + 8;    const RVE = PAGE_W - MARGIN
+
+  page.drawText(leftLabel, { x: MARGIN, y, size: LS, font: reg, color: GRAY })
+  if (leftValue?.trim()) {
+    page.drawText(leftValue.trim(), { x: LVX, y, size: VS, font: bld, color: BLACK })
+  }
+  page.drawLine({ start: { x: LVX, y: y - 2 }, end: { x: LVE, y: y - 2 }, thickness: 0.5, color: BLACK })
+
+  page.drawText(rightLabel, { x: RLX, y, size: LS, font: reg, color: GRAY })
+  if (rightValue?.trim()) {
+    page.drawText(rightValue.trim(), { x: RVX, y, size: VS, font: bld, color: BLACK })
+  } else {
+    page.drawLine({ start: { x: RVX, y: y - 2 }, end: { x: RVE, y: y - 2 }, thickness: 0.5, color: BLACK })
   }
 }
-
-/** "Jun 08, 2026" from an ISO date or date-time string. */
-function formatDateDisplay(iso: string | null | undefined): string {
-  if (!iso?.trim()) return ''
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso.trim()
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' })
-}
-
-// ── Cash Deposit Receipt ──────────────────────────────────────────────────────
 
 export type CashDepositInput = {
   idDetail: IdScanDetailGuru
-  /** Pre-filled from loaded reservation; null = blank fill line. */
+  parsed: ParsedIdFields
+  /** ISO scan/check-in timestamp — shown as CHECK IN DATE. */
+  scanTime: string | null
+  /** Pre-filled from loaded reservation; null = blank line. */
   roomNumber: string | null
-  checkInDate: string | null
+  /** ISO date string for check-out; null = blank line. */
   checkOutDate: string | null
   hotel: HotelContact
 }
 
 export async function buildCashDepositReceiptPdf(input: CashDepositInput): Promise<Uint8Array> {
-  const { idDetail, roomNumber, checkInDate, checkOutDate, hotel } = input
+  const { idDetail, parsed, scanTime, roomNumber, checkOutDate, hotel } = input
 
   const pdfDoc = await PDFDocument.create()
-  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica)
-  const bold    = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
-  const page    = pdfDoc.addPage([PAGE_W, PAGE_H])
+  const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const page = pdfDoc.addPage([PAGE_W, PAGE_H])
+  const LH = 13
 
   let y = PAGE_H - MARGIN
 
-  // ── Hotel header ──────────────────────────────────────────────────────────
+  // ── Hotel header (centered) ───────────────────────────────────────────────
   if (hotel.name?.trim()) {
-    const nw = bold.widthOfTextAtSize(hotel.name, 16)
-    page.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 16, font: bold, color: BLACK })
-    y -= 22
+    const nw = bld.widthOfTextAtSize(hotel.name, 14)
+    page.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 14, font: bld, color: BLACK })
+    y -= 20
   }
-  if (hotel.address?.trim()) {
-    centeredText(page, hotel.address, y, 9, regular, GRAY)
-    y -= 13
-  }
-  const cityLine = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
-  if (cityLine) {
-    centeredText(page, cityLine, y, 9, regular, GRAY)
-    y -= 13
-  }
-  const contactLine = [hotel.phone, hotel.email].filter(Boolean).join('   |   ')
-  if (contactLine) {
-    centeredText(page, contactLine, y, 9, regular, GRAY)
-    y -= 13
-  }
-  y -= 8
-  hRule(page, y)
-  y -= 22
+  if (hotel.address?.trim())     { centeredText(page, hotel.address, y, 9, reg, GRAY); y -= LH }
+  const hCityLine = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
+  if (hCityLine)                 { centeredText(page, hCityLine, y, 9, reg, GRAY); y -= LH }
+  if (hotel.phone?.trim())       { centeredText(page, hotel.phone,  y, 9, reg, GRAY); y -= LH }
+  if (hotel.email?.trim())       { centeredText(page, hotel.email,  y, 9, reg, GRAY); y -= LH }
+  y -= 14
 
-  // ── Title ─────────────────────────────────────────────────────────────────
-  const title = 'CASH DEPOSIT RECEIPT'
-  const tw = bold.widthOfTextAtSize(title, 13)
-  page.drawText(title, { x: (PAGE_W - tw) / 2, y, size: 13, font: bold, color: BLACK })
+  // ── Info grid ─────────────────────────────────────────────────────────────
+  // Guest name: LAST FIRST MIDDLE (uppercase, IDGuru style)
+  const nameParts = [idDetail.lastName, idDetail.firstName, idDetail.middleName]
+    .map(p => p?.trim().toUpperCase()).filter(Boolean)
+  const guestName = nameParts.join(' ')
+
+  y = gridRow(page, 'CHECK IN DATE', formatCheckInDisplay(scanTime),  'CHECK OUT DATE', formatDateDisplay(checkOutDate) || null, y, reg, bld)
+  y = gridRow(page, 'GUEST NAME',    guestName || null,                'ROOM NUMBER',   roomNumber,                              y, reg, bld)
+  y = gridRow(page, 'ID NUMBER',     parsed.idNumber?.trim() || null,  'FOLIO NUMBER',  null,                                   y, reg, bld)
+
   y -= 18
-  hRule(page, y)
+
+  // ── Policy paragraph ──────────────────────────────────────────────────────
+  const amt = `$${hotel.cashDepositAmount.toFixed(2)}`
+  y = drawSegs(page, [
+    { text: 'A ' },
+    { text: amt, bold: true, ul: true },
+    { text: ' CASH DEPOSIT IS REQUIRED FOR ALL GUESTS PAYING CASH WITHOUT AN AUTHORIZED CREDIT/DEBIT CARD.' },
+  ], MARGIN, y, 9, reg, bld, COL_W, LH)
+  y -= LH + 10
+
+  // ── Return-conditions header ──────────────────────────────────────────────
+  page.drawText('CASH DEPOSIT WILL BE RETURNED AT CHECK OUT AFTER:', {
+    x: MARGIN, y, size: 12, font: bld, color: BLACK,
+  })
   y -= 22
 
-  // ── Date ──────────────────────────────────────────────────────────────────
-  const todayStr = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
-  page.drawText(`Date: ${todayStr}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
+  // Bullet items — bullet char (U+2022) is in WinAnsiEncoding at 0x95
+  const B  = '•'
+  const bw = reg.widthOfTextAtSize(B, 9) + 6
+
+  const drawBullet = (segs: Seg[]) => {
+    page.drawText(B, { x: MARGIN, y, size: 9, font: reg, color: BLACK })
+    y = drawSegs(page, segs, MARGIN + bw, y, 9, reg, bld, COL_W - bw, LH)
+    y -= LH
+  }
+
+  drawBullet([{ text: 'THE ROOM IS VACANT' }])
+  drawBullet([{ text: `A ${hotel.name?.trim() || 'HOTEL'} TEAM MEMBER CHECKS THE ROOM` }])
+  drawBullet([
+    { text: 'THERE HAS BEEN ' },
+    { text: "NO EXCESSIVE DIRTY ROOM, NO DAMAGES, NO MISSING ITEMS, AND NO VIOLATION OF THE ROOM'S SMOKING POLICY", bold: true },
+  ])
+  drawBullet([{ text: 'SIGNED CASH DEPOSIT RECEIPT IS PRESENT', bold: true }])
+
+  y -= 6
+
+  // ── "Unless" paragraph (mixed bold) ──────────────────────────────────────
+  y = drawSegs(page, [
+    { text: 'Unless a Front Desk Agent is notified in advance and in writing, another person may not pick up the deposit; only the ' },
+    { text: 'registered guests with ID', bold: true },
+    { text: ' may. ' },
+    { text: 'All cash deposits must be picked up by 12:00 pm the day of departure, or they will be forfeited.', bold: true },
+  ], MARGIN, y, 9, reg, bld, COL_W, LH)
+  y -= LH + 30
+
+  // ── CASH DEPOSIT RECEIVED ─────────────────────────────────────────────────
+  centeredText(page, 'CASH DEPOSIT RECEIVED', y, 11, bld)
+  y -= 16
+  hRule(page, y, BLACK)
   y -= 22
 
-  // ── Guest information ─────────────────────────────────────────────────────
-  y = sectionHeader(page, 'GUEST INFORMATION', y, bold)
-  y -= 4
+  receiptSigRow(page, 'GUEST SIGNATURE', null,                               'DATE',               formatFooterTimestamp(), y, reg, bld)
+  y -= 28
+  receiptSigRow(page, 'AMOUNT',          hotel.cashDepositAmount.toFixed(2), 'EMPLOYEE SIGNATURE', null,                   y, reg, bld)
+  y -= 38
 
-  const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName]
-    .map(p => p?.trim()).filter(Boolean)
-  const guestName = nameParts.join(' ').toUpperCase()
-  if (guestName) {
-    page.drawText(`Name: ${guestName}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
-    y -= 13
-  }
-  const streetAddr = idDetail.streetAddress?.trim()
-  if (streetAddr) {
-    page.drawText(`Address: ${streetAddr}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
-    y -= 13
-  }
-  const guestCityParts = [idDetail.city?.trim(), idDetail.state?.trim()].filter(Boolean).join(', ')
-  const guestZip = idDetail.postalCode?.trim()
-  const guestCityLine = guestZip ? `${guestCityParts} ${guestZip}` : guestCityParts
-  if (guestCityLine) {
-    page.drawText(guestCityLine, { x: MARGIN + regular.widthOfTextAtSize('Address: ', 9), y, size: 9, font: regular, color: BLACK })
-    y -= 13
-  }
-
-  // ── Reservation details ───────────────────────────────────────────────────
-  y -= 10
-  hRule(page, y)
-  y -= 18
-  y = sectionHeader(page, 'RESERVATION DETAILS', y, bold)
-  y -= 4
-
-  y = fillField(page, 'Room Number',  roomNumber, y, regular, 150)
-  y = fillField(page, 'Folio Number', null,        y, regular, 150)
-  if (checkInDate) {
-    page.drawText(`Check-In: ${formatDateDisplay(checkInDate)}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
-    y -= 13
-  }
-  if (checkOutDate) {
-    page.drawText(`Check-Out: ${formatDateDisplay(checkOutDate)}`, { x: MARGIN, y, size: 9, font: regular, color: BLACK })
-    y -= 13
-  }
-
-  // ── Deposit details ───────────────────────────────────────────────────────
-  y -= 10
-  hRule(page, y)
-  y -= 18
-  y = sectionHeader(page, 'DEPOSIT DETAILS', y, bold)
-  y -= 8
-
-  const amountStr = `$${hotel.cashDepositAmount.toFixed(2)}`
-  page.drawText(`Cash Deposit Amount: ${amountStr}`, { x: MARGIN, y, size: 11, font: bold, color: BLACK })
+  // ── CASH DEPOSIT RETURNED TO GUEST ────────────────────────────────────────
+  centeredText(page, 'CASH DEPOSIT RETURNED TO GUEST', y, 11, bld)
+  y -= 16
+  hRule(page, y, BLACK)
   y -= 22
 
-  // Policy paragraph (word-wrapped)
-  const hotelLabel = hotel.name?.trim() || 'our hotel'
-  const policy =
-    `A cash deposit of ${amountStr} has been collected from the above-named guest as security ` +
-    `for room and incidental charges during their stay at ${hotelLabel}. ` +
-    `This deposit is fully refundable at checkout, subject to any charges posted to the room account. ` +
-    `Any unused portion will be returned to the guest upon departure.`
-  for (const line of wrapText(policy, regular, 9, COL_W)) {
-    page.drawText(line, { x: MARGIN, y, size: 9, font: regular, color: GRAY })
-    y -= 13
-  }
+  receiptSigRow(page, 'AMOUNT', null, 'EMPLOYEE SIGNATURE', null, y, reg, bld)
+  y -= 28
 
-  // ── Signature section (fixed position near bottom) ────────────────────────
-  const SIG_TOP = 218
-  hRule(page, SIG_TOP + 16)
-
-  sigRow(page, 'Guest Signature',       SIG_TOP,      regular, 180, true)
-  sigRow(page, 'Staff Name (Printed)',  SIG_TOP - 36, regular, 200)
-  sigRow(page, 'Staff Signature',       SIG_TOP - 72, regular, 180, true)
-
-  // ── Footer ────────────────────────────────────────────────────────────────
-  const footerY1 = 36
-  const footerY2 = 22
-  if (hotel.name || hotel.city || hotel.state) {
-    const fp = [hotel.name, hotel.city, hotel.state].filter(Boolean)
-    centeredText(page, fp.join(' • '), footerY1, 9, regular, GRAY)
-  }
-  centeredText(page, formatFooterTimestamp(), footerY2, 9, regular, GRAY)
+  // Full-width guest signature line
+  page.drawText('GUEST SIGNATURE', { x: MARGIN, y, size: 8, font: reg, color: GRAY })
+  const gsw = reg.widthOfTextAtSize('GUEST SIGNATURE', 8)
   page.drawLine({
-    start: { x: MARGIN, y: footerY1 + 14 },
-    end:   { x: PAGE_W - MARGIN, y: footerY1 + 14 },
+    start: { x: MARGIN + gsw + 8, y: y - 2 },
+    end:   { x: PAGE_W - MARGIN,  y: y - 2 },
     thickness: 0.5,
-    color: LIGHT,
+    color: BLACK,
   })
 
   return pdfDoc.save()
