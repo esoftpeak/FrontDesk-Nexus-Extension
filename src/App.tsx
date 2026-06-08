@@ -1384,6 +1384,7 @@ function App() {
         parsed,
         scanTime: lastScanReceivedAt,
         roomNumber: state!.reservation?.roomNumber ?? null,
+        confirmationNumber: state!.reservation?.confirmationNumber ?? null,
         checkOutDate: state!.reservation?.checkOutDate ?? null,
         hotel: state!.hotelContact,
       })

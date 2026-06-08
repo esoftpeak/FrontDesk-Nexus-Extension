@@ -407,13 +407,15 @@ export type CashDepositInput = {
   scanTime: string | null
   /** Pre-filled from loaded reservation; null = blank line. */
   roomNumber: string | null
+  /** Confirmation number (SynXis) / registration number (eZee) — shown as FOLIO NUMBER. */
+  confirmationNumber: string | null
   /** ISO date string for check-out; null = blank line. */
   checkOutDate: string | null
   hotel: HotelContact
 }
 
 export async function buildCashDepositReceiptPdf(input: CashDepositInput): Promise<Uint8Array> {
-  const { idDetail, parsed, scanTime, roomNumber, checkOutDate, hotel } = input
+  const { idDetail, parsed, scanTime, roomNumber, confirmationNumber, checkOutDate, hotel } = input
 
   const pdfDoc = await PDFDocument.create()
   const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
@@ -444,7 +446,7 @@ export async function buildCashDepositReceiptPdf(input: CashDepositInput): Promi
 
   y = gridRow(page, 'CHECK IN DATE', formatCheckInDisplay(scanTime),  'CHECK OUT DATE', formatDateDisplay(checkOutDate) || null, y, reg, bld)
   y = gridRow(page, 'GUEST NAME',    guestName || null,                'ROOM NUMBER',   roomNumber,                              y, reg, bld)
-  y = gridRow(page, 'ID NUMBER',     parsed.idNumber?.trim() || null,  'FOLIO NUMBER',  null,                                   y, reg, bld)
+  y = gridRow(page, 'ID NUMBER',     parsed.idNumber?.trim() || null,  'FOLIO NUMBER',  confirmationNumber?.trim() || null,     y, reg, bld)
 
   y -= 18
 
