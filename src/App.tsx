@@ -1350,7 +1350,7 @@ function App() {
         imageFrontBase64: scanImages?.front ?? null,
         rotationDeg,
         flipH,
-        hotel: state.hotelContact,
+        hotel: state!.hotelContact,
       })
       const lastName = idDetail.lastName.trim().replace(/\s+/g, '_')
       const firstName = idDetail.firstName.trim().replace(/\s+/g, '_')

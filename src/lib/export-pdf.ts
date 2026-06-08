@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type PDFImage } from 'pdf-lib'
 import type { HotelContact } from '../shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from '../shared/pms-types'
 import { ageYearsFromDobString } from './id-age'
@@ -14,7 +14,6 @@ const LIGHT  = rgb(0.75, 0.75, 0.75)
 const PAGE_W = 612
 const PAGE_H = 792
 const MARGIN = 50
-const COL_W  = PAGE_W - MARGIN * 2
 
 // ── Drawing helpers ──────────────────────────────────────────────────────────
 
@@ -247,7 +246,7 @@ export async function buildGuestProfilePdf(input: GuestProfileInput): Promise<Ui
         : input.imageFrontBase64
 
       const mime = guessImageMimeFromBase64(transformed)
-      let embeddedImage
+      let embeddedImage: PDFImage
       if (mime === 'image/jpeg') {
         embeddedImage = await pdfDoc.embedJpg(transformed)
       } else if (mime === 'image/png') {
@@ -301,7 +300,7 @@ export async function buildGuestProfilePdf(input: GuestProfileInput): Promise<Ui
 // ── Download helper ───────────────────────────────────────────────────────────
 
 export function downloadPdfBytes(bytes: Uint8Array, filename: string): void {
-  const blob = new Blob([bytes], { type: 'application/pdf' })
+  const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' })
   const url  = URL.createObjectURL(blob)
   const a    = document.createElement('a')
   a.href     = url
