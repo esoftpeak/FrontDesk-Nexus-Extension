@@ -349,6 +349,15 @@ export type ExtensionMessage =
   | { type: 'CLEAR_RESERVATION' }
   /** Fetch latest room/checkout/folio from id_scans for a guest ID number. */
   | { type: 'GET_SCAN_RESERVATION_DATA'; idNumber: string }
+  /** Return all active reservations whose guest name matches the scanned ID name. */
+  | { type: 'GET_MATCHING_RESERVATIONS'; guestName: string }
+export type ReservationCandidate = {
+  confirmationNumber: string
+  roomNumber: string | null
+  checkOutDate: string | null
+  checkInDate: string | null
+  guestName: string | null
+}
 export type ScanReservationData = {
   roomNumber: string | null
   checkOutDate: string | null
@@ -372,6 +381,8 @@ export type ExtensionResponse =
       dnrActive?: boolean
       /** Present after `GET_SCAN_RESERVATION_DATA`. */
       scanReservationData?: ScanReservationData
+      /** Present after `GET_MATCHING_RESERVATIONS`. */
+      matchingReservations?: ReservationCandidate[]
     }
   | { ok: false; error: string; keyBlocks?: KeyBlock[] }
 

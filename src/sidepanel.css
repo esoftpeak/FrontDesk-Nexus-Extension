@@ -1391,6 +1391,49 @@ body {
   max-width: 320px;
 }
 
+/* Cash Deposit export — reservation picker list */
+.fdn-res-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 14px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.fdn-res-picker__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #30363d;
+  cursor: pointer;
+  background: #0d1117;
+}
+
+.fdn-res-picker__row:has(input:checked) {
+  border-color: #388bfd;
+  background: #161b22;
+}
+
+.fdn-res-picker__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fdn-res-picker__conf {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.fdn-res-picker__meta {
+  font-size: 11px;
+  color: #8b949e;
+}
+
 /* Auto-sync (SynXis): top sticky banner, ~3s lifetime controlled in App.tsx */
 .fdn-panel-toast {
   position: sticky;

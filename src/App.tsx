@@ -12,6 +12,7 @@ import {
   type NativeHostRxDebugBroadcast,
   type NativeIdScanBroadcast,
   type PendingGuestDraft,
+  type ReservationCandidate,
   type ScanFrontBroadcast,
 } from './shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from './shared/pms-types'
@@ -267,6 +268,15 @@ function App() {
   const [exportBusy, setExportBusy] = useState(false)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
+  // Cash Deposit export: reservation picker (multiple rooms)
+  const [cdPickerOpen, setCdPickerOpen] = useState(false)
+  const [cdPickerCandidates, setCdPickerCandidates] = useState<ReservationCandidate[]>([])
+  const [cdPickerSelected, setCdPickerSelected] = useState<string | null>(null)
+  // Cash Deposit export: manual entry fallback (no name match or no reservation)
+  const [cdManualOpen, setCdManualOpen] = useState(false)
+  const [cdManualFolio, setCdManualFolio] = useState('')
+  const [cdManualRoom, setCdManualRoom] = useState('')
+  const [cdManualCheckout, setCdManualCheckout] = useState('')
   const [historyEditBusy, setHistoryEditBusy] = useState(false)
   const [, setRfidTick] = useState(0)
   const [readCardResult, setReadCardResult] = useState<{
@@ -1376,41 +1386,110 @@ function App() {
     }
   }
 
+  async function doGenerateCashDepositPdf(opts: {
+    roomNumber: string | null
+    confirmationNumber: string | null
+    checkOutDate: string | null
+  }) {
+    const bytes = await buildCashDepositReceiptPdf({
+      idDetail,
+      parsed,
+      scanTime: lastScanReceivedAt,
+      roomNumber: opts.roomNumber,
+      confirmationNumber: opts.confirmationNumber,
+      checkOutDate: opts.checkOutDate,
+      hotel: state!.hotelContact,
+    })
+    const lastName = (idDetail.lastName ?? '').trim().replace(/\s+/g, '_')
+    const firstName = (idDetail.firstName ?? '').trim().replace(/\s+/g, '_')
+    downloadPdfBytes(bytes, `${lastName}_${firstName}_cash_deposit.pdf`)
+  }
+
   async function onExportCashDeposit() {
     if (!idDetail.firstName?.trim() || !idDetail.lastName?.trim()) return
     setExportBusy(true)
     try {
-      // Prefer DB-latest data; fall back to in-memory reservation if DB has no record yet.
-      let roomNumber: string | null = state!.reservation?.roomNumber ?? null
-      let confirmationNumber: string | null = state!.reservation?.confirmationNumber ?? null
-      let checkOutDate: string | null = state!.reservation?.checkOutDate ?? null
+      const scannedName = `${idDetail.lastName ?? ''} ${idDetail.firstName ?? ''}`.trim()
 
+      type MatchMsg = { ok: boolean; matchingReservations?: ReservationCandidate[] }
+      const matchRes = (await chrome.runtime.sendMessage({
+        type: 'GET_MATCHING_RESERVATIONS',
+        guestName: scannedName,
+      })) as MatchMsg
+      const candidates = matchRes.ok ? (matchRes.matchingReservations ?? []) : []
+
+      if (candidates.length > 1) {
+        // Multiple rooms under this name — let agent pick
+        setCdPickerCandidates(candidates)
+        setCdPickerSelected(candidates[0]?.confirmationNumber ?? null)
+        setCdPickerOpen(true)
+        return
+      }
+
+      if (candidates.length === 1) {
+        // Single confident match — generate directly
+        const c = candidates[0]
+        await doGenerateCashDepositPdf({
+          roomNumber: c.roomNumber,
+          confirmationNumber: c.confirmationNumber,
+          checkOutDate: c.checkOutDate,
+        })
+        return
+      }
+
+      // No name-matched reservation found — prompt for manual entry
+      // Prefill from DB scan history if available
+      let prefillRoom = ''
+      let prefillFolio = ''
+      let prefillCheckout = ''
       const idNumber = parsed.idNumber?.trim()
       if (idNumber) {
         type ScanResMsg = { ok: boolean; scanReservationData?: { roomNumber: string | null; checkOutDate: string | null; confirmationNumber: string | null } }
-        const dbRes = (await chrome.runtime.sendMessage({
-          type: 'GET_SCAN_RESERVATION_DATA',
-          idNumber,
-        })) as ScanResMsg
+        const dbRes = (await chrome.runtime.sendMessage({ type: 'GET_SCAN_RESERVATION_DATA', idNumber })) as ScanResMsg
         if (dbRes.ok && dbRes.scanReservationData) {
-          roomNumber = dbRes.scanReservationData.roomNumber ?? roomNumber
-          confirmationNumber = dbRes.scanReservationData.confirmationNumber ?? confirmationNumber
-          checkOutDate = dbRes.scanReservationData.checkOutDate ?? checkOutDate
+          prefillRoom = dbRes.scanReservationData.roomNumber ?? ''
+          prefillFolio = dbRes.scanReservationData.confirmationNumber ?? ''
+          prefillCheckout = dbRes.scanReservationData.checkOutDate ?? ''
         }
       }
+      setCdManualRoom(prefillRoom)
+      setCdManualFolio(prefillFolio)
+      setCdManualCheckout(prefillCheckout)
+      setCdManualOpen(true)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Export failed.')
+    } finally {
+      setExportBusy(false)
+    }
+  }
 
-      const bytes = await buildCashDepositReceiptPdf({
-        idDetail,
-        parsed,
-        scanTime: lastScanReceivedAt,
-        roomNumber,
-        confirmationNumber,
-        checkOutDate,
-        hotel: state!.hotelContact,
+  async function onCdPickerConfirm() {
+    const candidate = cdPickerCandidates.find(c => c.confirmationNumber === cdPickerSelected)
+    if (!candidate) return
+    setCdPickerOpen(false)
+    setExportBusy(true)
+    try {
+      await doGenerateCashDepositPdf({
+        roomNumber: candidate.roomNumber,
+        confirmationNumber: candidate.confirmationNumber,
+        checkOutDate: candidate.checkOutDate,
       })
-      const lastName  = idDetail.lastName.trim().replace(/\s+/g, '_')
-      const firstName = idDetail.firstName.trim().replace(/\s+/g, '_')
-      downloadPdfBytes(bytes, `${lastName}_${firstName}_cash_deposit.pdf`)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Export failed.')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
+  async function onCdManualConfirm() {
+    setCdManualOpen(false)
+    setExportBusy(true)
+    try {
+      await doGenerateCashDepositPdf({
+        roomNumber: cdManualRoom.trim() || null,
+        confirmationNumber: cdManualFolio.trim() || null,
+        checkOutDate: cdManualCheckout.trim() || null,
+      })
     } catch (e) {
       setFormError(e instanceof Error ? e.message : 'Export failed.')
     } finally {
@@ -3395,6 +3474,110 @@ function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Cash Deposit — Reservation Picker (multiple rooms under same name) */}
+      {cdPickerOpen && (
+        <div className="fdn-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="fdn-modal">
+            <h3 className="fdn-h3">Select Reservation</h3>
+            <p className="fdn-help">Multiple reservations found for this guest. Select the correct one.</p>
+            <div className="fdn-res-picker">
+              {cdPickerCandidates.map(c => (
+                <label key={c.confirmationNumber} className="fdn-res-picker__row">
+                  <input
+                    type="radio"
+                    name="cd-picker"
+                    value={c.confirmationNumber}
+                    checked={cdPickerSelected === c.confirmationNumber}
+                    onChange={() => setCdPickerSelected(c.confirmationNumber)}
+                  />
+                  <span className="fdn-res-picker__info">
+                    <span className="fdn-res-picker__conf">#{c.confirmationNumber}</span>
+                    <span className="fdn-res-picker__meta">
+                      Room {c.roomNumber ?? '—'} &nbsp;·&nbsp; Out {c.checkOutDate ?? '—'}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="fdn-actions">
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--primary"
+                disabled={!cdPickerSelected || exportBusy}
+                onClick={() => void onCdPickerConfirm()}
+              >
+                {exportBusy ? 'Generating…' : 'Generate PDF'}
+              </button>
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--ghost"
+                onClick={() => { setCdPickerOpen(false); setCdPickerCandidates([]); setCdPickerSelected(null) }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cash Deposit — Manual Entry (no name-matched reservation found) */}
+      {cdManualOpen && (
+        <div className="fdn-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="fdn-modal">
+            <h3 className="fdn-h3">Enter Reservation Details</h3>
+            <p className="fdn-help">No matching reservation found. Enter details manually or leave blank.</p>
+            <div className="fdn-form">
+              <label className="fdn-label">
+                Folio / Reservation #
+                <input
+                  className="fdn-input"
+                  type="text"
+                  placeholder="Leave blank if unknown"
+                  value={cdManualFolio}
+                  onChange={e => setCdManualFolio(e.target.value)}
+                />
+              </label>
+              <label className="fdn-label">
+                Room Number
+                <input
+                  className="fdn-input"
+                  type="text"
+                  placeholder="Leave blank if unknown"
+                  value={cdManualRoom}
+                  onChange={e => setCdManualRoom(e.target.value)}
+                />
+              </label>
+              <label className="fdn-label">
+                Check-out Date
+                <input
+                  className="fdn-input"
+                  type="date"
+                  value={cdManualCheckout}
+                  onChange={e => setCdManualCheckout(e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="fdn-actions">
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--primary"
+                disabled={exportBusy}
+                onClick={() => void onCdManualConfirm()}
+              >
+                {exportBusy ? 'Generating…' : 'Generate PDF'}
+              </button>
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--ghost"
+                onClick={() => setCdManualOpen(false)}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

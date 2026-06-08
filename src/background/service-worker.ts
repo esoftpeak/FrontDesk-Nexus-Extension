@@ -793,6 +793,31 @@ function getClient(): SupabaseClient {
   return supabase
 }
 
+/** Normalize a name to an uppercase token set, stripping punctuation and single-letter initials. */
+function nameTokens(name: string): Set<string> {
+  return new Set(
+    name
+      .toUpperCase()
+      .replace(/[^A-Z\s]/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length >= 2),
+  )
+}
+
+/**
+ * Returns true if the two names share enough tokens to be the same person.
+ * Matches when at least 2 tokens overlap, or all tokens of the shorter name are found in the longer.
+ */
+function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  const ta = nameTokens(a)
+  const tb = nameTokens(b)
+  if (ta.size === 0 || tb.size === 0) return false
+  let overlap = 0
+  for (const t of ta) if (tb.has(t)) overlap++
+  return overlap >= 2 || overlap === Math.min(ta.size, tb.size)
+}
+
 async function ensureTerminal(client: SupabaseClient): Promise<string | null> {
   const { fdn_terminal_id: existing } = await chrome.storage.local.get('fdn_terminal_id')
   if (typeof existing === 'string' && existing.length > 0) return existing
@@ -1320,6 +1345,7 @@ async function saveIdScan(args: {
   let conf: string
   let existingFrontPath: string | null = null
   let existingBackPath: string | null = null
+  let reservationBound = false
 
   if (isUpdate) {
     const { data: existingRow, error: selErr } = await client
@@ -1339,17 +1365,29 @@ async function saveIdScan(args: {
       typeof existingRow.image_front_path === 'string' ? existingRow.image_front_path : null
     existingBackPath =
       typeof existingRow.image_back_path === 'string' ? existingRow.image_back_path : null
+    reservationBound = !conf.startsWith('NO-RES-')
   } else {
-    conf = snap?.confirmationNumber ?? `NO-RES-${scanId}`
-    if (snap?.confirmationNumber) {
+    // Only bind reservation when the PMS guest name matches the scanned ID name
+    const idName = [args.detail?.lastName, args.detail?.firstName].filter(Boolean).join(' ').trim()
+    const pmsName = snap?.guestName ?? ''
+    reservationBound = !!(snap?.confirmationNumber && idName && namesMatch(idName, pmsName))
+
+    if (snap?.confirmationNumber && idName && !reservationBound) {
+      console.warn('[FDN SW] Name mismatch — reservation not bound to scan', { idName, pmsName })
+    }
+
+    if (reservationBound) {
+      conf = snap!.confirmationNumber!
       const { data, error } = await client
         .from('reservations')
         .select('id')
-        .eq('confirmation_number', snap.confirmationNumber)
-        .eq('pms_source', snap.pms)
+        .eq('confirmation_number', snap!.confirmationNumber!)
+        .eq('pms_source', snap!.pms)
         .maybeSingle()
       if (error) console.warn('[FDN SW] reservation select', error.message)
       resId = (data?.id as string) ?? null
+    } else {
+      conf = `NO-RES-${scanId}`
     }
   }
 
@@ -1438,8 +1476,11 @@ async function saveIdScan(args: {
     image_back_path: imageBackPath,
     phone_encrypted,
     email_encrypted,
-    room_number: snap?.roomNumber ?? null,
-    check_out_date: snap?.checkOutDate ?? null,
+    // Only persist room/checkout on new inserts where PMS name matched scanned ID name
+    ...(!isUpdate && reservationBound && {
+      room_number: snap?.roomNumber ?? null,
+      check_out_date: snap?.checkOutDate ?? null,
+    }),
   }
 
   let savedScanId = scanId
@@ -3112,6 +3153,57 @@ async function handleMessage(
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Find Guest message failed'
       return { ok: false, error: message }
+    }
+  }
+
+  if (msg.type === 'GET_MATCHING_RESERVATIONS') {
+    const client = getClient()
+    const { data: sess } = await client.auth.getSession()
+    if (!sess.session) return { ok: false, error: 'Not signed in' }
+
+    const tokens = [...nameTokens(msg.guestName)].sort((a, b) => b.length - a.length)
+    if (!tokens.length) return { ok: true, matchingReservations: [] }
+
+    // Use the longest token (usually last name) as primary DB filter
+    const primary = tokens[0]
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+
+    const { data, error: qErr } = await client
+      .from('reservations')
+      .select('confirmation_number, room_number, check_out_date, check_in_date, guest_name')
+      .ilike('guest_name', `%${primary}%`)
+      .gte('check_out_date', yesterday)
+      .order('check_in_date', { ascending: false })
+      .limit(20)
+
+    if (qErr) console.warn('[FDN SW] GET_MATCHING_RESERVATIONS', qErr.message)
+
+    const matched = (data ?? []).filter(r => namesMatch(msg.guestName, r.guest_name as string | null))
+
+    // Add current in-memory reservation if it name-matches but isn't in DB results yet
+    if (
+      reservation?.confirmationNumber &&
+      namesMatch(msg.guestName, reservation.guestName) &&
+      !matched.some(r => r.confirmation_number === reservation?.confirmationNumber)
+    ) {
+      matched.unshift({
+        confirmation_number: reservation.confirmationNumber,
+        room_number: reservation.roomNumber,
+        check_out_date: reservation.checkOutDate,
+        check_in_date: reservation.checkInDate,
+        guest_name: reservation.guestName,
+      })
+    }
+
+    return {
+      ok: true,
+      matchingReservations: matched.map(r => ({
+        confirmationNumber: r.confirmation_number as string,
+        roomNumber: (r.room_number as string | null) ?? null,
+        checkOutDate: (r.check_out_date as string | null) ?? null,
+        checkInDate: (r.check_in_date as string | null) ?? null,
+        guestName: (r.guest_name as string | null) ?? null,
+      })),
     }
   }
 
