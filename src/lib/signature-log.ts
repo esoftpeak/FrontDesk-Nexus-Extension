@@ -23,7 +23,7 @@ export async function buildSignatureLogFromRows(
   if (confirmationNumbers.length > 0) {
     const { data: resRows, error: resErr } = await client
       .from('reservations')
-      .select('confirmation_number, room_number, guest_name, check_in_date, check_out_date')
+      .select('confirmation_number,room_number,guest_name,check_in_date,check_out_date')
       .in('confirmation_number', confirmationNumbers)
     if (resErr) console.warn('[FDN] reservations for signature log', resErr.message)
     for (const r of (resRows ?? []) as ReservationLite[]) {
@@ -46,6 +46,8 @@ export async function buildSignatureLogFromRows(
       guestName: res?.guest_name?.trim() || null,
       checkInDate: res?.check_in_date?.trim() || null,
       checkOutDate: res?.check_out_date?.trim() || null,
+      signatureImagePath:
+        typeof row.signature_image_path === 'string' ? row.signature_image_path : null,
     }
   })
 }

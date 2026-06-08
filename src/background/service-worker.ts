@@ -1569,6 +1569,7 @@ async function saveIdScan(args: {
 async function saveSignature(args: {
   pdfBase64: string
   confirmationNumber: string
+  signaturePng?: string | null
 }): Promise<ExtensionResponse> {
   lastError = null
   const client = getClient()
@@ -1619,6 +1620,30 @@ async function saveSignature(args: {
     return { ok: false, error: `PDF upload failed: ${upErr.message}` }
   }
 
+  // Upload encrypted signature PNG so it can be reused in future PDFs.
+  let signatureImagePath: string | null = null
+  if (args.signaturePng) {
+    try {
+      const raw = args.signaturePng.includes(',') ? args.signaturePng.split(',')[1]! : args.signaturePng
+      const pngBin = atob(raw)
+      const pngBytes = new Uint8Array(pngBin.length)
+      for (let i = 0; i < pngBin.length; i++) pngBytes[i] = pngBin.charCodeAt(i)
+      const encryptedPng = await encryptBinary(pngBytes)
+      const pngPath = `${conf}/${timestamp}_${fileId}.png.enc`
+      const pngBlob = new Blob([encryptedPng], { type: 'application/octet-stream' })
+      const { error: pngErr } = await client.storage
+        .from('guest-signatures')
+        .upload(pngPath, pngBlob, { contentType: 'application/octet-stream', upsert: false })
+      if (pngErr) {
+        console.warn('[FDN SW] signature PNG upload failed:', pngErr.message)
+      } else {
+        signatureImagePath = pngPath
+      }
+    } catch (e) {
+      console.warn('[FDN SW] signature PNG encrypt/upload error:', e)
+    }
+  }
+
   const { data: sigRow, error: sigErr } = await client
     .from('signatures')
     .insert({
@@ -1628,6 +1653,7 @@ async function saveSignature(args: {
       signed_by: user.id,
       signed_by_username: user.email,
       terminal_id: terminalId,
+      signature_image_path: signatureImagePath,
     })
     .select('id')
     .single()
@@ -1645,12 +1671,12 @@ async function saveSignature(args: {
     action_type: 'SIGNATURE',
     confirmation_number: conf,
     description: 'Guest registration card signed — encrypted PDF stored',
-    new_value: { signature_id: sigRow?.id, storage_path: storagePath },
+    new_value: { signature_id: sigRow?.id, storage_path: storagePath, signature_image_path: signatureImagePath },
   })
   if (audErr) console.warn('[FDN SW] audit_log insert (signature)', audErr.message)
 
   lastError = null
-  return { ok: true, signaturePath: storagePath }
+  return { ok: true, signaturePath: storagePath, signatureImagePath: signatureImagePath ?? undefined }
 }
 
 // ── eZee sign overlay helpers ─────────────────────────────────────────────────
@@ -2803,6 +2829,7 @@ async function handleMessage(
       const result = await saveSignature({
         pdfBase64: btoa(binary),
         confirmationNumber: msg.confirmation,
+        signaturePng: msg.signaturePng,
       })
 
       // Clean up dedup tracking

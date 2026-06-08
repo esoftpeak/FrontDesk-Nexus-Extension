@@ -133,6 +133,8 @@ export type SignatureLogEntry = {
   guestName: string | null
   checkInDate: string | null
   checkOutDate: string | null
+  /** Path in the `guest-signatures` bucket — encrypted PNG, fetchable via fetchSignaturePng(). */
+  signatureImagePath: string | null
 }
 
 /** Prior guest profile from another stay (lookup by phone hash). */
@@ -301,6 +303,8 @@ export type ExtensionMessage =
       /** Base64-encoded signed PDF bytes (from pdf-lib save()). */
       pdfBase64: string
       confirmationNumber: string
+      /** Data-URL PNG of the raw signature stroke — stored encrypted for reuse in other PDFs. */
+      signaturePng?: string | null
     }
   | {
       type: 'RFID_MAKE_KEY'
@@ -375,6 +379,7 @@ export type ExtensionResponse =
       keyLedger?: KeyLedgerEntry[]
       keyHistory?: KeyHistoryRow[]
       signaturePath?: string
+      signatureImagePath?: string
       returningGuestHistory?: ReturningGuestRecord[]
       guestStayHistory?: GuestStayHistoryRecord[]
       /** Present after `CHECK_DNR` or `ADD_DNR`. */

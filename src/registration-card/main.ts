@@ -207,6 +207,7 @@ async function embedSignature(canvas: HTMLCanvasElement, modal: HTMLElement, sta
         type: 'SAVE_SIGNATURE',
         pdfBase64: uint8ToBase64(savedBytes),
         confirmationNumber: confirmation,
+        signaturePng: pngDataUrl,
       })
       cloudOk = result?.ok === true
       if (!cloudOk) console.warn('[FDN RegCard] Cloud save failed:', result?.error)
