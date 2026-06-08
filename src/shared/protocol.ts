@@ -345,6 +345,15 @@ export type ExtensionMessage =
   | { type: 'GET_GUEST_HISTORY_BY_PHONE'; phone: string }
   /** Search PMS reservations by last name — fills the search field on the active PMS tab. */
   | { type: 'FIND_GUEST_IN_PMS'; lastName: string }
+  /** Clear the in-memory reservation snapshot — called on Save & Clear / Cancel. */
+  | { type: 'CLEAR_RESERVATION' }
+  /** Fetch latest room/checkout/folio from id_scans for a guest ID number. */
+  | { type: 'GET_SCAN_RESERVATION_DATA'; idNumber: string }
+export type ScanReservationData = {
+  roomNumber: string | null
+  checkOutDate: string | null
+  confirmationNumber: string | null
+}
 export type ExtensionResponse =
   | {
       ok: true
@@ -361,6 +370,8 @@ export type ExtensionResponse =
       guestStayHistory?: GuestStayHistoryRecord[]
       /** Present after `CHECK_DNR` or `ADD_DNR`. */
       dnrActive?: boolean
+      /** Present after `GET_SCAN_RESERVATION_DATA`. */
+      scanReservationData?: ScanReservationData
     }
   | { ok: false; error: string; keyBlocks?: KeyBlock[] }
 

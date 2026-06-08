@@ -658,6 +658,18 @@ async function completeSynxisReservationFromConfirmation(
 
   const conf = apiRes.payload.confirmationNumber ?? confirmation
 
+  // Patch any existing id_scans rows for this confirmation with the latest room/checkout
+  if (sess.session && conf) {
+    const { error: patchErr } = await client
+      .from('id_scans')
+      .update({
+        room_number: apiRes.payload.roomNumber ?? null,
+        check_out_date: apiRes.payload.checkOutDate ?? null,
+      })
+      .eq('confirmation_number', conf)
+    if (patchErr) console.warn('[FDN SW] id_scans room patch (SynXis)', patchErr.message)
+  }
+
   if (options.panelToast) {
     if (sess.session) {
       if (dbSaved) {
@@ -721,6 +733,18 @@ async function completeEzeeReservationFromSnapshot(
   }
 
   const conf = snapshot.confirmationNumber ?? ''
+
+  // Patch any existing id_scans rows for this confirmation with the latest room/checkout
+  if (sess.session && conf) {
+    const { error: patchErr } = await client
+      .from('id_scans')
+      .update({
+        room_number: snapshot.roomNumber ?? null,
+        check_out_date: snapshot.checkOutDate ?? null,
+      })
+      .eq('confirmation_number', conf)
+    if (patchErr) console.warn('[FDN SW] id_scans room patch (eZee)', patchErr.message)
+  }
 
   if (options.panelToast) {
     if (sess.session) {
@@ -1414,6 +1438,8 @@ async function saveIdScan(args: {
     image_back_path: imageBackPath,
     phone_encrypted,
     email_encrypted,
+    room_number: snap?.roomNumber ?? null,
+    check_out_date: snap?.checkOutDate ?? null,
   }
 
   let savedScanId = scanId
@@ -3086,6 +3112,41 @@ async function handleMessage(
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Find Guest message failed'
       return { ok: false, error: message }
+    }
+  }
+
+  if (msg.type === 'CLEAR_RESERVATION') {
+    reservation = null
+    synxisGuestDisplay = null
+    ezeeGuestDisplay = null
+    void chrome.storage.local.remove(['fdn_active_reservation', 'fdn_ezee_guest_display'])
+    return { ok: true }
+  }
+
+  if (msg.type === 'GET_SCAN_RESERVATION_DATA') {
+    const client = getClient()
+    const { data: sess } = await client.auth.getSession()
+    if (!sess.session) return { ok: false, error: 'Not signed in' }
+    const rawId = msg.idNumber?.trim()
+    if (!rawId) {
+      return { ok: true, scanReservationData: { roomNumber: null, checkOutDate: null, confirmationNumber: null } }
+    }
+    const idHash = await hashIdNumber(rawId)
+    const { data, error: qErr } = await client
+      .from('id_scans')
+      .select('room_number, check_out_date, confirmation_number')
+      .eq('id_number_hash', idHash)
+      .order('scanned_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (qErr) console.warn('[FDN SW] GET_SCAN_RESERVATION_DATA query', qErr.message)
+    return {
+      ok: true,
+      scanReservationData: {
+        roomNumber: (data?.room_number as string | null) ?? null,
+        checkOutDate: (data?.check_out_date as string | null) ?? null,
+        confirmationNumber: (data?.confirmation_number as string | null) ?? null,
+      },
     }
   }
 

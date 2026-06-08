@@ -474,6 +474,7 @@ function App() {
       FDN_PENDING_GUEST_DRAFT_KEY,
     ])
     void clearScanImagesFromStorage()
+    void chrome.runtime.sendMessage({ type: 'CLEAR_RESERVATION' })
   }, [])
 
   const prevSignedInRef = useRef<boolean | null>(null)
@@ -1379,13 +1380,32 @@ function App() {
     if (!idDetail.firstName?.trim() || !idDetail.lastName?.trim()) return
     setExportBusy(true)
     try {
+      // Prefer DB-latest data; fall back to in-memory reservation if DB has no record yet.
+      let roomNumber: string | null = state!.reservation?.roomNumber ?? null
+      let confirmationNumber: string | null = state!.reservation?.confirmationNumber ?? null
+      let checkOutDate: string | null = state!.reservation?.checkOutDate ?? null
+
+      const idNumber = parsed.idNumber?.trim()
+      if (idNumber) {
+        type ScanResMsg = { ok: boolean; scanReservationData?: { roomNumber: string | null; checkOutDate: string | null; confirmationNumber: string | null } }
+        const dbRes = (await chrome.runtime.sendMessage({
+          type: 'GET_SCAN_RESERVATION_DATA',
+          idNumber,
+        })) as ScanResMsg
+        if (dbRes.ok && dbRes.scanReservationData) {
+          roomNumber = dbRes.scanReservationData.roomNumber ?? roomNumber
+          confirmationNumber = dbRes.scanReservationData.confirmationNumber ?? confirmationNumber
+          checkOutDate = dbRes.scanReservationData.checkOutDate ?? checkOutDate
+        }
+      }
+
       const bytes = await buildCashDepositReceiptPdf({
         idDetail,
         parsed,
         scanTime: lastScanReceivedAt,
-        roomNumber: state!.reservation?.roomNumber ?? null,
-        confirmationNumber: state!.reservation?.confirmationNumber ?? null,
-        checkOutDate: state!.reservation?.checkOutDate ?? null,
+        roomNumber,
+        confirmationNumber,
+        checkOutDate,
         hotel: state!.hotelContact,
       })
       const lastName  = idDetail.lastName.trim().replace(/\s+/g, '_')
