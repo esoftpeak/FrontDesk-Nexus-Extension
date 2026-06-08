@@ -40,6 +40,7 @@ import {
   idScanLogEntryToFormState,
 } from './lib/apply-guest-profile'
 import { buildGuestSaveSnapshot } from './lib/guest-save-snapshot'
+import { buildGuestProfilePdf, downloadPdfBytes } from './lib/export-pdf'
 import {
   mergeHistoryRecordWithLatestContact,
   priorGuestStaysForConfirmation,
@@ -263,6 +264,7 @@ function App() {
   const [rfidCheckBusy, setRfidCheckBusy] = useState(false)
   const [pmsRefreshBusy, setPmsRefreshBusy] = useState(false)
   const [findGuestBusy, setFindGuestBusy] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
   const [historyEditBusy, setHistoryEditBusy] = useState(false)
   const [, setRfidTick] = useState(0)
   const [readCardResult, setReadCardResult] = useState<{
@@ -1331,6 +1333,32 @@ function App() {
       setFormError(e instanceof Error ? e.message : 'Find Guest failed.')
     } finally {
       setFindGuestBusy(false)
+    }
+  }
+
+  async function onExportProfile() {
+    if (!idDetail.firstName?.trim() || !idDetail.lastName?.trim()) return
+    setExportBusy(true)
+    try {
+      const bytes = await buildGuestProfilePdf({
+        idDetail,
+        parsed,
+        phone: phone.trim(),
+        email: emailGuest.trim(),
+        scanTime: lastScanReceivedAt,
+        documentData: lastDocumentData,
+        imageFrontBase64: scanImages?.front ?? null,
+        rotationDeg,
+        flipH,
+        hotel: state.hotelContact,
+      })
+      const lastName = idDetail.lastName.trim().replace(/\s+/g, '_')
+      const firstName = idDetail.firstName.trim().replace(/\s+/g, '_')
+      downloadPdfBytes(bytes, `${lastName}_${firstName}_profile.pdf`)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Export failed.')
+    } finally {
+      setExportBusy(false)
     }
   }
 
@@ -2829,6 +2857,19 @@ function App() {
                   onClick={() => void onFindGuest()}
                 >
                   {findGuestBusy ? 'Searching…' : 'Find Guest'}
+                </button>
+                <button
+                  type="button"
+                  className="fdn-btn fdn-btn--secondary"
+                  disabled={exportBusy || !idDetail.firstName?.trim() || !idDetail.lastName?.trim()}
+                  title={
+                    !idDetail.firstName?.trim() || !idDetail.lastName?.trim()
+                      ? 'Scan an ID first'
+                      : 'Download guest profile PDF'
+                  }
+                  onClick={() => void onExportProfile()}
+                >
+                  {exportBusy ? 'Exporting…' : 'Export Profile'}
                 </button>
                 <button
                   type="button"

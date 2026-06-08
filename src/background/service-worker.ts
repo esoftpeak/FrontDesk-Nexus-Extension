@@ -1028,6 +1028,16 @@ async function getState(): Promise<ExtensionState> {
     maxAllowedBalance: hotelSettings.maxAllowedBalance,
     hasManagerPin: hotelSettings.managerOverridePin.length > 0,
     autoLogoutMinutes: hotelSettings.autoLogoutMinutes,
+    hotelContact: {
+      name: hotelSettings.hotelName,
+      address: hotelSettings.hotelAddress,
+      city: hotelSettings.hotelCity,
+      state: hotelSettings.hotelState,
+      zip: hotelSettings.hotelZip,
+      phone: hotelSettings.hotelPhone,
+      email: hotelSettings.hotelEmail,
+      cashDepositAmount: hotelSettings.cashDepositAmount,
+    },
     lastError,
   }
 }

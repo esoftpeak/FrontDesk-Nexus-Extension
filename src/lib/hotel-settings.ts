@@ -8,6 +8,16 @@ export type ExtensionHotelSettings = {
   managerOverridePin: string
   /** Minutes of inactivity before the extension auto-logs out. 0 = disabled. Default 480. */
   autoLogoutMinutes: number
+  /** Hotel identity for PDF exports. */
+  hotelName: string
+  hotelAddress: string
+  hotelCity: string
+  hotelState: string
+  hotelZip: string
+  hotelPhone: string
+  hotelEmail: string
+  /** Cash deposit amount (USD) for Cash Deposit Receipt PDF. */
+  cashDepositAmount: number
 }
 
 export const DEFAULT_EXTENSION_HOTEL_SETTINGS: ExtensionHotelSettings = {
@@ -15,6 +25,14 @@ export const DEFAULT_EXTENSION_HOTEL_SETTINGS: ExtensionHotelSettings = {
   maxAllowedBalance: -1,
   managerOverridePin: '',
   autoLogoutMinutes: 480,
+  hotelName: '',
+  hotelAddress: '',
+  hotelCity: '',
+  hotelState: '',
+  hotelZip: '',
+  hotelPhone: '',
+  hotelEmail: '',
+  cashDepositAmount: 100,
 }
 
 function clampMinimumCheckInAge(n: unknown): number {
@@ -41,17 +59,30 @@ function clampAutoLogoutMinutes(n: unknown): number {
   return Math.round(Math.max(1, n))
 }
 
+function sanitizeStr(v: unknown): string {
+  if (typeof v !== 'string') return ''
+  return v.trim().slice(0, 255)
+}
+
+function clampCashDeposit(n: unknown): number {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return DEFAULT_EXTENSION_HOTEL_SETTINGS.cashDepositAmount
+  return Math.max(0, Math.round(n * 100) / 100)
+}
+
 export function parseHotelSettingsValue(value: unknown): ExtensionHotelSettings {
-  const v = (value ?? {}) as {
-    minimumCheckInAge?: unknown
-    maxAllowedBalance?: unknown
-    managerOverridePin?: unknown
-    autoLogoutMinutes?: unknown
-  }
+  const v = (value ?? {}) as Record<string, unknown>
   return {
     minimumCheckInAge: clampMinimumCheckInAge(v.minimumCheckInAge),
     maxAllowedBalance: clampMaxAllowedBalance(v.maxAllowedBalance),
     managerOverridePin: sanitizeManagerOverridePin(v.managerOverridePin),
     autoLogoutMinutes: clampAutoLogoutMinutes(v.autoLogoutMinutes),
+    hotelName: sanitizeStr(v.hotelName),
+    hotelAddress: sanitizeStr(v.hotelAddress),
+    hotelCity: sanitizeStr(v.hotelCity),
+    hotelState: sanitizeStr(v.hotelState),
+    hotelZip: sanitizeStr(v.hotelZip),
+    hotelPhone: sanitizeStr(v.hotelPhone),
+    hotelEmail: sanitizeStr(v.hotelEmail),
+    cashDepositAmount: clampCashDeposit(v.cashDepositAmount),
   }
 }

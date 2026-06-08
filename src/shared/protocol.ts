@@ -406,6 +406,17 @@ export type HardwareDevice = 'id_scanner' | 'spectral_payout' | 'rfid_encoder'
 
 export type HardwareStatus = Record<HardwareDevice, 'connected' | 'disconnected'>
 
+export type HotelContact = {
+  name: string
+  address: string
+  city: string
+  state: string
+  zip: string
+  phone: string
+  email: string
+  cashDepositAmount: number
+}
+
 export type ExtensionState = {
   auth: {
     signedIn: boolean
@@ -437,6 +448,8 @@ export type ExtensionState = {
   hasManagerPin: boolean
   /** Minutes of inactivity before the extension auto-logs out; 0 = disabled. */
   autoLogoutMinutes: number
+  /** Hotel identity and contact info from `app_settings` — used in PDF exports. */
+  hotelContact: HotelContact
   lastError: string | null
 }
 
