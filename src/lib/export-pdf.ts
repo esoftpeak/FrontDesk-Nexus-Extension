@@ -871,6 +871,8 @@ export type ChargebackEvidenceInput = {
   scanTime: string | null
   hotel: HotelContact
   signaturePngDataUrl: string | null
+  /** Decrypted bytes of the saved registration card PDF — embedded as Exhibit B pages. */
+  regCardPdfBytes?: Uint8Array | null
 }
 
 export async function buildChargebackEvidencePdf(input: ChargebackEvidenceInput): Promise<Uint8Array> {
@@ -1004,63 +1006,78 @@ export async function buildChargebackEvidencePdf(input: ChargebackEvidenceInput)
     pg2.drawText(scanLabel, { x: MARGIN, y, size: 9, font: bld, color: BLUE })
   }
 
-  // ─── Page 3: Exhibit B — header only ─────────────────────────────────────
+  // ─── Page 3: Exhibit B — header ──────────────────────────────────────────
   const pg3 = pdfDoc.addPage([PAGE_W, PAGE_H])
   y = PAGE_H - MARGIN
 
   centeredText(pg3, 'Exhibits: B', y, 22, bld); y -= 34
-  centeredText(pg3, 'Guest Signed Registration Card with Legal Terms', y, 11, bld)
+  centeredText(pg3, 'Guest Signed Registration Card with Legal Terms', y, 11, bld); y -= 26
 
-  // ─── Page 4: Registration card with signature ─────────────────────────────
-  const pg4 = pdfDoc.addPage([PAGE_W, PAGE_H])
-  y = PAGE_H - MARGIN
-  const TC_S = 8; const TC_LH = 11
-
-  if (hotel.name?.trim()) {
-    const nw = bld.widthOfTextAtSize(hotel.name, 13)
-    pg4.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 13, font: bld }); y -= 16
-  }
-  const cityL4 = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
-  if (cityL4) { centeredText(pg4, cityL4, y, 9, reg, GRAY); y -= LH }
-  if (hotel.phone?.trim()) { centeredText(pg4, hotel.phone, y, 9, reg, GRAY); y -= LH }
-  y -= 8
-
-  y = gridRow(pg4, 'GUEST NAME',    guestName || null,                     'ROOM NUMBER',    input.roomNumber,                              y, reg, bld)
-  y = gridRow(pg4, 'CHECK-IN DATE', formatDateDisplay(input.checkInDate),  'CHECK-OUT DATE', formatDateDisplay(input.checkOutDate) || null, y, reg, bld)
-  y = gridRow(pg4, 'ID NUMBER',     parsed.idNumber?.trim() || null,       'CONFIRMATION #', conf,                                          y, reg, bld)
-  y -= 10
-
-  hRule(pg4, y); y -= 12
-
-  const tcHdr = 'Terms & Conditions'
-  const thw = bld.widthOfTextAtSize(tcHdr, 9.5); const thx = (PAGE_W - thw) / 2
-  pg4.drawText(tcHdr, { x: thx, y, size: 9.5, font: bld })
-  pg4.drawLine({ start: { x: thx, y: y - 1.5 }, end: { x: thx + thw, y: y - 1.5 }, thickness: 0.75, color: BLACK })
-  y -= TC_LH + 4
-
-  const hotelShort = hotel.name?.trim() || 'This hotel'
-  for (const item of REG_CARD_TC_ITEMS) {
-    if (y < 90) break
-    const body = item.body.replace('%%HOTEL%%', hotelShort)
-    y = drawSegs(pg4, [{ text: item.label, bold: true, ul: true }, { text: ' ' + body }], MARGIN, y, TC_S, reg, bld, COL_W, TC_LH)
-    y -= TC_LH + 1
-  }
-
-  y -= 4
-  y = drawWrappedText(pg4, 'By signing below, the guest confirms agreement to the above Terms and Conditions and authorizes all charges associated with their stay.', MARGIN, y, TC_S, reg, COL_W, TC_LH)
-  y -= TC_LH + 10
-
-  pg4.drawText('Signature:', { x: MARGIN, y, size: 9, font: reg })
-  const sw4 = reg.widthOfTextAtSize('Signature:', 9)
-  const slX4 = MARGIN + sw4 + 8
-  if (input.signaturePngDataUrl) {
+  // ─── Pages 4+: Embed saved reg card PDF pages (preferred) ────────────────
+  if (input.regCardPdfBytes && input.regCardPdfBytes.length > 0) {
     try {
-      const sigImg = await pdfDoc.embedPng(input.signaturePngDataUrl)
-      const sigH = 30; const sigW = Math.min(sigImg.width * (30 / sigImg.height), 180)
-      pg4.drawImage(sigImg, { x: slX4, y: y - 4, width: sigW, height: sigH })
-    } catch { /* blank line */ }
+      const regCardDoc = await PDFDocument.load(input.regCardPdfBytes, { ignoreEncryption: true })
+      const pageIndices = regCardDoc.getPageIndices()
+      if (pageIndices.length > 0) {
+        const copiedPages = await pdfDoc.copyPages(regCardDoc, pageIndices)
+        for (const cp of copiedPages) pdfDoc.addPage(cp)
+      }
+    } catch (e) {
+      // Fallback: note on Exhibit B page that PDF could not be loaded
+      centeredText(pg3, '[Registration card PDF could not be loaded]', y, 9, reg, GRAY)
+    }
+  } else {
+    // ─── Fallback: build custom T&C + signature page ──────────────────────
+    const pg4 = pdfDoc.addPage([PAGE_W, PAGE_H])
+    y = PAGE_H - MARGIN
+    const TC_S = 8; const TC_LH = 11
+
+    if (hotel.name?.trim()) {
+      const nw = bld.widthOfTextAtSize(hotel.name, 13)
+      pg4.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 13, font: bld }); y -= 16
+    }
+    const cityL4 = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
+    if (cityL4) { centeredText(pg4, cityL4, y, 9, reg, GRAY); y -= LH }
+    if (hotel.phone?.trim()) { centeredText(pg4, hotel.phone, y, 9, reg, GRAY); y -= LH }
+    y -= 8
+
+    y = gridRow(pg4, 'GUEST NAME',    guestName || null,                     'ROOM NUMBER',    input.roomNumber,                              y, reg, bld)
+    y = gridRow(pg4, 'CHECK-IN DATE', formatDateDisplay(input.checkInDate),  'CHECK-OUT DATE', formatDateDisplay(input.checkOutDate) || null, y, reg, bld)
+    y = gridRow(pg4, 'ID NUMBER',     parsed.idNumber?.trim() || null,       'CONFIRMATION #', conf,                                          y, reg, bld)
+    y -= 10
+
+    hRule(pg4, y); y -= 12
+
+    const tcHdr = 'Terms & Conditions'
+    const thw = bld.widthOfTextAtSize(tcHdr, 9.5); const thx = (PAGE_W - thw) / 2
+    pg4.drawText(tcHdr, { x: thx, y, size: 9.5, font: bld })
+    pg4.drawLine({ start: { x: thx, y: y - 1.5 }, end: { x: thx + thw, y: y - 1.5 }, thickness: 0.75, color: BLACK })
+    y -= TC_LH + 4
+
+    const hotelShort = hotel.name?.trim() || 'This hotel'
+    for (const item of REG_CARD_TC_ITEMS) {
+      if (y < 90) break
+      const body = item.body.replace('%%HOTEL%%', hotelShort)
+      y = drawSegs(pg4, [{ text: item.label, bold: true, ul: true }, { text: ' ' + body }], MARGIN, y, TC_S, reg, bld, COL_W, TC_LH)
+      y -= TC_LH + 1
+    }
+
+    y -= 4
+    y = drawWrappedText(pg4, 'By signing below, the guest confirms agreement to the above Terms and Conditions and authorizes all charges associated with their stay.', MARGIN, y, TC_S, reg, COL_W, TC_LH)
+    y -= TC_LH + 10
+
+    pg4.drawText('Signature:', { x: MARGIN, y, size: 9, font: reg })
+    const sw4 = reg.widthOfTextAtSize('Signature:', 9)
+    const slX4 = MARGIN + sw4 + 8
+    if (input.signaturePngDataUrl) {
+      try {
+        const sigImg = await pdfDoc.embedPng(input.signaturePngDataUrl)
+        const sigH = 30; const sigW = Math.min(sigImg.width * (30 / sigImg.height), 180)
+        pg4.drawImage(sigImg, { x: slX4, y: y - 4, width: sigW, height: sigH })
+      } catch { /* blank line */ }
+    }
+    pg4.drawLine({ start: { x: slX4, y: y - 2 }, end: { x: slX4 + 180, y: y - 2 }, thickness: 0.5, color: BLACK })
   }
-  pg4.drawLine({ start: { x: slX4, y: y - 2 }, end: { x: slX4 + 180, y: y - 2 }, thickness: 0.5, color: BLACK })
 
   return pdfDoc.save()
 }

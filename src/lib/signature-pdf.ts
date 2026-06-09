@@ -2,6 +2,24 @@ import { decryptBinary } from './encryption'
 import { createExtensionSupabase } from './supabase-factory'
 
 /**
+ * Returns the most recent `storage_path` (encrypted reg card PDF) from the `signatures` table
+ * for the given confirmation number, or null if none exists.
+ */
+export async function fetchLatestSignatureStoragePath(confirmationNumber: string): Promise<string | null> {
+  const supabase = createExtensionSupabase()
+  const { data, error } = await supabase
+    .from('signatures')
+    .select('storage_path')
+    .eq('confirmation_number', confirmationNumber)
+    .not('storage_path', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error || !data) return null
+  return typeof data.storage_path === 'string' ? data.storage_path : null
+}
+
+/**
  * Returns the most recent `signature_image_path` stored in the `signatures` table
  * for the given confirmation number, or null if none exists.
  */

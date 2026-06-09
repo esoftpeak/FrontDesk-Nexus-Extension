@@ -50,7 +50,7 @@ import {
   buildRegistrationCardPdf,
   downloadPdfBytes,
 } from './lib/export-pdf'
-import { fetchLatestSignatureImagePath, fetchSignaturePng } from './lib/signature-pdf'
+import { fetchLatestSignatureImagePath, fetchLatestSignatureStoragePath, fetchDecryptSignaturePdf, fetchSignaturePng } from './lib/signature-pdf'
 import {
   mergeHistoryRecordWithLatestContact,
   priorGuestStaysForConfirmation,
@@ -1582,13 +1582,30 @@ function App() {
       type MatchMsg = { ok: boolean; matchingReservations?: ReservationCandidate[] }
       const matchRes = (await chrome.runtime.sendMessage({ type: 'GET_MATCHING_RESERVATIONS', guestName: scannedName })) as MatchMsg
       const candidate = matchRes.ok ? (matchRes.matchingReservations ?? [])[0] ?? null : null
+
       let signaturePngDataUrl: string | null = null
+      let regCardPdfBytes: Uint8Array | null = null
+
       if (candidate?.confirmationNumber) {
+        // Fetch the full saved reg card PDF (Exhibit B) and the signature PNG in parallel
+        const [regCardResult, sigImgPath] = await Promise.allSettled([
+          fetchLatestSignatureStoragePath(candidate.confirmationNumber),
+          fetchLatestSignatureImagePath(candidate.confirmationNumber),
+        ])
         try {
-          const imgPath = await fetchLatestSignatureImagePath(candidate.confirmationNumber)
+          const storagePath = regCardResult.status === 'fulfilled' ? regCardResult.value : null
+          if (storagePath) {
+            const blob = await fetchDecryptSignaturePdf(storagePath)
+            const buf = await blob.arrayBuffer()
+            regCardPdfBytes = new Uint8Array(buf)
+          }
+        } catch { /* proceed without reg card PDF */ }
+        try {
+          const imgPath = sigImgPath.status === 'fulfilled' ? sigImgPath.value : null
           if (imgPath) signaturePngDataUrl = await fetchSignaturePng(imgPath)
-        } catch { /* proceed without signature */ }
+        } catch { /* proceed without signature PNG */ }
       }
+
       const bytes = await buildChargebackEvidencePdf({
         idDetail,
         parsed,
@@ -1603,6 +1620,7 @@ function App() {
         scanTime: lastScanReceivedAt,
         hotel: state!.hotelContact,
         signaturePngDataUrl,
+        regCardPdfBytes,
       })
       const fn = idDetail.firstName.trim().replace(/\s+/g, '_')
       const ln = idDetail.lastName.trim().replace(/\s+/g, '_')
