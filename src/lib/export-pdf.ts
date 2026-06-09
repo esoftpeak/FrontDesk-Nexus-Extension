@@ -10,6 +10,46 @@ const BLACK  = rgb(0,    0,    0)
 const GRAY   = rgb(0.45, 0.45, 0.45)
 const LIGHT  = rgb(0.75, 0.75, 0.75)
 
+// Unicode codepoints that exist in Windows-1252 and ARE supported by pdf-lib's WinAnsiEncoding
+const WIN_ANSI_EXTRAS = new Set([
+  0x20AC,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,0x02C6,
+  0x2030,0x0160,0x2039,0x0152,0x017D,0x2018,0x2019,0x201C,
+  0x201D,0x2022,0x2013,0x2014,0x02DC,0x2122,0x0161,0x203A,
+  0x0153,0x017E,0x0178,
+])
+
+/**
+ * Strip or replace characters that WinAnsiEncoding cannot encode.
+ * Keeps Latin-1 (0x00-0xFF) and Windows-1252 extras; maps common symbols to ASCII.
+ */
+function pdfSafe(s: string | null | undefined): string {
+  if (!s) return ''
+  return s.replace(/[^\x00-\xFF]/g, (c) => {
+    const cp = c.codePointAt(0)!
+    if (WIN_ANSI_EXTRAS.has(cp)) return c
+    const map: Record<number, string> = {
+      0x2192: '->',  0x2190: '<-',  0x2191: '^',   0x2193: 'v',
+      0x21D2: '=>',  0x21D0: '<=',  0x2194: '<->',
+      0x00B7: '.',   0x2212: '-',   0x00D7: 'x',   0x00F7: '/',
+    }
+    return map[cp] ?? ''
+  })
+}
+
+/** Sanitize all string fields in a HotelContact so they're safe for WinAnsiEncoding. */
+function sanitizeHotel(h: HotelContact): HotelContact {
+  return {
+    ...h,
+    name:    pdfSafe(h.name),
+    address: pdfSafe(h.address),
+    city:    pdfSafe(h.city),
+    state:   pdfSafe(h.state),
+    zip:     pdfSafe(h.zip),
+    phone:   pdfSafe(h.phone),
+    email:   pdfSafe(h.email),
+  }
+}
+
 // ── Page geometry ────────────────────────────────────────────────────────────
 const PAGE_W = 612
 const PAGE_H = 792
@@ -27,8 +67,9 @@ function text(
   font: PDFFont,
   color = BLACK,
 ) {
-  if (!str?.trim()) return
-  page.drawText(str, { x, y, size, font, color })
+  const s = pdfSafe(str)
+  if (!s?.trim()) return
+  page.drawText(s, { x, y, size, font, color })
 }
 
 function centeredText(
@@ -39,9 +80,10 @@ function centeredText(
   font: PDFFont,
   color = BLACK,
 ) {
-  if (!str?.trim()) return
-  const w = font.widthOfTextAtSize(str, size)
-  text(page, str, (PAGE_W - w) / 2, y, size, font, color)
+  const s = pdfSafe(str)
+  if (!s?.trim()) return
+  const w = font.widthOfTextAtSize(s, size)
+  page.drawText(s, { x: (PAGE_W - w) / 2, y, size, font, color })
 }
 
 function hRule(page: PDFPage, y: number, color = LIGHT) {
@@ -81,7 +123,7 @@ function field(
   regular: PDFFont,
   size = 9,
 ): number {
-  const v = value?.trim()
+  const v = pdfSafe(value?.trim())
   if (!v) return y
   page.drawText(`${label}: ${v}`, { x: MARGIN, y, size, font: regular, color: BLACK })
   return y - 13
@@ -162,7 +204,8 @@ export type GuestProfileInput = {
 }
 
 export async function buildGuestProfilePdf(input: GuestProfileInput): Promise<Uint8Array> {
-  const { idDetail, parsed, phone, email, scanTime, documentData, hotel } = input
+  const { idDetail, parsed, phone, email, scanTime, documentData } = input
+  const hotel = sanitizeHotel(input.hotel)
 
   const pdfDoc = await PDFDocument.create()
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica)
@@ -320,7 +363,7 @@ function drawSegs(
 ): number {
   const tokens: Array<{ word: string; bold: boolean; ul: boolean }> = []
   for (const seg of segs) {
-    for (const w of seg.text.split(/\s+/).filter(Boolean)) {
+    for (const w of pdfSafe(seg.text).split(/\s+/).filter(Boolean)) {
       tokens.push({ word: w, bold: !!seg.bold, ul: !!seg.ul })
     }
   }
@@ -357,11 +400,13 @@ function gridRow(
   const RLX = 315;  const RVX = 430;  const RVE = 562
 
   page.drawText(leftLabel,  { x: MARGIN, y, size: LS, font: reg, color: GRAY })
-  if (leftValue?.trim())  page.drawText(leftValue.trim(),  { x: LVX, y, size: VS, font: bld, color: BLACK })
+  const lv = pdfSafe(leftValue?.trim())
+  if (lv)  page.drawText(lv, { x: LVX, y, size: VS, font: bld, color: BLACK })
   page.drawLine({ start: { x: LVX, y: y - 2 }, end: { x: LVE, y: y - 2 }, thickness: 0.5, color: BLACK })
 
   page.drawText(rightLabel, { x: RLX, y, size: LS, font: reg, color: GRAY })
-  if (rightValue?.trim()) page.drawText(rightValue.trim(), { x: RVX, y, size: VS, font: bld, color: BLACK })
+  const rv = pdfSafe(rightValue?.trim())
+  if (rv) page.drawText(rv, { x: RVX, y, size: VS, font: bld, color: BLACK })
   page.drawLine({ start: { x: RVX, y: y - 2 }, end: { x: RVE, y: y - 2 }, thickness: 0.5, color: BLACK })
 
   return y - 28
@@ -387,14 +432,14 @@ function receiptSigRow(
   const RVX = RLX + rlw + 8;    const RVE = PAGE_W - MARGIN
 
   page.drawText(leftLabel, { x: MARGIN, y, size: LS, font: reg, color: GRAY })
-  if (leftValue?.trim()) {
-    page.drawText(leftValue.trim(), { x: LVX, y, size: VS, font: bld, color: BLACK })
-  }
+  const slv = pdfSafe(leftValue?.trim())
+  if (slv) page.drawText(slv, { x: LVX, y, size: VS, font: bld, color: BLACK })
   page.drawLine({ start: { x: LVX, y: y - 2 }, end: { x: LVE, y: y - 2 }, thickness: 0.5, color: BLACK })
 
   page.drawText(rightLabel, { x: RLX, y, size: LS, font: reg, color: GRAY })
-  if (rightValue?.trim()) {
-    page.drawText(rightValue.trim(), { x: RVX, y, size: VS, font: bld, color: BLACK })
+  const srv = pdfSafe(rightValue?.trim())
+  if (srv) {
+    page.drawText(srv, { x: RVX, y, size: VS, font: bld, color: BLACK })
   } else {
     page.drawLine({ start: { x: RVX, y: y - 2 }, end: { x: RVE, y: y - 2 }, thickness: 0.5, color: BLACK })
   }
@@ -415,7 +460,8 @@ export type CashDepositInput = {
 }
 
 export async function buildCashDepositReceiptPdf(input: CashDepositInput): Promise<Uint8Array> {
-  const { idDetail, parsed, scanTime, roomNumber, confirmationNumber, checkOutDate, hotel } = input
+  const { idDetail, parsed, scanTime, roomNumber, confirmationNumber, checkOutDate } = input
+  const hotel = sanitizeHotel(input.hotel)
 
   const pdfDoc = await PDFDocument.create()
   const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
@@ -540,7 +586,7 @@ function drawWrappedText(
   lineH: number,
   color = BLACK,
 ): number {
-  const words = str.split(/\s+/).filter(Boolean)
+  const words = pdfSafe(str).split(/\s+/).filter(Boolean)
   let cx = x
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!
@@ -570,7 +616,8 @@ export type PoliceReportInput = {
 }
 
 export async function buildPoliceReportPdf(input: PoliceReportInput): Promise<Uint8Array> {
-  const { idDetail, parsed, hotel } = input
+  const { idDetail, parsed } = input
+  const hotel = sanitizeHotel(input.hotel)
   const pdfDoc = await PDFDocument.create()
   const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
@@ -700,7 +747,8 @@ const REG_CARD_TC_ITEMS: Array<{ label: string; body: string }> = [
 ]
 
 export async function buildRegistrationCardPdf(input: RegistrationCardInput): Promise<Uint8Array> {
-  const { idDetail, parsed, phone, email, hotel } = input
+  const { idDetail, parsed, phone, email } = input
+  const hotel = sanitizeHotel(input.hotel)
   const pdfDoc = await PDFDocument.create()
   const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
@@ -826,7 +874,8 @@ export type ChargebackEvidenceInput = {
 }
 
 export async function buildChargebackEvidencePdf(input: ChargebackEvidenceInput): Promise<Uint8Array> {
-  const { idDetail, parsed, hotel } = input
+  const { idDetail, parsed } = input
+  const hotel = sanitizeHotel(input.hotel)
   const pdfDoc = await PDFDocument.create()
   const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
@@ -1030,7 +1079,8 @@ export type PetPolicyInput = {
 }
 
 export async function buildPetPolicyPdf(input: PetPolicyInput): Promise<Uint8Array> {
-  const { idDetail, parsed, hotel } = input
+  const { idDetail, parsed } = input
+  const hotel = sanitizeHotel(input.hotel)
   const pdfDoc = await PDFDocument.create()
   const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
