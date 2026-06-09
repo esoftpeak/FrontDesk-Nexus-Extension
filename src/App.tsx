@@ -41,7 +41,16 @@ import {
   idScanLogEntryToFormState,
 } from './lib/apply-guest-profile'
 import { buildGuestSaveSnapshot } from './lib/guest-save-snapshot'
-import { buildCashDepositReceiptPdf, buildGuestProfilePdf, downloadPdfBytes } from './lib/export-pdf'
+import {
+  buildCashDepositReceiptPdf,
+  buildChargebackEvidencePdf,
+  buildGuestProfilePdf,
+  buildPetPolicyPdf,
+  buildPoliceReportPdf,
+  buildRegistrationCardPdf,
+  downloadPdfBytes,
+} from './lib/export-pdf'
+import { fetchLatestSignatureImagePath, fetchSignaturePng } from './lib/signature-pdf'
 import {
   mergeHistoryRecordWithLatestContact,
   priorGuestStaysForConfirmation,
@@ -1497,6 +1506,147 @@ function App() {
     }
   }
 
+  async function onExportPoliceReport() {
+    if (!idDetail.firstName?.trim() || !idDetail.lastName?.trim()) return
+    setExportBusy(true)
+    try {
+      const scannedName = `${idDetail.lastName ?? ''} ${idDetail.firstName ?? ''}`.trim()
+      type MatchMsg = { ok: boolean; matchingReservations?: ReservationCandidate[] }
+      const matchRes = (await chrome.runtime.sendMessage({ type: 'GET_MATCHING_RESERVATIONS', guestName: scannedName })) as MatchMsg
+      const candidate = matchRes.ok ? (matchRes.matchingReservations ?? [])[0] ?? null : null
+      const bytes = await buildPoliceReportPdf({
+        idDetail,
+        parsed,
+        documentData: lastDocumentData,
+        imageFrontBase64: scanImages?.front ?? null,
+        rotationDeg,
+        flipH,
+        roomNumber: candidate?.roomNumber ?? null,
+        confirmationNumber: candidate?.confirmationNumber ?? null,
+        checkInDate: candidate?.checkInDate ?? null,
+        hotel: state!.hotelContact,
+      })
+      const fn = idDetail.firstName.trim().replace(/\s+/g, '_')
+      const ln = idDetail.lastName.trim().replace(/\s+/g, '_')
+      downloadPdfBytes(bytes, `Police_Report_${fn}_${ln}_${new Date().toISOString().slice(0, 10)}.pdf`)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Export failed.')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
+  async function onExportRegistrationCard() {
+    if (!idDetail.firstName?.trim() || !idDetail.lastName?.trim()) return
+    setExportBusy(true)
+    try {
+      const scannedName = `${idDetail.lastName ?? ''} ${idDetail.firstName ?? ''}`.trim()
+      type MatchMsg = { ok: boolean; matchingReservations?: ReservationCandidate[] }
+      const matchRes = (await chrome.runtime.sendMessage({ type: 'GET_MATCHING_RESERVATIONS', guestName: scannedName })) as MatchMsg
+      const candidate = matchRes.ok ? (matchRes.matchingReservations ?? [])[0] ?? null : null
+      let signaturePngDataUrl: string | null = null
+      if (candidate?.confirmationNumber) {
+        try {
+          const imgPath = await fetchLatestSignatureImagePath(candidate.confirmationNumber)
+          if (imgPath) signaturePngDataUrl = await fetchSignaturePng(imgPath)
+        } catch { /* proceed without signature */ }
+      }
+      const bytes = await buildRegistrationCardPdf({
+        idDetail,
+        parsed,
+        phone: phone.trim(),
+        email: emailGuest.trim(),
+        roomNumber: candidate?.roomNumber ?? null,
+        confirmationNumber: candidate?.confirmationNumber ?? null,
+        checkInDate: candidate?.checkInDate ?? lastScanReceivedAt,
+        checkOutDate: candidate?.checkOutDate ?? null,
+        hotel: state!.hotelContact,
+        signaturePngDataUrl,
+      })
+      const fn = idDetail.firstName.trim().replace(/\s+/g, '_')
+      const ln = idDetail.lastName.trim().replace(/\s+/g, '_')
+      downloadPdfBytes(bytes, `Registration_Card_${fn}_${ln}_${new Date().toISOString().slice(0, 10)}.pdf`)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Export failed.')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
+  async function onExportChargebackEvidence() {
+    if (!idDetail.firstName?.trim() || !idDetail.lastName?.trim()) return
+    setExportBusy(true)
+    try {
+      const scannedName = `${idDetail.lastName ?? ''} ${idDetail.firstName ?? ''}`.trim()
+      type MatchMsg = { ok: boolean; matchingReservations?: ReservationCandidate[] }
+      const matchRes = (await chrome.runtime.sendMessage({ type: 'GET_MATCHING_RESERVATIONS', guestName: scannedName })) as MatchMsg
+      const candidate = matchRes.ok ? (matchRes.matchingReservations ?? [])[0] ?? null : null
+      let signaturePngDataUrl: string | null = null
+      if (candidate?.confirmationNumber) {
+        try {
+          const imgPath = await fetchLatestSignatureImagePath(candidate.confirmationNumber)
+          if (imgPath) signaturePngDataUrl = await fetchSignaturePng(imgPath)
+        } catch { /* proceed without signature */ }
+      }
+      const bytes = await buildChargebackEvidencePdf({
+        idDetail,
+        parsed,
+        imageFrontBase64: scanImages?.front ?? null,
+        imageBackBase64: scanImages?.back ?? null,
+        rotationDeg,
+        flipH,
+        roomNumber: candidate?.roomNumber ?? null,
+        confirmationNumber: candidate?.confirmationNumber ?? null,
+        checkInDate: candidate?.checkInDate ?? lastScanReceivedAt,
+        checkOutDate: candidate?.checkOutDate ?? null,
+        hotel: state!.hotelContact,
+        signaturePngDataUrl,
+      })
+      const fn = idDetail.firstName.trim().replace(/\s+/g, '_')
+      const ln = idDetail.lastName.trim().replace(/\s+/g, '_')
+      downloadPdfBytes(bytes, `Chargeback_Evidence_${fn}_${ln}_${new Date().toISOString().slice(0, 10)}.pdf`)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Export failed.')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
+  async function onExportPetPolicy() {
+    if (!idDetail.firstName?.trim() || !idDetail.lastName?.trim()) return
+    setExportBusy(true)
+    try {
+      const scannedName = `${idDetail.lastName ?? ''} ${idDetail.firstName ?? ''}`.trim()
+      type MatchMsg = { ok: boolean; matchingReservations?: ReservationCandidate[] }
+      const matchRes = (await chrome.runtime.sendMessage({ type: 'GET_MATCHING_RESERVATIONS', guestName: scannedName })) as MatchMsg
+      const candidate = matchRes.ok ? (matchRes.matchingReservations ?? [])[0] ?? null : null
+      let signaturePngDataUrl: string | null = null
+      if (candidate?.confirmationNumber) {
+        try {
+          const imgPath = await fetchLatestSignatureImagePath(candidate.confirmationNumber)
+          if (imgPath) signaturePngDataUrl = await fetchSignaturePng(imgPath)
+        } catch { /* proceed without signature */ }
+      }
+      const bytes = await buildPetPolicyPdf({
+        idDetail,
+        parsed,
+        roomNumber: candidate?.roomNumber ?? null,
+        confirmationNumber: candidate?.confirmationNumber ?? null,
+        checkInDate: candidate?.checkInDate ?? lastScanReceivedAt,
+        checkOutDate: candidate?.checkOutDate ?? null,
+        hotel: state!.hotelContact,
+        signaturePngDataUrl,
+      })
+      const fn = idDetail.firstName.trim().replace(/\s+/g, '_')
+      const ln = idDetail.lastName.trim().replace(/\s+/g, '_')
+      downloadPdfBytes(bytes, `Pet_Policy_${fn}_${ln}_${new Date().toISOString().slice(0, 10)}.pdf`)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Export failed.')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   async function onTransferToPms() {
     const built = buildGuestFormPayload()
     if (!built) return
@@ -2657,6 +2807,50 @@ function App() {
                               }}
                             >
                               Export Cash Deposit Receipt
+                            </button>
+                            <button
+                              type="button"
+                              className="fdn-export-menu__item"
+                              disabled={exportBusy}
+                              onClick={() => {
+                                setExportMenuOpen(false)
+                                void onExportPoliceReport()
+                              }}
+                            >
+                              Export Police Report
+                            </button>
+                            <button
+                              type="button"
+                              className="fdn-export-menu__item"
+                              disabled={exportBusy}
+                              onClick={() => {
+                                setExportMenuOpen(false)
+                                void onExportRegistrationCard()
+                              }}
+                            >
+                              Export Registration Card
+                            </button>
+                            <button
+                              type="button"
+                              className="fdn-export-menu__item"
+                              disabled={exportBusy}
+                              onClick={() => {
+                                setExportMenuOpen(false)
+                                void onExportChargebackEvidence()
+                              }}
+                            >
+                              Export Chargeback Evidence
+                            </button>
+                            <button
+                              type="button"
+                              className="fdn-export-menu__item"
+                              disabled={exportBusy}
+                              onClick={() => {
+                                setExportMenuOpen(false)
+                                void onExportPetPolicy()
+                              }}
+                            >
+                              Export Pet Policy
                             </button>
                           </div>
                         )}

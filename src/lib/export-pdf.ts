@@ -527,6 +527,585 @@ export async function buildCashDepositReceiptPdf(input: CashDepositInput): Promi
   return pdfDoc.save()
 }
 
+// ── Wrapped-text helper ──────────────────────────────────────────────────────
+
+function drawWrappedText(
+  page: PDFPage,
+  str: string,
+  x: number,
+  y: number,
+  size: number,
+  font: PDFFont,
+  maxW: number,
+  lineH: number,
+  color = BLACK,
+): number {
+  const words = str.split(/\s+/).filter(Boolean)
+  let cx = x
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!
+    const ww = font.widthOfTextAtSize(w, size)
+    if (cx > x && cx + ww > x + maxW) { y -= lineH; cx = x }
+    page.drawText(w, { x: cx, y, size, font, color })
+    cx += ww
+    if (i < words.length - 1) cx += font.widthOfTextAtSize(' ', size)
+  }
+  return y
+}
+
+// ── Police Report PDF ─────────────────────────────────────────────────────────
+
+export type PoliceReportInput = {
+  idDetail: IdScanDetailGuru
+  parsed: ParsedIdFields
+  documentData: Record<string, unknown> | null
+  imageFrontBase64: string | null
+  rotationDeg: number
+  flipH: boolean
+  roomNumber: string | null
+  confirmationNumber: string | null
+  checkInDate: string | null
+  hotel: HotelContact
+}
+
+export async function buildPoliceReportPdf(input: PoliceReportInput): Promise<Uint8Array> {
+  const { idDetail, parsed, documentData, hotel } = input
+  const pdfDoc = await PDFDocument.create()
+  const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const page = pdfDoc.addPage([PAGE_W, PAGE_H])
+  const LH = 13
+
+  let y = PAGE_H - MARGIN
+
+  if (hotel.name?.trim()) {
+    const nw = bld.widthOfTextAtSize(hotel.name, 14)
+    page.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 14, font: bld })
+    y -= 20
+  }
+  const cityLine = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
+  if (hotel.address?.trim()) { centeredText(page, hotel.address, y, 9, reg, GRAY); y -= LH }
+  if (cityLine)              { centeredText(page, cityLine,      y, 9, reg, GRAY); y -= LH }
+  if (hotel.phone?.trim())   { centeredText(page, hotel.phone,   y, 9, reg, GRAY); y -= LH }
+  y -= 10
+
+  centeredText(page, 'POLICE REPORT', y, 16, bld)
+  y -= 10; hRule(page, y, BLACK); y -= 18
+
+  page.drawText(`Date: ${formatFooterTimestamp()}`, { x: MARGIN, y, size: 9, font: reg })
+  y -= 22
+
+  y = sectionHeader(page, 'GUEST INFORMATION', y, bld)
+  y -= 4
+
+  const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName]
+    .map(p => p?.trim()).filter(Boolean)
+  const guestName = nameParts.join(' ') || parsed.fullName?.trim() || ''
+  const gender = normalizeGender(documentData?.gender ?? documentData?.sex)
+  const addr = [
+    idDetail.streetAddress?.trim() || parsed.address?.trim(),
+    idDetail.city?.trim(),
+    idDetail.state?.trim(),
+  ].filter(Boolean).join(', ')
+
+  const infoRows: [string, string][] = [
+    ['1. Guest Name',      guestName || '—'],
+    ['2. Date of Birth',   formatDobDisplay(parsed.dateOfBirth) || '—'],
+    ['3. Gender',          gender || '—'],
+    ['4. ID Type',         parsed.idType?.trim() || '—'],
+    ['5. ID Number',       parsed.idNumber?.trim() || '—'],
+    ['6. Issue Date',      parsed.issueDate?.trim() || '—'],
+    ['7. Expiry Date',     parsed.expiryDate?.trim() || '—'],
+    ['8. Address',         addr || '—'],
+    ['9. Room Number',     input.roomNumber?.trim() || '—'],
+    ['10. Confirmation #', input.confirmationNumber?.trim() || '—'],
+    ['11. Check-In Date',  formatDateDisplay(input.checkInDate) || '—'],
+  ]
+
+  for (const [label, value] of infoRows) {
+    const lw = bld.widthOfTextAtSize(`${label}:`, 9)
+    page.drawText(`${label}:`, { x: MARGIN, y, size: 9, font: bld })
+    page.drawText(value, { x: MARGIN + lw + 6, y, size: 9, font: reg })
+    y -= LH
+  }
+
+  y -= 10
+
+  if (input.imageFrontBase64?.trim() && y > 180) {
+    try {
+      const src = (input.rotationDeg !== 0 || input.flipH)
+        ? await transformBase64ImageSync(input.imageFrontBase64, input.rotationDeg, input.flipH)
+        : input.imageFrontBase64
+      const mime = guessImageMimeFromBase64(src)
+      let img: PDFImage
+      if (mime === 'image/jpeg')     img = await pdfDoc.embedJpg(src)
+      else if (mime === 'image/png') img = await pdfDoc.embedPng(src)
+      else                           img = await pdfDoc.embedPng(await transformBase64ImageSync(src, 0, false))
+
+      y = sectionHeader(page, 'IDENTIFICATION DOCUMENT', y, bld); y -= 4
+      const maxW = 260; const maxH = 170
+      const scale = Math.min(maxW / img.width, maxH / img.height)
+      const dw = img.width * scale; const dh = img.height * scale
+      page.drawImage(img, { x: MARGIN, y: y - dh, width: dw, height: dh })
+      y = y - dh - 12
+    } catch { /* continue without image */ }
+  }
+
+  if (y > 140) {
+    y -= 4; hRule(page, y); y -= 18
+    y = sectionHeader(page, 'CERTIFICATION', y, bld); y -= 4
+    y = drawWrappedText(page, 'I, the undersigned authorized representative of the above-named hotel, certify that the information contained in this report is true and accurate to the best of my knowledge. The guest information was obtained from a government-issued photo identification document presented at time of check-in.', MARGIN, y, 8.5, reg, COL_W, 12)
+    y -= 28
+  }
+
+  const sigY = Math.max(y, 100)
+  page.drawLine({ start: { x: MARGIN, y: sigY - 2 }, end: { x: 270,            y: sigY - 2 }, thickness: 0.5, color: BLACK })
+  page.drawLine({ start: { x: 310,    y: sigY - 2 }, end: { x: PAGE_W - MARGIN, y: sigY - 2 }, thickness: 0.5, color: BLACK })
+  page.drawText('Authorized Representative Signature', { x: MARGIN, y: sigY - 14, size: 7.5, font: reg, color: GRAY })
+  page.drawText('Date',                                { x: 310,    y: sigY - 14, size: 7.5, font: reg, color: GRAY })
+
+  const fy1 = 36; const fy2 = 22
+  page.drawLine({ start: { x: MARGIN, y: fy1 + 14 }, end: { x: PAGE_W - MARGIN, y: fy1 + 14 }, thickness: 0.5, color: LIGHT })
+  const fp = [hotel.name, hotel.city, hotel.state].filter(Boolean)
+  if (fp.length) centeredText(page, fp.join(' • '), fy1, 9, reg, GRAY)
+  centeredText(page, `Generated: ${formatFooterTimestamp()}`, fy2, 9, reg, GRAY)
+
+  return pdfDoc.save()
+}
+
+// ── Registration Card PDF ─────────────────────────────────────────────────────
+
+export type RegistrationCardInput = {
+  idDetail: IdScanDetailGuru
+  parsed: ParsedIdFields
+  phone: string
+  email: string
+  roomNumber: string | null
+  confirmationNumber: string | null
+  checkInDate: string | null
+  checkOutDate: string | null
+  hotel: HotelContact
+  signaturePngDataUrl: string | null
+}
+
+const REG_CARD_TC: Array<{ heading: string; body: string }> = [
+  {
+    heading: 'RATES & CHARGES',
+    body: 'Guest agrees to pay all room rates, taxes, and applicable fees. By providing a credit/debit card, guest authorizes the hotel to charge for all amounts incurred during the stay including incidentals. Final charges will be posted at checkout.',
+  },
+  {
+    heading: 'CHECK-IN / CHECK-OUT',
+    body: 'Check-in time is 3:00 PM. Check-out time is 11:00 AM. Early check-in and late check-out are subject to availability and may incur additional fees. Failure to vacate by checkout time may result in an additional night charge.',
+  },
+  {
+    heading: 'SMOKING POLICY',
+    body: 'This property is entirely non-smoking. Smoking is prohibited in all guest rooms, hallways, and indoor common areas. A cleaning fee of up to $250 will be charged for violations.',
+  },
+  {
+    heading: 'DAMAGES & RESPONSIBILITY',
+    body: "Guest is responsible for any damages to hotel property beyond normal wear and tear. Charges for damages may be applied to the credit card on file within 7 days of checkout.",
+  },
+  {
+    heading: 'NOISE & CONDUCT',
+    body: 'Quiet hours are 10:00 PM – 8:00 AM. Disruptive behavior may result in removal from the premises without refund. Hotel reserves the right to refuse or terminate service.',
+  },
+  {
+    heading: 'LIABILITY',
+    body: 'The hotel is not responsible for loss, theft, or damage to personal property. Safety deposit boxes are available at the front desk. Guests assume personal liability for any injury or loss during their stay.',
+  },
+]
+
+export async function buildRegistrationCardPdf(input: RegistrationCardInput): Promise<Uint8Array> {
+  const { idDetail, parsed, phone, email, hotel } = input
+  const pdfDoc = await PDFDocument.create()
+  const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const page = pdfDoc.addPage([PAGE_W, PAGE_H])
+  const LH = 12
+
+  let y = PAGE_H - MARGIN
+
+  if (hotel.name?.trim()) {
+    const nw = bld.widthOfTextAtSize(hotel.name, 14)
+    page.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 14, font: bld })
+    y -= 18
+  }
+  const cityLine = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
+  if (hotel.address?.trim()) { centeredText(page, hotel.address, y, 8.5, reg, GRAY); y -= LH }
+  if (cityLine)              { centeredText(page, cityLine,      y, 8.5, reg, GRAY); y -= LH }
+  if (hotel.phone?.trim())   { centeredText(page, hotel.phone,   y, 8.5, reg, GRAY); y -= LH }
+  y -= 6
+
+  centeredText(page, 'GUEST REGISTRATION CARD', y, 13, bld)
+  y -= 8; hRule(page, y, BLACK); y -= 16
+
+  const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName]
+    .map(p => p?.trim()).filter(Boolean)
+  const guestName = nameParts.join(' ') || parsed.fullName?.trim() || ''
+
+  y = gridRow(page, 'GUEST NAME',    guestName || null,                     'ROOM NUMBER',    input.roomNumber,                              y, reg, bld)
+  y = gridRow(page, 'CHECK-IN DATE', formatDateDisplay(input.checkInDate),  'CHECK-OUT DATE', formatDateDisplay(input.checkOutDate) || null, y, reg, bld)
+  y = gridRow(page, 'ID NUMBER',     parsed.idNumber?.trim() || null,       'CONFIRMATION #', input.confirmationNumber?.trim() || null,      y, reg, bld)
+
+  const addrVal  = idDetail.streetAddress?.trim() || parsed.address?.trim() || null
+  const phoneVal = phone.trim() || idDetail.phone?.trim() || null
+  const emailVal = email.trim() || idDetail.email?.trim() || null
+
+  const addrLabel = 'ADDRESS'
+  const alw = reg.widthOfTextAtSize(addrLabel, 8)
+  page.drawText(addrLabel, { x: MARGIN, y, size: 8, font: reg, color: GRAY })
+  if (addrVal) page.drawText(addrVal, { x: MARGIN + alw + 6, y, size: 9, font: bld })
+  page.drawLine({ start: { x: MARGIN + alw + 6, y: y - 2 }, end: { x: PAGE_W - MARGIN, y: y - 2 }, thickness: 0.5, color: BLACK })
+  y -= 26
+
+  y = gridRow(page, 'PHONE', phoneVal, 'EMAIL', emailVal, y, reg, bld)
+  y -= 8
+
+  hRule(page, y); y -= 14
+
+  y = sectionHeader(page, 'TERMS AND CONDITIONS', y, bld); y -= 6
+
+  for (const tc of REG_CARD_TC) {
+    if (y < 120) break
+    page.drawText(tc.heading, { x: MARGIN, y, size: 8, font: bld })
+    y -= 12
+    y = drawWrappedText(page, tc.body, MARGIN, y, 7.5, reg, COL_W, 11)
+    y -= 17
+  }
+
+  hRule(page, y); y -= 14
+
+  y = drawWrappedText(page, 'By signing below, I acknowledge that I have read, understand, and agree to the above Terms and Conditions. I authorize all charges as described above.', MARGIN, y, 8, reg, COL_W, 11)
+  y -= 20
+
+  if (input.signaturePngDataUrl) {
+    try {
+      const sigImg = await pdfDoc.embedPng(input.signaturePngDataUrl)
+      const sigH = 36; const sigW = Math.min(sigImg.width * (36 / sigImg.height), 220)
+      page.drawImage(sigImg, { x: MARGIN, y: y - sigH + 10, width: sigW, height: sigH })
+      y -= sigH
+    } catch { /* blank line */ }
+  }
+
+  page.drawLine({ start: { x: MARGIN, y: y - 2 }, end: { x: 310,            y: y - 2 }, thickness: 0.5, color: BLACK })
+  page.drawLine({ start: { x: 330,    y: y - 2 }, end: { x: PAGE_W - MARGIN, y: y - 2 }, thickness: 0.5, color: BLACK })
+  page.drawText('Guest Signature', { x: MARGIN, y: y - 14, size: 7.5, font: reg, color: GRAY })
+  page.drawText('Date',            { x: 330,    y: y - 14, size: 7.5, font: reg, color: GRAY })
+  y -= 26
+
+  page.drawLine({ start: { x: MARGIN, y: y - 2 }, end: { x: 310, y: y - 2 }, thickness: 0.5, color: BLACK })
+  if (guestName) page.drawText(guestName, { x: MARGIN, y, size: 8.5, font: bld })
+  page.drawText('Print Name', { x: MARGIN, y: y - 14, size: 7.5, font: reg, color: GRAY })
+
+  const fy1 = 36; const fy2 = 22
+  page.drawLine({ start: { x: MARGIN, y: fy1 + 14 }, end: { x: PAGE_W - MARGIN, y: fy1 + 14 }, thickness: 0.5, color: LIGHT })
+  const fp = [hotel.name, hotel.city, hotel.state].filter(Boolean)
+  if (fp.length) centeredText(page, fp.join(' • '), fy1, 9, reg, GRAY)
+  centeredText(page, `Generated: ${formatFooterTimestamp()}`, fy2, 9, reg, GRAY)
+
+  return pdfDoc.save()
+}
+
+// ── Chargeback Evidence PDF ───────────────────────────────────────────────────
+
+export type ChargebackEvidenceInput = {
+  idDetail: IdScanDetailGuru
+  parsed: ParsedIdFields
+  imageFrontBase64: string | null
+  imageBackBase64: string | null
+  rotationDeg: number
+  flipH: boolean
+  roomNumber: string | null
+  confirmationNumber: string | null
+  checkInDate: string | null
+  checkOutDate: string | null
+  hotel: HotelContact
+  signaturePngDataUrl: string | null
+}
+
+export async function buildChargebackEvidencePdf(input: ChargebackEvidenceInput): Promise<Uint8Array> {
+  const { idDetail, parsed, hotel } = input
+  const pdfDoc = await PDFDocument.create()
+  const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const LH = 13
+  const fy1 = 36; const fy2 = 22
+  const fp = [hotel.name, hotel.city, hotel.state].filter(Boolean)
+  const conf = input.confirmationNumber?.trim() || 'N/A'
+
+  const addFooter = (pg: PDFPage) => {
+    pg.drawLine({ start: { x: MARGIN, y: fy1 + 14 }, end: { x: PAGE_W - MARGIN, y: fy1 + 14 }, thickness: 0.5, color: LIGHT })
+    if (fp.length) centeredText(pg, fp.join(' • '), fy1, 9, reg, GRAY)
+    centeredText(pg, `Generated: ${formatFooterTimestamp()}`, fy2, 9, reg, GRAY)
+  }
+
+  const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName]
+    .map(p => p?.trim()).filter(Boolean)
+  const guestName = nameParts.join(' ') || parsed.fullName?.trim() || ''
+
+  // ─── Page 1: Cover letter ─────────────────────────────────────────────────
+  const pg1 = pdfDoc.addPage([PAGE_W, PAGE_H])
+  let y = PAGE_H - MARGIN
+
+  if (hotel.name?.trim()) {
+    const nw = bld.widthOfTextAtSize(hotel.name, 14)
+    pg1.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 14, font: bld })
+    y -= 18
+  }
+  const cityLine = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
+  if (hotel.address?.trim()) { centeredText(pg1, hotel.address, y, 9, reg, GRAY); y -= LH }
+  if (cityLine)              { centeredText(pg1, cityLine,      y, 9, reg, GRAY); y -= LH }
+  if (hotel.phone?.trim())   { centeredText(pg1, hotel.phone,   y, 9, reg, GRAY); y -= LH }
+  y -= 10
+
+  centeredText(pg1, 'CHARGEBACK EVIDENCE PACKAGE', y, 14, bld)
+  y -= 8; hRule(pg1, y, BLACK); y -= 18
+
+  pg1.drawText(`Date: ${formatFooterTimestamp()}`, { x: MARGIN, y, size: 9, font: reg }); y -= LH + 4
+  pg1.drawText(`Re: Disputed Transaction — Confirmation No. ${conf}`, { x: MARGIN, y, size: 10, font: bld }); y -= LH + 10
+
+  // Guest info box
+  pg1.drawRectangle({ x: MARGIN, y: y - 62, width: COL_W, height: 70, borderColor: LIGHT, borderWidth: 0.75, color: rgb(0.97, 0.97, 0.97) })
+  y -= 8
+  pg1.drawText('Guest Name:',           { x: MARGIN + 10, y, size: 9, font: bld })
+  pg1.drawText(guestName || '—',        { x: 200,         y, size: 9, font: reg }); y -= LH
+  pg1.drawText('ID Number:',            { x: MARGIN + 10, y, size: 9, font: bld })
+  pg1.drawText(parsed.idNumber?.trim() || '—', { x: 200, y, size: 9, font: reg }); y -= LH
+  pg1.drawText('Room Number:',          { x: MARGIN + 10, y, size: 9, font: bld })
+  pg1.drawText(input.roomNumber?.trim() || '—', { x: 200, y, size: 9, font: reg }); y -= LH
+  pg1.drawText('Check-In / Check-Out:', { x: MARGIN + 10, y, size: 9, font: bld })
+  pg1.drawText(`${formatDateDisplay(input.checkInDate) || '—'}  →  ${formatDateDisplay(input.checkOutDate) || '—'}`, { x: 200, y, size: 9, font: reg })
+  y -= 22
+
+  y = drawWrappedText(pg1, `This package is provided in response to a chargeback dispute for the above-referenced reservation. The guest was physically present at ${hotel.name?.trim() || 'our hotel'} and presented a valid government-issued photo identification at time of check-in. The documents enclosed confirm the guest's identity and their agreement to the hotel's terms and conditions.`, MARGIN, y, 9, reg, COL_W, LH)
+  y -= LH + 14
+
+  y = sectionHeader(pg1, 'ENCLOSED EXHIBITS', y, bld); y -= 6
+  pg1.drawText('Exhibit A', { x: MARGIN,      y, size: 9, font: bld })
+  pg1.drawText('—  Government-Issued Photo Identification (front and back)', { x: MARGIN + 60, y, size: 9, font: reg }); y -= LH + 2
+  pg1.drawText('Exhibit B', { x: MARGIN,      y, size: 9, font: bld })
+  pg1.drawText('—  Signed Guest Registration Card',                          { x: MARGIN + 60, y, size: 9, font: reg }); y -= LH + 16
+
+  y = drawWrappedText(pg1, 'We respectfully request that this dispute be resolved in our favor based on the enclosed evidence. Should you require additional documentation, please contact us at the address or phone number above.', MARGIN, y, 9, reg, COL_W, LH)
+  y -= LH + 20
+
+  pg1.drawText('Sincerely,', { x: MARGIN, y, size: 9, font: reg }); y -= 32
+  pg1.drawLine({ start: { x: MARGIN, y: y - 2 }, end: { x: 280,            y: y - 2 }, thickness: 0.5, color: BLACK })
+  pg1.drawLine({ start: { x: 310,    y: y - 2 }, end: { x: PAGE_W - MARGIN, y: y - 2 }, thickness: 0.5, color: BLACK })
+  pg1.drawText('Authorized Representative', { x: MARGIN, y: y - 14, size: 7.5, font: reg, color: GRAY })
+  pg1.drawText('Date',                      { x: 310,    y: y - 14, size: 7.5, font: reg, color: GRAY })
+  addFooter(pg1)
+
+  // ─── Page 2: Exhibit A — ID images ───────────────────────────────────────
+  const pg2 = pdfDoc.addPage([PAGE_W, PAGE_H])
+  y = PAGE_H - MARGIN
+
+  centeredText(pg2, 'EXHIBIT A — IDENTIFICATION DOCUMENTS', y, 13, bld); y -= 8
+  hRule(pg2, y, BLACK); y -= 18
+  pg2.drawText(`Confirmation No.: ${conf}`, { x: MARGIN, y, size: 9, font: reg, color: GRAY })
+  pg2.drawText(`Guest: ${guestName || '—'}`, { x: 310, y, size: 9, font: reg, color: GRAY })
+  y -= 22
+
+  const tryEmbed = async (b64: string, rd: number, fh: boolean): Promise<PDFImage | null> => {
+    try {
+      const src = (rd !== 0 || fh) ? await transformBase64ImageSync(b64, rd, fh) : b64
+      const mime = guessImageMimeFromBase64(src)
+      if (mime === 'image/jpeg') return pdfDoc.embedJpg(src)
+      if (mime === 'image/png')  return pdfDoc.embedPng(src)
+      return pdfDoc.embedPng(await transformBase64ImageSync(src, 0, false))
+    } catch { return null }
+  }
+
+  const drawIdCard = (pg: PDFPage, img: PDFImage, label: string, startY: number): number => {
+    const maxW = COL_W; const maxH = 210
+    const scale = Math.min(maxW / img.width, maxH / img.height)
+    const dw = img.width * scale; const dh = img.height * scale
+    const ix = (PAGE_W - dw) / 2
+    pg.drawText(label, { x: MARGIN, y: startY, size: 9, font: bld })
+    pg.drawImage(img, { x: ix, y: startY - dh - 6, width: dw, height: dh })
+    return startY - dh - 22
+  }
+
+  const frontImg = input.imageFrontBase64?.trim() ? await tryEmbed(input.imageFrontBase64, input.rotationDeg, input.flipH) : null
+  const backImg  = input.imageBackBase64?.trim()  ? await tryEmbed(input.imageBackBase64,  0,                  false)       : null
+
+  if (frontImg) y = drawIdCard(pg2, frontImg, 'FRONT — Government-Issued Photo ID', y)
+  else { pg2.drawText('[ Front ID image not available ]', { x: MARGIN, y, size: 9, font: reg, color: GRAY }); y -= 14 }
+
+  if (backImg) { y -= 8; y = drawIdCard(pg2, backImg, 'BACK — Government-Issued Photo ID', y) }
+
+  centeredText(pg2, '— End of Exhibit A —', 60, 9, reg, GRAY)
+  addFooter(pg2)
+
+  // ─── Page 3: Exhibit B — Signed registration card ────────────────────────
+  const pg3 = pdfDoc.addPage([PAGE_W, PAGE_H])
+  y = PAGE_H - MARGIN
+
+  centeredText(pg3, 'EXHIBIT B — SIGNED REGISTRATION CARD', y, 13, bld); y -= 8
+  hRule(pg3, y, BLACK); y -= 18
+  pg3.drawText(`Confirmation No.: ${conf}`, { x: MARGIN, y, size: 9, font: reg, color: GRAY })
+  pg3.drawText(`Guest: ${guestName || '—'}`, { x: 310, y, size: 9, font: reg, color: GRAY })
+  y -= 22
+
+  y = gridRow(pg3, 'GUEST NAME',    guestName || null,                     'ROOM NUMBER',    input.roomNumber,                              y, reg, bld)
+  y = gridRow(pg3, 'CHECK-IN DATE', formatDateDisplay(input.checkInDate),  'CHECK-OUT DATE', formatDateDisplay(input.checkOutDate) || null, y, reg, bld)
+  y = gridRow(pg3, 'ID NUMBER',     parsed.idNumber?.trim() || null,       'CONFIRMATION #', conf,                                          y, reg, bld)
+  y -= 10
+
+  hRule(pg3, y); y -= 14
+  y = sectionHeader(pg3, 'TERMS AND CONDITIONS — ACKNOWLEDGED', y, bld); y -= 6
+
+  for (const tc of REG_CARD_TC) {
+    if (y < 150) break
+    pg3.drawText(tc.heading, { x: MARGIN, y, size: 8, font: bld }); y -= 12
+    y = drawWrappedText(pg3, tc.body, MARGIN, y, 7.5, reg, COL_W, 11)
+    y -= 15
+  }
+
+  hRule(pg3, y); y -= 14
+  y = drawWrappedText(pg3, 'Guest signature below confirms agreement to the above Terms and Conditions and authorization of all charges.', MARGIN, y, 8, reg, COL_W, 11)
+  y -= 20
+
+  if (input.signaturePngDataUrl) {
+    try {
+      const sigImg = await pdfDoc.embedPng(input.signaturePngDataUrl)
+      const sigH = 42; const sigW = Math.min(sigImg.width * (42 / sigImg.height), 240)
+      pg3.drawImage(sigImg, { x: MARGIN, y: y - sigH + 8, width: sigW, height: sigH })
+      y -= sigH
+    } catch { /* blank line */ }
+  }
+
+  pg3.drawLine({ start: { x: MARGIN, y: y - 2 }, end: { x: 310,            y: y - 2 }, thickness: 0.5, color: BLACK })
+  pg3.drawLine({ start: { x: 330,    y: y - 2 }, end: { x: PAGE_W - MARGIN, y: y - 2 }, thickness: 0.5, color: BLACK })
+  pg3.drawText('Guest Signature', { x: MARGIN, y: y - 14, size: 7.5, font: reg, color: GRAY })
+  pg3.drawText('Date',            { x: 330,    y: y - 14, size: 7.5, font: reg, color: GRAY })
+  y -= 26
+  pg3.drawLine({ start: { x: MARGIN, y: y - 2 }, end: { x: 310, y: y - 2 }, thickness: 0.5, color: BLACK })
+  if (guestName) pg3.drawText(guestName, { x: MARGIN, y, size: 8.5, font: bld })
+  pg3.drawText('Print Name', { x: MARGIN, y: y - 14, size: 7.5, font: reg, color: GRAY })
+
+  centeredText(pg3, '— End of Exhibit B —', 60, 9, reg, GRAY)
+  addFooter(pg3)
+
+  return pdfDoc.save()
+}
+
+// ── Pet Policy PDF ────────────────────────────────────────────────────────────
+
+export type PetPolicyInput = {
+  idDetail: IdScanDetailGuru
+  parsed: ParsedIdFields
+  roomNumber: string | null
+  confirmationNumber: string | null
+  checkInDate: string | null
+  checkOutDate: string | null
+  hotel: HotelContact
+  signaturePngDataUrl: string | null
+}
+
+export async function buildPetPolicyPdf(input: PetPolicyInput): Promise<Uint8Array> {
+  const { idDetail, parsed, hotel } = input
+  const pdfDoc = await PDFDocument.create()
+  const reg = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const bld = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const page = pdfDoc.addPage([PAGE_W, PAGE_H])
+  const LH = 13
+
+  let y = PAGE_H - MARGIN
+
+  if (hotel.name?.trim()) {
+    const nw = bld.widthOfTextAtSize(hotel.name, 14)
+    page.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 14, font: bld })
+    y -= 18
+  }
+  const cityLine = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
+  if (hotel.address?.trim()) { centeredText(page, hotel.address, y, 9, reg, GRAY); y -= LH }
+  if (cityLine)              { centeredText(page, cityLine,      y, 9, reg, GRAY); y -= LH }
+  if (hotel.phone?.trim())   { centeredText(page, hotel.phone,   y, 9, reg, GRAY); y -= LH }
+  y -= 8
+
+  centeredText(page, 'PET POLICY AGREEMENT', y, 13, bld)
+  y -= 8; hRule(page, y, BLACK); y -= 16
+
+  const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName]
+    .map(p => p?.trim()).filter(Boolean)
+  const guestName = nameParts.join(' ') || parsed.fullName?.trim() || ''
+
+  y = gridRow(page, 'GUEST NAME',    guestName || null,                    'ROOM NUMBER',    input.roomNumber,                              y, reg, bld)
+  y = gridRow(page, 'CHECK-IN DATE', formatDateDisplay(input.checkInDate), 'CHECK-OUT DATE', formatDateDisplay(input.checkOutDate) || null, y, reg, bld)
+  y -= 10
+
+  y = sectionHeader(page, 'PET INFORMATION', y, bld); y -= 4
+
+  const blankField = (label: string): number => {
+    const lw = reg.widthOfTextAtSize(`${label}:`, 8.5)
+    page.drawText(`${label}:`, { x: MARGIN, y, size: 8.5, font: reg, color: GRAY })
+    page.drawLine({ start: { x: MARGIN + lw + 6, y: y - 2 }, end: { x: PAGE_W - MARGIN, y: y - 2 }, thickness: 0.5, color: BLACK })
+    return y - 22
+  }
+
+  y = blankField('Number of Pets')
+  y = blankField('Pet Name(s), Breed(s), and Color(s)')
+  y = blankField('Weight(s)')
+  y -= 6
+
+  hRule(page, y); y -= 14
+
+  y = sectionHeader(page, 'PET POLICY', y, bld); y -= 6
+
+  const B  = '•'
+  const bw = reg.widthOfTextAtSize(B, 9) + 6
+
+  const drawBullet = (segs: Seg[]) => {
+    page.drawText(B, { x: MARGIN, y, size: 9, font: reg })
+    y = drawSegs(page, segs, MARGIN + bw, y, 9, reg, bld, COL_W - bw, LH)
+    y -= LH
+  }
+
+  drawBullet([{ text: 'A maximum of ' }, { text: '2 pets per room', bold: true }, { text: ' are permitted. Each pet must not exceed ' }, { text: '50 lbs.', bold: true }])
+  drawBullet([{ text: 'A non-refundable ' }, { text: 'pet fee of $75.00 per stay', bold: true }, { text: ' applies per pet.' }])
+  drawBullet([{ text: 'Pets must be kept on a leash or in a carrier at all times in public areas of the hotel.' }])
+  drawBullet([{ text: 'Pets may not be left unattended in the guest room at any time.' }])
+  drawBullet([{ text: 'Pets are not permitted in the pool area, fitness center, restaurant, or other food service areas.' }])
+  drawBullet([{ text: 'Guest is responsible for any damages caused by the pet. Charges will be billed to the credit card on file.' }])
+  drawBullet([{ text: 'Guests must clean up after their pet both inside and outside the hotel. Failure to do so may result in a cleaning fee.' }])
+  drawBullet([{ text: 'Disruptive pet behavior (excessive barking, aggression, etc.) may result in the pet and guest being asked to vacate without refund.' }])
+  drawBullet([{ text: 'The hotel is not responsible for the injury, loss, or theft of any pet.' }])
+
+  y -= 6
+  hRule(page, y); y -= 14
+
+  y = drawWrappedText(page, 'By signing below, I acknowledge that I have read and agree to the above Pet Policy. I accept financial responsibility for any damages, fees, or liability arising from my pet(s) during my stay.', MARGIN, y, 8.5, reg, COL_W, LH)
+  y -= 20
+
+  if (input.signaturePngDataUrl) {
+    try {
+      const sigImg = await pdfDoc.embedPng(input.signaturePngDataUrl)
+      const sigH = 36; const sigW = Math.min(sigImg.width * (36 / sigImg.height), 220)
+      page.drawImage(sigImg, { x: MARGIN, y: y - sigH + 10, width: sigW, height: sigH })
+      y -= sigH
+    } catch { /* blank line */ }
+  }
+
+  page.drawLine({ start: { x: MARGIN, y: y - 2 }, end: { x: 310,            y: y - 2 }, thickness: 0.5, color: BLACK })
+  page.drawLine({ start: { x: 330,    y: y - 2 }, end: { x: PAGE_W - MARGIN, y: y - 2 }, thickness: 0.5, color: BLACK })
+  page.drawText('Guest Signature', { x: MARGIN, y: y - 14, size: 7.5, font: reg, color: GRAY })
+  page.drawText('Date',            { x: 330,    y: y - 14, size: 7.5, font: reg, color: GRAY })
+  y -= 26
+
+  page.drawLine({ start: { x: MARGIN, y: y - 2 }, end: { x: 310, y: y - 2 }, thickness: 0.5, color: BLACK })
+  if (guestName) page.drawText(guestName, { x: MARGIN, y, size: 8.5, font: bld })
+  page.drawText('Print Name', { x: MARGIN, y: y - 14, size: 7.5, font: reg, color: GRAY })
+
+  const fy1 = 36; const fy2 = 22
+  page.drawLine({ start: { x: MARGIN, y: fy1 + 14 }, end: { x: PAGE_W - MARGIN, y: fy1 + 14 }, thickness: 0.5, color: LIGHT })
+  const fp = [hotel.name, hotel.city, hotel.state].filter(Boolean)
+  if (fp.length) centeredText(page, fp.join(' • '), fy1, 9, reg, GRAY)
+  centeredText(page, `Generated: ${formatFooterTimestamp()}`, fy2, 9, reg, GRAY)
+
+  return pdfDoc.save()
+}
+
 // ── Download helper ───────────────────────────────────────────────────────────
 
 export function downloadPdfBytes(bytes: Uint8Array, filename: string): void {

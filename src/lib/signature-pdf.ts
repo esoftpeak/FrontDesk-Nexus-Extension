@@ -1,6 +1,24 @@
 import { decryptBinary } from './encryption'
 import { createExtensionSupabase } from './supabase-factory'
 
+/**
+ * Returns the most recent `signature_image_path` stored in the `signatures` table
+ * for the given confirmation number, or null if none exists.
+ */
+export async function fetchLatestSignatureImagePath(confirmationNumber: string): Promise<string | null> {
+  const supabase = createExtensionSupabase()
+  const { data, error } = await supabase
+    .from('signatures')
+    .select('signature_image_path')
+    .eq('confirmation_number', confirmationNumber)
+    .not('signature_image_path', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error || !data) return null
+  return typeof data.signature_image_path === 'string' ? data.signature_image_path : null
+}
+
 /** Download encrypted PDF from storage, decrypt, return application/pdf blob. */
 export async function fetchDecryptSignaturePdf(storagePath: string): Promise<Blob> {
   const supabase = createExtensionSupabase()
