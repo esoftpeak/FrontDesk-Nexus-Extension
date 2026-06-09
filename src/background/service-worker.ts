@@ -1536,6 +1536,41 @@ async function saveIdScan(args: {
     savedScanId = (insertRow?.id as string) ?? scanId
   }
 
+  // Upsert guest_profile and link scan + reservation to it
+  if (id_number_hash) {
+    try {
+      const guestName =
+        [args.detail?.firstName, args.detail?.lastName].filter(Boolean).join(' ').trim() ||
+        args.parsed.fullName?.trim() ||
+        null
+      const { data: profileRow, error: profileErr } = await client
+        .from('guest_profiles')
+        .upsert(
+          {
+            id_number_hash,
+            display_name: guestName,
+            email: emailTrim || null,
+            phone: phoneTrim || null,
+            last_seen_at: scannedAt,
+          },
+          { onConflict: 'id_number_hash' },
+        )
+        .select('id')
+        .single()
+      if (profileErr) {
+        console.warn('[FDN SW] guest_profiles upsert:', profileErr.message)
+      } else if (profileRow?.id) {
+        const guestProfileId = profileRow.id as string
+        await client.from('id_scans').update({ guest_profile_id: guestProfileId }).eq('id', savedScanId)
+        if (resId) {
+          await client.from('reservations').update({ guest_profile_id: guestProfileId }).eq('id', resId)
+        }
+      }
+    } catch (e) {
+      console.warn('[FDN SW] guest_profiles block failed:', e)
+    }
+  }
+
   const { error: audErr } = await client.from('audit_log').insert({
     user_id: user.id,
     username: user.email,
