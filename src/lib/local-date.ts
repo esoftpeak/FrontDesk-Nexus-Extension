@@ -31,6 +31,19 @@ export function daysInRange(from: string, to: string): number {
   return Math.round(Math.abs(b - a) / 86_400_000) + 1
 }
 
+/**
+ * Inclusive local-calendar range → UTC ISO bounds for `timestamptz` queries.
+ * Avoids missing evening rows when DB stores UTC and filters used naive `T23:59:59`.
+ */
+export function localDateRangeToUtcIso(from: string, to: string): { startIso: string; endIso: string } {
+  const { from: f, to: t } = clampDateRange(from, to)
+  const start = parseLocalDateString(f)
+  start.setHours(0, 0, 0, 0)
+  const end = parseLocalDateString(t)
+  end.setHours(23, 59, 59, 999)
+  return { startIso: start.toISOString(), endIso: end.toISOString() }
+}
+
 export function formatHistoryNavLabel(from: string, to: string): string {
   if (!from && !to) return '—'
   const f = from ? parseLocalDateString(from) : null

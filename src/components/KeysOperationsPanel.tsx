@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyBoardEntry, KeyLedgerEntry } from '../shared/protocol'
 import { formatKeyHistoryShortYmdHm } from '../lib/key-board'
-import { addLocalDays, localDateString } from '../lib/local-date'
+import { addLocalDays, clampDateRange, localDateString } from '../lib/local-date'
+import { HistoryDateRangeControls } from './HistoryDateRangeControls'
 
 type KeysOperationsPanelProps = {
   signedIn: boolean
@@ -136,10 +137,11 @@ export function KeysOperationsPanel({
     setLoading(true)
     setError(null)
     try {
+      const { from, to } = clampDateRange(fromDate, toDate)
       const res = (await chrome.runtime.sendMessage({
         type: 'GET_KEY_LEDGER',
-        fromDate,
-        toDate,
+        fromDate: from,
+        toDate: to,
         agentFilter: agentFilter.trim() || undefined,
         roomFilter: roomFilter.trim() || undefined,
       })) as { ok: boolean; keyLedger?: KeyLedgerEntry[]; error?: string }
@@ -339,7 +341,9 @@ export function KeysOperationsPanel({
       <div className="fdn-keys-ops__toolbar">
         <div className="fdn-id-log__toolbar-head">
           <h2 className="fdn-id-log__title">Keys</h2>
-          <p className="fdn-id-log__subtitle">Room board and encode ledger</p>
+          <p className="fdn-id-log__subtitle">
+            {innerTab === 'history' ? 'Daily encode log by date range' : 'Room board and encode ledger'}
+          </p>
         </div>
 
         {!isAdmin && !canEdit ? (
@@ -458,165 +462,151 @@ export function KeysOperationsPanel({
         </label>
 
         {innerTab === 'board' ? (
-          <div className="fdn-id-log__date-nav" role="group" aria-label="Business date">
-            <button
-              type="button"
-              className="fdn-id-log__nav-btn"
-              aria-label="Previous day"
-              onClick={() => setBusinessDate((d) => addLocalDays(d, -1))}
-            >
-              ‹
-            </button>
-            <div className="fdn-id-log__date-display">
-              <span className="fdn-id-log__date-label">{businessDate}</span>
+          <>
+            <div className="fdn-id-log__date-nav" role="group" aria-label="Business date">
               <button
                 type="button"
-                className="fdn-id-log__date-jump"
-                aria-label="Jump to date"
-                onClick={() => jumpDateRef.current?.showPicker?.() ?? jumpDateRef.current?.click()}
+                className="fdn-id-log__nav-btn"
+                aria-label="Previous day"
+                onClick={() => setBusinessDate((d) => addLocalDays(d, -1))}
               >
-                📅
+                ‹
               </button>
-              <input
-                ref={jumpDateRef}
-                className="fdn-id-log__date-jump-input"
-                type="date"
-                value={businessDate}
-                max={today}
-                aria-hidden
-                tabIndex={-1}
-                onChange={(e) => setBusinessDate(e.target.value)}
-              />
+              <div className="fdn-id-log__date-display">
+                <span className="fdn-id-log__date-label">{businessDate}</span>
+                <button
+                  type="button"
+                  className="fdn-id-log__date-jump"
+                  aria-label="Jump to date"
+                  onClick={() => jumpDateRef.current?.showPicker?.() ?? jumpDateRef.current?.click()}
+                >
+                  📅
+                </button>
+                <input
+                  ref={jumpDateRef}
+                  className="fdn-id-log__date-jump-input"
+                  type="date"
+                  value={businessDate}
+                  max={today}
+                  aria-hidden
+                  tabIndex={-1}
+                  onChange={(e) => setBusinessDate(e.target.value)}
+                />
+              </div>
+              <button
+                type="button"
+                className="fdn-id-log__nav-btn"
+                aria-label="Next day"
+                disabled={businessDate >= today}
+                onClick={() => setBusinessDate((d) => addLocalDays(d, 1))}
+              >
+                ›
+              </button>
+              <button
+                type="button"
+                className="fdn-id-log__nav-btn fdn-keys-ops__today"
+                onClick={() => setBusinessDate(today)}
+              >
+                Today
+              </button>
             </div>
-            <button
-              type="button"
-              className="fdn-id-log__nav-btn"
-              aria-label="Next day"
-              disabled={businessDate >= today}
-              onClick={() => setBusinessDate((d) => addLocalDays(d, 1))}
-            >
-              ›
-            </button>
-            <button
-              type="button"
-              className="fdn-id-log__nav-btn fdn-keys-ops__today"
-              onClick={() => setBusinessDate(today)}
-            >
-              Today
-            </button>
-          </div>
-        ) : (
-          <div className="fdn-id-log__filters">
-            <label className="fdn-label fdn-label--compact">
-              <span className="fdn-label__text">From</span>
-              <input
-                className="fdn-input"
-                type="date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-              />
-            </label>
-            <label className="fdn-label fdn-label--compact">
-              <span className="fdn-label__text">To</span>
-              <input
-                className="fdn-input"
-                type="date"
-                value={toDate}
-                max={today}
-                onChange={(e) => setToDate(e.target.value)}
-              />
-            </label>
-          </div>
-        )}
-
-        <div className="fdn-id-log__filters">
-          <label className="fdn-label fdn-label--compact">
-            <span className="fdn-label__text">Agent</span>
-            <input
-              className="fdn-input"
-              type="text"
-              placeholder="Filter…"
-              value={agentFilter}
-              onChange={(e) => setAgentFilter(e.target.value)}
-            />
-          </label>
-          {innerTab === 'history' ? (
-            <label className="fdn-label fdn-label--compact">
-              <span className="fdn-label__text">Room #</span>
-              <input
-                className="fdn-input"
-                type="text"
-                placeholder="Room"
-                value={roomFilter}
-                onChange={(e) => setRoomFilter(e.target.value)}
-              />
-            </label>
-          ) : null}
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary fdn-btn--xs fdn-id-log__reload"
-            disabled={loading}
-            onClick={() => (innerTab === 'board' ? void loadBoard() : void loadLedger())}
-          >
-            {loading ? 'Loading…' : 'Reload'}
-          </button>
-          {innerTab === 'board' && canEdit ? (
-            <>
+            <div className="fdn-id-log__filters">
+              <label className="fdn-label fdn-label--compact">
+                <span className="fdn-label__text">Agent</span>
+                <input
+                  className="fdn-input"
+                  type="text"
+                  placeholder="Filter…"
+                  value={agentFilter}
+                  onChange={(e) => setAgentFilter(e.target.value)}
+                />
+              </label>
               <button
                 type="button"
-                className="fdn-btn fdn-btn--primary fdn-btn--xs"
-                disabled={!selected || encodeBusy || !encoderConnected}
-                title={
-                  !selected
-                    ? 'Select a room first'
-                    : !encoderConnected
-                      ? 'Connect RFID encoder'
-                      : 'Encode key for selected room'
-                }
-                onClick={() => void handleEncode()}
+                className="fdn-btn fdn-btn--secondary fdn-btn--xs fdn-id-log__reload"
+                disabled={loading}
+                onClick={() => void loadBoard()}
               >
-                {encodeBusy ? '…' : 'Encode key'}
+                {loading ? 'Loading…' : 'Reload'}
               </button>
-              {selected?.blocked && selected.blockId ? (
-                <button
-                  type="button"
-                  className="fdn-btn fdn-btn--secondary fdn-btn--xs"
-                  disabled={!selected || blockBusy}
-                  onClick={() => void handleUnblock()}
-                >
-                  {blockBusy ? '…' : 'Unblock'}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="fdn-btn fdn-btn--secondary fdn-btn--xs"
-                  disabled={!selected || blockBusy}
-                  onClick={() => setShowBlockForm((v) => !v)}
-                >
-                  Block room
-                </button>
-              )}
-            </>
-          ) : null}
-          {innerTab === 'history' ? (
-            <button
-              type="button"
-              className="fdn-btn fdn-btn--secondary fdn-btn--xs"
-              disabled={!canEdit || filteredLedger.length === 0}
-              onClick={handleExportCsv}
+              {canEdit ? (
+                <>
+                  <button
+                    type="button"
+                    className="fdn-btn fdn-btn--primary fdn-btn--xs"
+                    disabled={!selected || encodeBusy || !encoderConnected}
+                    title={
+                      !selected
+                        ? 'Select a room first'
+                        : !encoderConnected
+                          ? 'Connect RFID encoder'
+                          : 'Encode key for selected room'
+                    }
+                    onClick={() => void handleEncode()}
+                  >
+                    {encodeBusy ? '…' : 'Encode key'}
+                  </button>
+                  {selected?.blocked && selected.blockId ? (
+                    <button
+                      type="button"
+                      className="fdn-btn fdn-btn--secondary fdn-btn--xs"
+                      disabled={!selected || blockBusy}
+                      onClick={() => void handleUnblock()}
+                    >
+                      {blockBusy ? '…' : 'Unblock'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="fdn-btn fdn-btn--secondary fdn-btn--xs"
+                      disabled={!selected || blockBusy}
+                      onClick={() => setShowBlockForm((v) => !v)}
+                    >
+                      Block room
+                    </button>
+                  )}
+                </>
+              ) : null}
+            </div>
+            <p className="fdn-id-log__count">
+              {loading
+                ? 'Loading…'
+                : `${filteredBoard.length} rooms · ${stats.withKey} with key · ${stats.vacant} vacant`}
+            </p>
+          </>
+        ) : (
+          <>
+            <HistoryDateRangeControls
+              fromDate={fromDate}
+              toDate={toDate}
+              today={today}
+              onFromDateChange={setFromDate}
+              onToDateChange={setToDate}
+              agentFilter={agentFilter}
+              onAgentFilterChange={setAgentFilter}
+              roomFilter={roomFilter}
+              onRoomFilterChange={setRoomFilter}
+              loading={loading}
+              onReload={() => void loadLedger()}
             >
-              Export CSV
-            </button>
-          ) : null}
-        </div>
-
-        <p className="fdn-id-log__count">
-          {loading
-            ? 'Loading…'
-            : innerTab === 'board'
-              ? `${filteredBoard.length} rooms · ${stats.withKey} with key · ${stats.vacant} vacant`
-              : `${filteredLedger.length} encode${filteredLedger.length !== 1 ? 's' : ''}`}
-        </p>
+              <button
+                type="button"
+                className="fdn-btn fdn-btn--secondary fdn-btn--xs"
+                disabled={!canEdit || filteredLedger.length === 0}
+                onClick={handleExportCsv}
+              >
+                Export CSV
+              </button>
+            </HistoryDateRangeControls>
+            <p className="fdn-id-log__count">
+              {loading
+                ? 'Loading encodes…'
+                : `${filteredLedger.length} of ${ledgerRows.length} encode${
+                    ledgerRows.length !== 1 ? 's' : ''
+                  }${roomFilter.trim() || agentFilter.trim() ? ' (filtered)' : ''}`}
+            </p>
+          </>
+        )}
       </div>
 
       {(error || actionNotice) && (
@@ -746,11 +736,12 @@ export function KeysOperationsPanel({
           </div>
         </div>
       ) : (
-        <div className="fdn-keys-ops__list-wrap fdn-keys-ops__list-wrap--ledger">
+        <div className="fdn-id-log__body">
+          <div className="fdn-id-log__list-wrap">
           {loading && filteredLedger.length === 0 ? (
-            <p className="fdn-muted fdn-id-log__empty">Loading key history…</p>
+            <p className="fdn-muted fdn-id-log__empty">Loading key encodes…</p>
           ) : filteredLedger.length === 0 ? (
-            <p className="fdn-muted fdn-id-log__empty">No encodes in this range.</p>
+            <p className="fdn-muted fdn-id-log__empty">No encodes match these filters.</p>
           ) : (
             <table className="fdn-table fdn-table--compact fdn-id-log__table">
               <thead>
@@ -781,6 +772,7 @@ export function KeysOperationsPanel({
               </tbody>
             </table>
           )}
+          </div>
         </div>
       )}
     </section>

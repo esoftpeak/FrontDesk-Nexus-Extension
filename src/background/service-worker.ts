@@ -37,6 +37,7 @@ import {
 } from '../lib/guest-stay-history'
 import { buildIdScanLogFromScanRows } from '../lib/id-scan-log'
 import { searchIdScanHistory } from '../lib/id-scan-history-search'
+import { localDateRangeToUtcIso } from '../lib/local-date'
 import { buildSignatureLogFromRows } from '../lib/signature-log'
 import {
   createRoomBlockSw,
@@ -2102,9 +2103,10 @@ async function fetchIdScansByDate(fromDate: string, toDate: string): Promise<Ext
   const { data: sess } = await client.auth.getSession()
   if (!sess.session) return { ok: false, error: 'Not signed in' }
 
+  const { startIso, endIso } = localDateRangeToUtcIso(fromDate, toDate)
   let q = client.from('id_scans').select('*').order('scanned_at', { ascending: false })
-  if (fromDate.trim()) q = q.gte('scanned_at', `${fromDate.trim()}T00:00:00`)
-  if (toDate.trim()) q = q.lte('scanned_at', `${toDate.trim()}T23:59:59.999`)
+  if (fromDate.trim()) q = q.gte('scanned_at', startIso)
+  if (toDate.trim()) q = q.lte('scanned_at', endIso)
 
   const { data, error } = await q
   if (error) {

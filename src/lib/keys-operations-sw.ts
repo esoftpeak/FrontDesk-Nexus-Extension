@@ -5,6 +5,7 @@ import type {
   RoomBlockEntry,
 } from '../shared/protocol'
 import { insertAuditRow } from './audit-log'
+import { localDateRangeToUtcIso } from './local-date'
 import {
   boardGuestDisplay,
   keyHistoryAgent,
@@ -154,14 +155,16 @@ export async function fetchKeyLedger(
   agentFilter?: string,
   roomFilter?: string,
 ): Promise<KeyLedgerEntry[]> {
+  const { startIso, endIso } = localDateRangeToUtcIso(fromDate, toDate)
+
   let q = client
     .from('key_history')
     .select('*')
     .order('created_at', { ascending: false })
     .limit(500)
 
-  if (fromDate.trim()) q = q.gte('created_at', `${fromDate.trim()}T00:00:00`)
-  if (toDate.trim()) q = q.lte('created_at', `${toDate.trim()}T23:59:59.999`)
+  if (fromDate.trim()) q = q.gte('created_at', startIso)
+  if (toDate.trim()) q = q.lte('created_at', endIso)
 
   const { data, error } = await q
   if (error) throw new Error(error.message)

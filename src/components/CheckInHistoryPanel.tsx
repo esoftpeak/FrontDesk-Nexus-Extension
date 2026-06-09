@@ -1,14 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { IdScanLogEntry } from '../shared/protocol'
 import { idScanLogEntryIsEditable } from '../lib/apply-guest-profile'
 import { createIdScanImageSignedUrl } from '../lib/id-scan-storage'
-import {
-  addLocalDays,
-  clampDateRange,
-  daysInRange,
-  formatHistoryNavLabel,
-  localDateString,
-} from '../lib/local-date'
+import { clampDateRange, localDateString } from '../lib/local-date'
+import { HistoryDateRangeControls } from './HistoryDateRangeControls'
 import { classifyHistorySearchQuery } from '../lib/id-scan-history-search'
 
 type CheckInHistoryPanelProps = {
@@ -95,47 +90,12 @@ export function CheckInHistoryPanel({
   const [searchLoading, setSearchLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const jumpDateRef = useRef<HTMLInputElement>(null)
-
   const searchActive = debouncedSearch.trim().length >= 2
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), SEARCH_DEBOUNCE_MS)
     return () => window.clearTimeout(t)
   }, [searchQuery])
-
-  const applyRangeShift = useCallback(
-    (deltaDays: number) => {
-      const { from, to } = clampDateRange(fromDate, toDate)
-      let nextFrom = addLocalDays(from, deltaDays)
-      let nextTo = addLocalDays(to, deltaDays)
-      if (nextTo > today) {
-        const span = daysInRange(from, to)
-        nextTo = today
-        nextFrom = addLocalDays(today, -(span - 1))
-      }
-      setFromDate(nextFrom)
-      setToDate(nextTo)
-    },
-    [fromDate, toDate, today],
-  )
-
-  const shiftRange = useCallback((deltaDays: number) => applyRangeShift(deltaDays), [applyRangeShift])
-
-  const shiftRangeByWeek = useCallback(
-    (direction: -1 | 1) => {
-      const { from, to } = clampDateRange(fromDate, toDate)
-      const span = daysInRange(from, to)
-      applyRangeShift(direction * Math.min(7, span))
-    },
-    [fromDate, toDate, applyRangeShift],
-  )
-
-  const jumpToDate = useCallback((iso: string) => {
-    if (!iso) return
-    setFromDate(iso)
-    setToDate(iso)
-  }, [])
 
   const loadScans = useCallback(async () => {
     if (!signedIn) {
@@ -231,7 +191,6 @@ export function CheckInHistoryPanel({
     [filteredRows, selectedId],
   )
 
-  const navLabel = formatHistoryNavLabel(fromDate, toDate)
   const searchKind = classifyHistorySearchQuery(debouncedSearch)
 
   if (!signedIn) {
@@ -278,132 +237,21 @@ export function CheckInHistoryPanel({
           ) : null}
         </label>
 
-        {!searchActive ? (
-          <div className="fdn-id-log__date-nav" role="group" aria-label="Date navigation">
-            <button
-              type="button"
-              className="fdn-id-log__nav-btn"
-              title="Previous week"
-              aria-label="Previous week"
-              onClick={() => shiftRangeByWeek(-1)}
-            >
-              «
-            </button>
-            <button
-              type="button"
-              className="fdn-id-log__nav-btn"
-              title="Previous day"
-              aria-label="Previous day"
-              onClick={() => shiftRange(-1)}
-            >
-              ‹
-            </button>
-            <div className="fdn-id-log__date-display">
-              <span className="fdn-id-log__date-label">{navLabel}</span>
-              <button
-                type="button"
-                className="fdn-id-log__date-jump"
-                title="Jump to date"
-                aria-label="Jump to date"
-                onClick={() => jumpDateRef.current?.showPicker?.() ?? jumpDateRef.current?.click()}
-              >
-                📅
-              </button>
-              <input
-                ref={jumpDateRef}
-                className="fdn-id-log__date-jump-input"
-                type="date"
-                value={fromDate === toDate ? fromDate : fromDate}
-                max={today}
-                aria-hidden
-                tabIndex={-1}
-                onChange={(e) => jumpToDate(e.target.value)}
-              />
-            </div>
-            <button
-              type="button"
-              className="fdn-id-log__nav-btn"
-              title="Next day"
-              aria-label="Next day"
-              disabled={toDate >= today}
-              onClick={() => shiftRange(1)}
-            >
-              ›
-            </button>
-            <button
-              type="button"
-              className="fdn-id-log__nav-btn"
-              title="Next week"
-              aria-label="Next week"
-              disabled={toDate >= today}
-              onClick={() => shiftRangeByWeek(1)}
-            >
-              »
-            </button>
-          </div>
-        ) : null}
-
-        <div className="fdn-id-log__filters">
-          <label className="fdn-label fdn-label--compact">
-            <span className="fdn-label__text">From</span>
-            <input
-              className="fdn-input"
-              type="date"
-              value={fromDate}
-              max={toDate || today}
-              disabled={searchActive}
-              onChange={(e) => {
-                const next = e.target.value
-                setFromDate(next)
-                if (next > toDate) setToDate(next)
-              }}
-            />
-          </label>
-          <label className="fdn-label fdn-label--compact">
-            <span className="fdn-label__text">To</span>
-            <input
-              className="fdn-input"
-              type="date"
-              value={toDate}
-              min={fromDate}
-              max={today}
-              disabled={searchActive}
-              onChange={(e) => {
-                const next = e.target.value
-                setToDate(next)
-                if (next < fromDate) setFromDate(next)
-              }}
-            />
-          </label>
-          <label className="fdn-label fdn-label--compact">
-            <span className="fdn-label__text">Agent</span>
-            <input
-              className="fdn-input"
-              type="text"
-              placeholder="Filter…"
-              value={agentFilter}
-              onChange={(e) => setAgentFilter(e.target.value)}
-            />
-          </label>
-          <label className="fdn-label fdn-label--compact">
-            <span className="fdn-label__text">Room #</span>
-            <input
-              className="fdn-input"
-              type="text"
-              placeholder="Room"
-              value={roomFilter}
-              onChange={(e) => setRoomFilter(e.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            className="fdn-btn fdn-btn--secondary fdn-btn--xs fdn-id-log__reload"
-            disabled={listLoading}
-            onClick={() => (searchActive ? void runSearch() : void loadScans())}
-          >
-            {listLoading ? 'Loading…' : 'Reload'}
-          </button>
-        </div>
+        <HistoryDateRangeControls
+          fromDate={fromDate}
+          toDate={toDate}
+          today={today}
+          onFromDateChange={setFromDate}
+          onToDateChange={setToDate}
+          agentFilter={agentFilter}
+          onAgentFilterChange={setAgentFilter}
+          roomFilter={roomFilter}
+          onRoomFilterChange={setRoomFilter}
+          loading={listLoading}
+          onReload={() => (searchActive ? void runSearch() : void loadScans())}
+          showDateNav={!searchActive}
+          filtersDisabled={searchActive}
+        />
         <p className="fdn-id-log__count">
           {listLoading
             ? searchActive
