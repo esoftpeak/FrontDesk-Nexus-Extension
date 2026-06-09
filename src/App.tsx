@@ -1524,6 +1524,7 @@ function App() {
         roomNumber: candidate?.roomNumber ?? null,
         confirmationNumber: candidate?.confirmationNumber ?? null,
         checkInDate: candidate?.checkInDate ?? null,
+        checkOutDate: candidate?.checkOutDate ?? null,
         hotel: state!.hotelContact,
       })
       const fn = idDetail.firstName.trim().replace(/\s+/g, '_')
@@ -1599,6 +1600,7 @@ function App() {
         confirmationNumber: candidate?.confirmationNumber ?? null,
         checkInDate: candidate?.checkInDate ?? lastScanReceivedAt,
         checkOutDate: candidate?.checkOutDate ?? null,
+        scanTime: lastScanReceivedAt,
         hotel: state!.hotelContact,
         signaturePngDataUrl,
       })
