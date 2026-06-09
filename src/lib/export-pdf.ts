@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type PDFImage } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type PDFImage, type PDFEmbeddedPage } from 'pdf-lib'
 import type { HotelContact } from '../shared/protocol'
 import type { IdScanDetailGuru, ParsedIdFields } from '../shared/pms-types'
 import { ageYearsFromDobString } from './id-age'
@@ -1006,77 +1006,85 @@ export async function buildChargebackEvidencePdf(input: ChargebackEvidenceInput)
     pg2.drawText(scanLabel, { x: MARGIN, y, size: 9, font: bld, color: BLUE })
   }
 
-  // ─── Page 3: Exhibit B — header ──────────────────────────────────────────
+  // ─── Page 3: Exhibit B — header + embedded reg card ─────────────────────
   const pg3 = pdfDoc.addPage([PAGE_W, PAGE_H])
   y = PAGE_H - MARGIN
 
   centeredText(pg3, 'Exhibits: B', y, 22, bld); y -= 34
-  centeredText(pg3, 'Guest Signed Registration Card with Legal Terms', y, 11, bld); y -= 26
+  centeredText(pg3, 'Guest Signed Registration Card with Legal Terms', y, 11, bld); y -= 16
 
-  // ─── Pages 4+: Embed saved reg card PDF pages (preferred) ────────────────
   if (input.regCardPdfBytes && input.regCardPdfBytes.length > 0) {
     try {
-      const regCardDoc = await PDFDocument.load(input.regCardPdfBytes, { ignoreEncryption: true })
-      const pageIndices = regCardDoc.getPageIndices()
-      if (pageIndices.length > 0) {
-        const copiedPages = await pdfDoc.copyPages(regCardDoc, pageIndices)
-        for (const cp of copiedPages) pdfDoc.addPage(cp)
+      const embeddedPages: PDFEmbeddedPage[] = await pdfDoc.embedPdf(input.regCardPdfBytes)
+      if (embeddedPages.length > 0) {
+        const ep0 = embeddedPages[0]!
+        const availW = COL_W
+        const availH = y - MARGIN
+        const scale = Math.min(availW / ep0.width, availH / ep0.height)
+        const drawW = ep0.width * scale
+        const drawH = ep0.height * scale
+        pg3.drawPage(ep0, {
+          x: (PAGE_W - drawW) / 2,
+          y: y - drawH,
+          width: drawW,
+          height: drawH,
+        })
+        for (let i = 1; i < embeddedPages.length; i++) {
+          const ep = embeddedPages[i]!
+          const extraPg = pdfDoc.addPage([PAGE_W, PAGE_H])
+          const s = Math.min((PAGE_W - 2 * MARGIN) / ep.width, (PAGE_H - 2 * MARGIN) / ep.height)
+          extraPg.drawPage(ep, {
+            x: (PAGE_W - ep.width * s) / 2,
+            y: (PAGE_H - ep.height * s) / 2,
+            width: ep.width * s,
+            height: ep.height * s,
+          })
+        }
       }
-    } catch (e) {
-      // Fallback: note on Exhibit B page that PDF could not be loaded
+    } catch {
       centeredText(pg3, '[Registration card PDF could not be loaded]', y, 9, reg, GRAY)
     }
   } else {
-    // ─── Fallback: build custom T&C + signature page ──────────────────────
-    const pg4 = pdfDoc.addPage([PAGE_W, PAGE_H])
-    y = PAGE_H - MARGIN
+    // ─── Fallback: T&C + signature drawn on pg3 below the Exhibits B header ─
     const TC_S = 8; const TC_LH = 11
-
-    if (hotel.name?.trim()) {
-      const nw = bld.widthOfTextAtSize(hotel.name, 13)
-      pg4.drawText(hotel.name, { x: (PAGE_W - nw) / 2, y, size: 13, font: bld }); y -= 16
-    }
-    const cityL4 = [hotel.city, hotel.state, hotel.zip].filter(Boolean).join(', ')
-    if (cityL4) { centeredText(pg4, cityL4, y, 9, reg, GRAY); y -= LH }
-    if (hotel.phone?.trim()) { centeredText(pg4, hotel.phone, y, 9, reg, GRAY); y -= LH }
     y -= 8
 
-    y = gridRow(pg4, 'GUEST NAME',    guestName || null,                     'ROOM NUMBER',    input.roomNumber,                              y, reg, bld)
-    y = gridRow(pg4, 'CHECK-IN DATE', formatDateDisplay(input.checkInDate),  'CHECK-OUT DATE', formatDateDisplay(input.checkOutDate) || null, y, reg, bld)
-    y = gridRow(pg4, 'ID NUMBER',     parsed.idNumber?.trim() || null,       'CONFIRMATION #', conf,                                          y, reg, bld)
+    y = gridRow(pg3, 'GUEST NAME',    guestName || null,                     'ROOM NUMBER',    input.roomNumber,                              y, reg, bld)
+    y = gridRow(pg3, 'CHECK-IN DATE', formatDateDisplay(input.checkInDate),  'CHECK-OUT DATE', formatDateDisplay(input.checkOutDate) || null, y, reg, bld)
+    y = gridRow(pg3, 'ID NUMBER',     parsed.idNumber?.trim() || null,       'CONFIRMATION #', conf,                                          y, reg, bld)
     y -= 10
 
-    hRule(pg4, y); y -= 12
+    hRule(pg3, y); y -= 12
 
     const tcHdr = 'Terms & Conditions'
     const thw = bld.widthOfTextAtSize(tcHdr, 9.5); const thx = (PAGE_W - thw) / 2
-    pg4.drawText(tcHdr, { x: thx, y, size: 9.5, font: bld })
-    pg4.drawLine({ start: { x: thx, y: y - 1.5 }, end: { x: thx + thw, y: y - 1.5 }, thickness: 0.75, color: BLACK })
+    pg3.drawText(tcHdr, { x: thx, y, size: 9.5, font: bld })
+    pg3.drawLine({ start: { x: thx, y: y - 1.5 }, end: { x: thx + thw, y: y - 1.5 }, thickness: 0.75, color: BLACK })
     y -= TC_LH + 4
 
     const hotelShort = hotel.name?.trim() || 'This hotel'
     for (const item of REG_CARD_TC_ITEMS) {
       if (y < 90) break
       const body = item.body.replace('%%HOTEL%%', hotelShort)
-      y = drawSegs(pg4, [{ text: item.label, bold: true, ul: true }, { text: ' ' + body }], MARGIN, y, TC_S, reg, bld, COL_W, TC_LH)
+      y = drawSegs(pg3, [{ text: item.label, bold: true, ul: true }, { text: ' ' + body }], MARGIN, y, TC_S, reg, bld, COL_W, TC_LH)
       y -= TC_LH + 1
     }
 
     y -= 4
-    y = drawWrappedText(pg4, 'By signing below, the guest confirms agreement to the above Terms and Conditions and authorizes all charges associated with their stay.', MARGIN, y, TC_S, reg, COL_W, TC_LH)
+    y = drawWrappedText(pg3, 'By signing below, the guest confirms agreement to the above Terms and Conditions and authorizes all charges associated with their stay.', MARGIN, y, TC_S, reg, COL_W, TC_LH)
     y -= TC_LH + 10
 
-    pg4.drawText('Signature:', { x: MARGIN, y, size: 9, font: reg })
+    pg3.drawText('Signature:', { x: MARGIN, y, size: 9, font: reg })
     const sw4 = reg.widthOfTextAtSize('Signature:', 9)
     const slX4 = MARGIN + sw4 + 8
     if (input.signaturePngDataUrl) {
       try {
         const sigImg = await pdfDoc.embedPng(input.signaturePngDataUrl)
         const sigH = 30; const sigW = Math.min(sigImg.width * (30 / sigImg.height), 180)
-        pg4.drawImage(sigImg, { x: slX4, y: y - 4, width: sigW, height: sigH })
+        pg3.drawImage(sigImg, { x: slX4, y: y - 4, width: sigW, height: sigH })
       } catch { /* blank line */ }
     }
-    pg4.drawLine({ start: { x: slX4, y: y - 2 }, end: { x: slX4 + 180, y: y - 2 }, thickness: 0.5, color: BLACK })
+    pg3.drawLine({ start: { x: slX4, y: y - 2 }, end: { x: slX4 + 180, y: y - 2 }, thickness: 0.5, color: BLACK })
   }
 
   return pdfDoc.save()
