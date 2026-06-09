@@ -644,7 +644,7 @@ export async function buildPoliceReportPdf(input: PoliceReportInput): Promise<Ui
   y -= LH + 4
 
   const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName].map(p => p?.trim()).filter(Boolean)
-  const guestName = nameParts.join(' ') || parsed.fullName?.trim() || ''
+  const guestName = pdfSafe(nameParts.join(' ') || parsed.fullName?.trim() || '')
   const addr = [
     idDetail.streetAddress?.trim() || parsed.address?.trim(),
     idDetail.city?.trim(), idDetail.state?.trim(),
@@ -666,7 +666,7 @@ export async function buildPoliceReportPdf(input: PoliceReportInput): Promise<Ui
   for (const [label, value] of infoRows) {
     const lw = bld.widthOfTextAtSize(`${label}: `, 10)
     page.drawText(`${label}: `, { x: MARGIN, y, size: 10, font: bld })
-    page.drawText(value, { x: MARGIN + lw, y, size: 10, font: reg })
+    page.drawText(pdfSafe(value), { x: MARGIN + lw, y, size: 10, font: reg })
     y -= LH
   }
   y -= 10
@@ -778,11 +778,11 @@ export async function buildRegistrationCardPdf(input: RegistrationCardInput): Pr
 
   // ── Guest data table (bordered rows) ─────────────────────────────────────
   const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName].map(p => p?.trim()).filter(Boolean)
-  const guestName = nameParts.join(' ') || parsed.fullName?.trim() || ''
-  const fullAddr = parsed.address?.trim() || [idDetail.streetAddress, idDetail.city, idDetail.state].filter(Boolean).map(s => s?.trim()).join(', ')
-  const phoneVal = phone.trim() || idDetail.phone?.trim() || ''
-  const emailVal = email.trim() || idDetail.email?.trim() || ''
-  const idVal    = [parsed.idType, parsed.idNumber].filter(Boolean).join(' | ')
+  const guestName = pdfSafe(nameParts.join(' ') || parsed.fullName?.trim() || '')
+  const fullAddr = pdfSafe(parsed.address?.trim() || [idDetail.streetAddress, idDetail.city, idDetail.state].filter(Boolean).map(s => s?.trim()).join(', '))
+  const phoneVal = pdfSafe(phone.trim() || idDetail.phone?.trim() || '')
+  const emailVal = pdfSafe(email.trim() || idDetail.email?.trim() || '')
+  const idVal    = pdfSafe([parsed.idType, parsed.idNumber].filter(Boolean).join(' | '))
   const ciDate   = formatDateDisplay(input.checkInDate) || ''
   const coDate   = formatDateDisplay(input.checkOutDate) || ''
   const ROW = 18
@@ -798,13 +798,13 @@ export async function buildRegistrationCardPdf(input: RegistrationCardInput): Pr
     if (leftLabel) {
       const llw = bld.widthOfTextAtSize(`${leftLabel} `, 8)
       page.drawText(`${leftLabel} `, { x: MARGIN + 4, y: ty, size: 8, font: bld })
-      if (leftVal) page.drawText(leftVal, { x: MARGIN + 4 + llw, y: ty, size: 9, font: reg })
+      const slv = pdfSafe(leftVal); if (slv) page.drawText(slv, { x: MARGIN + 4 + llw, y: ty, size: 9, font: reg })
     }
     if (splitCol && rightLabel !== undefined) {
       page.drawLine({ start: { x: midX, y: topY }, end: { x: midX, y: topY - h }, thickness: 0.5, color: BLACK })
       const rlw = bld.widthOfTextAtSize(`${rightLabel} `, 8)
       page.drawText(`${rightLabel} `, { x: midX + 4, y: ty, size: 8, font: bld })
-      if (rightVal) page.drawText(rightVal, { x: midX + 4 + rlw, y: ty, size: 9, font: reg })
+      const srv = pdfSafe(rightVal); if (srv) page.drawText(srv, { x: midX + 4 + rlw, y: ty, size: 9, font: reg })
     }
   }
 
@@ -1090,7 +1090,7 @@ export async function buildPetPolicyPdf(input: PetPolicyInput): Promise<Uint8Arr
 
   const nameParts = [idDetail.firstName, idDetail.middleName, idDetail.lastName]
     .map(p => p?.trim()).filter(Boolean)
-  const guestName = nameParts.join(' ') || parsed.fullName?.trim() || ''
+  const guestName = pdfSafe(nameParts.join(' ') || parsed.fullName?.trim() || '')
 
   let y = PAGE_H - MARGIN
 
@@ -1171,8 +1171,9 @@ export async function buildPetPolicyPdf(input: PetPolicyInput): Promise<Uint8Arr
     page.drawLine({ start: { x: PAGE_W - MARGIN, y: rowTop }, end: { x: PAGE_W - MARGIN, y: rowBot }, thickness: 0.5, color: BLACK })
 
     const textY = rowTop - ROW_H / 2 - 3
-    const lw = bld.widthOfTextAtSize(row.label, 8.5)
-    page.drawText(row.label, { x: MARGIN + 6, y: textY, size: 8.5, font: bld })
+    const safeLabel = pdfSafe(row.label)
+    const lw = bld.widthOfTextAtSize(safeLabel, 8.5)
+    page.drawText(safeLabel, { x: MARGIN + 6, y: textY, size: 8.5, font: bld })
 
     if (row.isSignature && input.signaturePngDataUrl) {
       try {
@@ -1183,7 +1184,7 @@ export async function buildPetPolicyPdf(input: PetPolicyInput): Promise<Uint8Arr
         page.drawImage(sigImg, { x: MARGIN + 6 + lw + 8, y: rowTop - ROW_H / 2 - sigH / 2, width: sigW, height: sigH })
       } catch { /* no signature image */ }
     } else if (row.value) {
-      page.drawText(row.value, { x: MARGIN + 6 + lw + 8, y: textY, size: 9, font: reg })
+      page.drawText(pdfSafe(row.value), { x: MARGIN + 6 + lw + 8, y: textY, size: 9, font: reg })
     }
   }
 
