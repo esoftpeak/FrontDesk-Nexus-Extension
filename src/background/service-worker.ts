@@ -1504,6 +1504,18 @@ async function saveIdScan(args: {
       updResult = await client.from('id_scans').update(rowPayload).eq('id', scanId).select('id').single()
     }
 
+    if (
+      updResult.error?.message?.includes('check_out_date') ||
+      updResult.error?.message?.includes('room_number')
+    ) {
+      console.warn('[FDN SW] check_out_date/room_number missing from id_scans schema on update — saving without.')
+      const safe = Object.fromEntries(
+        Object.entries({ ...rowPayload, id_number_hash, phone_number_hash } as Record<string, unknown>)
+          .filter(([k]) => k !== 'check_out_date' && k !== 'room_number'),
+      )
+      updResult = await client.from('id_scans').update(safe).eq('id', scanId).select('id').single()
+    }
+
     const { error: updErr } = updResult
     if (updErr) {
       lastError = updErr.message
@@ -1525,6 +1537,18 @@ async function saveIdScan(args: {
     ) {
       console.warn('[FDN SW] id_number_hash / phone_number_hash missing — run SQL migration. Saving without hashes.')
       scanResult = await client.from('id_scans').insert(insertBase).select('id').single()
+    }
+
+    if (
+      scanResult.error?.message?.includes('check_out_date') ||
+      scanResult.error?.message?.includes('room_number')
+    ) {
+      console.warn('[FDN SW] check_out_date/room_number missing from id_scans schema — run SQL migration. Saving without.')
+      const safe = Object.fromEntries(
+        Object.entries({ ...insertBase, id_number_hash, phone_number_hash } as Record<string, unknown>)
+          .filter(([k]) => k !== 'check_out_date' && k !== 'room_number'),
+      )
+      scanResult = await client.from('id_scans').insert(safe).select('id').single()
     }
 
     const { data: insertRow, error: insErr } = scanResult
