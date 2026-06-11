@@ -1134,11 +1134,19 @@ async function waitForCheckinResultCard(resNo: string, maxMs: number): Promise<b
 
 /**
  * React/Ant Design components require a real mousedown before click to register.
- * We also try the inner card body — eZee's React handler may sit on a child element.
+ * For table rows (new eZee UI), click the first cell; for cards, click the card body.
  */
 function clickCheckinCard(el: HTMLElement): void {
   el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }))
   el.click()
+  if (el.tagName === 'TR') {
+    const firstTd = el.querySelector<HTMLElement>('td')
+    if (firstTd) {
+      firstTd.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }))
+      firstTd.click()
+    }
+    return
+  }
   const inner = el.querySelector<HTMLElement>(
     '.ant-card-body, .ant-list-item-main, [class*="card-body"], [class*="cardBody"], [class*="item-main"]',
   )
@@ -1149,8 +1157,8 @@ function clickCheckinCard(el: HTMLElement): void {
 }
 
 /**
- * Finds the Quick Search result card for the given reservation number.
- * Matches "Res No # 3629" / "Res No #3629" / "Res No  #  3629" (flexible spacing).
+ * Finds the search result for the given reservation number.
+ * Handles both the old Quick Search dropdown (cards) and the new table-filtered UI.
  */
 function findCheckinResultCard(resNo: string): HTMLElement | null {
   const resNoPattern = new RegExp(`Res\\s*No\\s*#\\s*${resNo}`)
@@ -1171,7 +1179,21 @@ function findCheckinResultCard(resNo: string): HTMLElement | null {
     }
   }
 
-  // Priority 2: any div/li carrying the pattern, outside the header/search bar
+  // Priority 2: table row (new eZee UI — search filters the reservations table inline).
+  // Find a TR whose "Res No." cell text matches the reservation number exactly.
+  for (const tr of document.querySelectorAll<HTMLElement>(
+    'tr.ant-table-row, .ant-table-tbody tr, tbody tr',
+  )) {
+    if (!isCheckinElVisible(tr)) continue
+    for (const td of Array.from(tr.querySelectorAll('td'))) {
+      const cell = (td.textContent ?? '').trim().replace(/\s+/g, ' ')
+      if (cell === resNo || cell.startsWith(`${resNo} `) || cell.startsWith(`${resNo}\n`)) {
+        return tr
+      }
+    }
+  }
+
+  // Priority 3: any div/li carrying the old "Res No # …" pattern, outside header/search bar
   for (const el of document.querySelectorAll<HTMLElement>('div[class], li')) {
     if (!isCheckinElVisible(el)) continue
     if (el.closest('header, nav, [class*="header"], [class*="search-bar"]')) continue
