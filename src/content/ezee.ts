@@ -186,8 +186,10 @@ for (const ms of BACKUP_RUN_AT_MS) {
 }
 
 const EZEE_SEARCH_SELECTORS = [
-  'input[placeholder*="Search" i]',
-  'input.ant-input[type="text"]',
+  '#Uni-Search-Container input.ant-input',
+  'input[placeholder*="Search reservations" i]',
+  'input[data-shark-id="_0"]',
+  'input[placeholder*="Quick Search" i]',
   'input[placeholder*="Guest" i]',
 ]
 
@@ -1069,9 +1071,14 @@ async function autoSearchAndSelect(resNo: string): Promise<void> {
     // Brief pause so the Add Reservation modal finishes its close animation
     await sleep(350)
 
-    const searchInput = document.querySelector<HTMLInputElement>('input[placeholder="Quick Search"]')
+    const searchInput = (
+      document.querySelector<HTMLInputElement>('#Uni-Search-Container input.ant-input') ??
+      document.querySelector<HTMLInputElement>('input[placeholder*="Search reservations" i]') ??
+      document.querySelector<HTMLInputElement>('input[data-shark-id="_0"]') ??
+      document.querySelector<HTMLInputElement>('input[placeholder*="Quick Search" i]')
+    )
     if (!searchInput) {
-      console.warn('[FDN eZee] autoSearchAndSelect: Quick Search input not found')
+      console.warn('[FDN eZee] autoSearchAndSelect: search input not found')
       return
     }
 
