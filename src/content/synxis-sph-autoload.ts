@@ -41,18 +41,24 @@ function synxisSet(el: HTMLInputElement | HTMLTextAreaElement, value: string): v
 }
 
 function isGuestDetailsModalOpen(): boolean {
-  const el = document.getElementById('guest-first-name') as HTMLInputElement | null
-    ?? document.querySelector<HTMLInputElement>('input.spark-input__field')
-  if (!el) return false
-  const rect = el.getBoundingClientRect()
+  // Only check the modal-specific first-name field — never use a broad fallback
+  // that could match other Spark inputs visible on the Guest Stay Record page.
+  const firstNameEl = document.getElementById('guest-first-name') as HTMLInputElement | null
+  if (!firstNameEl) return false
+  const rect = firstNameEl.getBoundingClientRect()
   return rect.width > 0 && rect.height > 0
 }
 
 function findViewFullProfileLink(): HTMLAnchorElement | null {
-  for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>('a'))) {
-    if (a.textContent?.trim() === 'View Full Profile') return a
-  }
-  return null
+  // Prefer the stable id; fall back to data-modal attribute, then text content
+  return (
+    (document.getElementById('view-profile-link') as HTMLAnchorElement | null) ??
+    document.querySelector<HTMLAnchorElement>('a[data-modal="#gsr-profile-modal"]') ??
+    Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).find(
+      a => a.textContent?.trim() === 'View Full Profile',
+    ) ??
+    null
+  )
 }
 
 function areGuestDetailsFieldsDisabled(): boolean {
