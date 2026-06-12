@@ -2795,7 +2795,7 @@ async function handleMessage(
   }
 
   if (msg.type === 'SAVE_SIGNATURE') {
-    return saveSignature({ pdfBase64: msg.pdfBase64, confirmationNumber: msg.confirmationNumber })
+    return saveSignature({ pdfBase64: msg.pdfBase64, confirmationNumber: msg.confirmationNumber, signaturePng: msg.signaturePng })
   }
 
   if (msg.type === 'SYNXIS_PRINT_BASIC_CARD_CLICKED') {
