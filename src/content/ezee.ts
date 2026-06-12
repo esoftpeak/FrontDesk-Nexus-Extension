@@ -1193,15 +1193,24 @@ function findCheckinResultCard(resNo: string): HTMLElement | null {
     }
   }
 
-  // Priority 3: any div/li carrying the old "Res No # …" pattern, outside header/search bar
+  // Priority 3: new unified search overlay — pick the SMALLEST element containing
+  // "Res No # XXXX" that has meaningful dimensions (the booking card, not its wrapper).
+  let bestEl: HTMLElement | null = null
+  let bestArea = Infinity
   for (const el of document.querySelectorAll<HTMLElement>('div[class], li')) {
     if (!isCheckinElVisible(el)) continue
-    if (el.closest('header, nav, [class*="header"], [class*="search-bar"]')) continue
+    if (el.closest('header, nav')) continue
     const text = (el.textContent ?? '').replace(/\s+/g, ' ')
     if (!resNoPattern.test(text)) continue
     const r = el.getBoundingClientRect()
-    if (r.width > 200 && r.height > 40 && r.width < window.innerWidth * 0.95) return el
+    if (r.width < 150 || r.height < 30) continue
+    const area = r.width * r.height
+    if (area < bestArea) {
+      bestArea = area
+      bestEl = el
+    }
   }
+  if (bestEl) return bestEl
 
   return null
 }
