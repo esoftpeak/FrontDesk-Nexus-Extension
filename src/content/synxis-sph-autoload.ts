@@ -48,6 +48,23 @@ function isGuestDetailsModalOpen(): boolean {
   return rect.width > 0 && rect.height > 0
 }
 
+function findViewFullProfileLink(): HTMLAnchorElement | null {
+  for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>('a'))) {
+    if (a.textContent?.trim() === 'View Full Profile') return a
+  }
+  return null
+}
+
+function areGuestDetailsFieldsDisabled(): boolean {
+  const firstNameEl = document.getElementById('guest-first-name') as HTMLInputElement | null
+  if (!firstNameEl) return false
+  if (firstNameEl.disabled || firstNameEl.readOnly) return true
+  // Spark UI wraps inputs — check for disabled class on the container
+  const container = firstNameEl.closest('.spark-input')
+  if (container?.classList.contains('spark-input--disabled')) return true
+  return false
+}
+
 function findSynxisInput(labelSubstr: string): HTMLInputElement | null {
   for (const span of Array.from(document.querySelectorAll<HTMLElement>('span.spark-label, label span'))) {
     if ((span.textContent?.trim() ?? '').toLowerCase().includes(labelSubstr.toLowerCase())) {
@@ -125,6 +142,12 @@ async function fillSynxisGuestForm(data: FillPayload): Promise<void> {
 
   await sphSleep(400)
 
+  if (areGuestDetailsFieldsDisabled()) {
+    console.log('[FDN SPH] Guest Details fields are disabled (restricted/Platinum profile) — skipping fill')
+    _synxisFillInProgress = false
+    return
+  }
+
   const textFields: Array<[string, string | null | undefined, HTMLInputElement | null]> = [
     ['First Name',     data.first_name,   document.getElementById('guest-first-name') as HTMLInputElement | null],
     ['Last Name',      data.last_name,    document.getElementById('guest-last-name')  as HTMLInputElement | null],
@@ -172,7 +195,15 @@ function triggerSynxisFill(payload: FillPayload | null): void {
       return
     }
 
-    console.log('[FDN SPH] modal not detected yet, waiting...')
+    // Modal not open — try to open it automatically
+    const link = findViewFullProfileLink()
+    if (link) {
+      console.log('[FDN SPH] clicking View Full Profile to open Guest Details modal')
+      link.click()
+    } else {
+      console.warn('[FDN SPH] View Full Profile link not found — waiting for modal to open manually')
+    }
+
     const obs = new MutationObserver(() => {
       if (isGuestDetailsModalOpen() && !_synxisFillInProgress) {
         obs.disconnect()
