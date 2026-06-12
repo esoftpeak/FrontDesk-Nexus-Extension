@@ -148,6 +148,26 @@ function keyHistoryTimeForDb(rawSdk: unknown, fallbackMsg: string, defaultHour: 
   return toSdkDatetimeHotel(fallbackMsg, defaultHour)
 }
 
+/** Resolve guest_profile_id for a confirmation number so key_history rows are linked to the guest. */
+async function resolveGuestProfileId(client: ReturnType<typeof getClient>, confirmationNumber: string): Promise<string | null> {
+  const { data: rp } = await client
+    .from('reservations')
+    .select('guest_profile_id')
+    .eq('confirmation_number', confirmationNumber)
+    .maybeSingle()
+  if (rp?.guest_profile_id) return rp.guest_profile_id as string
+
+  const { data: sp } = await client
+    .from('id_scans')
+    .select('guest_profile_id')
+    .eq('confirmation_number', confirmationNumber)
+    .not('guest_profile_id', 'is', null)
+    .order('scanned_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return (sp?.guest_profile_id as string | null) ?? null
+}
+
 type RfidMakeKeyMessage = Extract<ExtensionMessage, { type: 'RFID_MAKE_KEY' }>
 
 /** True when PMS status indicates the guest is currently in-house (eZee or SynXis). */
@@ -239,6 +259,7 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
     if (user && conf) {
       const adminPortal = Boolean(msg.portalAdminEncode)
       const encodedByUsername = adminPortal ? 'Admin' : (user.email ?? null)
+      const guestProfileId = await resolveGuestProfileId(client, conf)
 
       const insertRow: Record<string, unknown> = {
         confirmation_number: conf,
@@ -249,6 +270,7 @@ async function runRfidMakeKey(msg: RfidMakeKeyMessage): Promise<ExtensionRespons
         encoded_by: user.id,
         encoded_by_username: encodedByUsername,
         terminal_id: terminalId,
+        guest_profile_id: guestProfileId,
       }
 
       const { error: khErr } = await client.from('key_history').insert(insertRow)
@@ -3119,6 +3141,7 @@ async function handleMessage(
       const dbCheckoutTime = keyHistoryTimeForDb(raw.checkout_time, msg.checkoutTime, 12)
 
       if (user && conf) {
+        const guestProfileId = await resolveGuestProfileId(client, conf)
         const { error: khErr } = await client.from('key_history').insert({
           confirmation_number: conf,
           room_number: msg.roomNumber,
@@ -3128,6 +3151,7 @@ async function handleMessage(
           encoded_by: user.id,
           encoded_by_username: user.email ?? null,
           terminal_id: terminalId,
+          guest_profile_id: guestProfileId,
         })
         if (khErr) {
           console.error('[FDN SW] key_history insert (lost key) failed:', khErr.message)
